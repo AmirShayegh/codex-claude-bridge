@@ -48,6 +48,9 @@ vi.mock('./storage/reviews.js', () => ({
 vi.mock('./storage/sessions.js', () => ({
   initSessionsDb: vi.fn(),
   getOrCreateSession: vi.fn(),
+  markSessionCompleted: vi.fn(),
+  markSessionFailed: vi.fn(),
+  activateSession: vi.fn(),
 }));
 
 import { loadConfig } from './config/loader.js';

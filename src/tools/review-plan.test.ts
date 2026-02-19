@@ -120,7 +120,7 @@ describe('registerReviewPlanTool with db', () => {
   const mockDb = {};
 
   beforeEach(() => {
-    vi.mocked(getOrCreateSession).mockReturnValue(ok({ session_id: 'thread_abc', status: 'in_progress' as const, created_at: '2026-01-01' }));
+    vi.mocked(getOrCreateSession).mockReturnValue(ok({ session_id: 'thread_abc', status: 'in_progress' as const, created_at: '2026-01-01', completed_at: null }));
     vi.mocked(markSessionCompleted).mockReturnValue(ok(undefined));
     vi.mocked(saveReview).mockReturnValue(ok(undefined));
     setupHandler(mockDb);

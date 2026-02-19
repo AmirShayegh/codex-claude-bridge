@@ -16,49 +16,56 @@ export function registerReviewPrecommitTool(server: McpServer, client: CodexClie
       },
     },
     async (args) => {
-      let diff: string;
+      try {
+        let diff: string;
 
-      // Diff resolution precedence: explicit diff > auto_diff > error
-      // auto_diff defaults to true when not provided (undefined !== false)
-      if (args.diff) {
-        diff = args.diff;
-      } else if (args.auto_diff !== false) {
-        const gitResult = await getStagedDiff();
-        if (!gitResult.ok) {
-          return { content: [{ type: 'text' as const, text: gitResult.error }], isError: true };
-        }
-        if (!gitResult.data) {
+        // Diff resolution precedence: explicit diff > auto_diff > error
+        // auto_diff defaults to true when not provided (undefined !== false)
+        if (args.diff) {
+          diff = args.diff;
+        } else if (args.auto_diff !== false) {
+          const gitResult = await getStagedDiff();
+          if (!gitResult.ok) {
+            return { content: [{ type: 'text' as const, text: gitResult.error }], isError: true };
+          }
+          if (!gitResult.data) {
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: JSON.stringify({
+                    ready_to_commit: false,
+                    blockers: [],
+                    warnings: ['No staged changes found'],
+                    session_id: args.session_id ?? '',
+                  }),
+                },
+              ],
+            };
+          }
+          diff = gitResult.data;
+        } else {
           return {
-            content: [
-              {
-                type: 'text' as const,
-                text: JSON.stringify({
-                  ready_to_commit: false,
-                  blockers: [],
-                  warnings: ['No staged changes found'],
-                  session_id: '',
-                }),
-              },
-            ],
+            content: [{ type: 'text' as const, text: 'auto_diff disabled and no diff provided' }],
+            isError: true,
           };
         }
-        diff = gitResult.data;
-      } else {
+
+        const result = await client.reviewPrecommit({
+          diff,
+          checklist: args.checklist,
+          session_id: args.session_id,
+        });
+        if (!result.ok) {
+          return { content: [{ type: 'text' as const, text: result.error }], isError: true };
+        }
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result.data) }] };
+      } catch (e) {
         return {
-          content: [{ type: 'text' as const, text: 'auto_diff disabled and no diff provided' }],
+          content: [{ type: 'text' as const, text: `Unexpected error: ${e instanceof Error ? e.message : String(e)}` }],
           isError: true,
         };
       }
-
-      const result = await client.reviewPrecommit({
-        diff,
-        checklist: args.checklist,
-        session_id: args.session_id,
-      });
-      if (!result.ok) {
-        return { content: [{ type: 'text' as const, text: result.error }], isError: true };
-      }
-      return { content: [{ type: 'text' as const, text: JSON.stringify(result.data) }] };
     },
   );
 }

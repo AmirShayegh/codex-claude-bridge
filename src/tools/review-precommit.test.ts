@@ -3,7 +3,7 @@ import { registerReviewPrecommitTool } from './review-precommit.js';
 import type { CodexClient } from '../codex/client.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { PrecommitResult } from '../codex/types.js';
-import { ok } from '../utils/errors.js';
+import { ok, err } from '../utils/errors.js';
 
 vi.mock('../utils/git.js', () => ({
   getStagedDiff: vi.fn(),
@@ -115,5 +115,35 @@ describe('registerReviewPrecommitTool', () => {
     expect(result.content[0].text).toContain('auto_diff disabled and no diff provided');
     expect(getStagedDiff).not.toHaveBeenCalled();
     expect(mockClient.reviewPrecommit).not.toHaveBeenCalled();
+  });
+
+  it('getStagedDiff failure returns MCP error', async () => {
+    vi.mocked(getStagedDiff).mockResolvedValue(err('GIT_ERROR: not a git repository'));
+
+    const result = await handler({}, {});
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('GIT_ERROR');
+    expect(mockClient.reviewPrecommit).not.toHaveBeenCalled();
+  });
+
+  it('no staged changes preserves caller session_id', async () => {
+    vi.mocked(getStagedDiff).mockResolvedValue(ok(''));
+
+    const result = await handler({ session_id: 'thread_existing' }, {});
+
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.session_id).toBe('thread_existing');
+    expect(parsed.ready_to_commit).toBe(false);
+  });
+
+  it('unexpected thrown error returns MCP error', async () => {
+    vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
+    vi.mocked(mockClient.reviewPrecommit).mockRejectedValue(new Error('timeout'));
+
+    const result = await handler({}, {});
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('timeout');
   });
 });

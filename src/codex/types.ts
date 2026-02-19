@@ -58,9 +58,10 @@ export const PrecommitResultSchema = z.object({
 });
 
 export const ReviewStatusSchema = z.object({
-  status: z.enum(['in_progress', 'completed', 'failed']),
+  status: z.enum(['in_progress', 'completed', 'failed', 'not_found']),
+  session_id: z.string(),
   progress: z.string().optional(),
-  elapsed_seconds: z.number(),
+  elapsed_seconds: z.number().optional(),
 });
 
 export const VerdictSchema = z.enum(['approve', 'revise', 'reject', 'request_changes']);

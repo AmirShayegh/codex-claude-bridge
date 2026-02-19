@@ -31,17 +31,21 @@ describe('registerReviewStatusTool', () => {
     expect(result.isError).toBeUndefined();
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.status).toBe('not_found');
+    expect(parsed.session_id).toBe('nonexistent');
+    expect(parsed.elapsed_seconds).toBeUndefined();
   });
 
-  it('active session returns active status', async () => {
+  it('in_progress session returns status with elapsed_seconds', async () => {
     getOrCreateSession(db, 'thread_active');
 
     const result = await handler({ session_id: 'thread_active' }, {});
 
     expect(result.isError).toBeUndefined();
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed.status).toBe('active');
+    expect(parsed.status).toBe('in_progress');
     expect(parsed.session_id).toBe('thread_active');
+    expect(typeof parsed.elapsed_seconds).toBe('number');
+    expect(parsed.elapsed_seconds).toBeGreaterThanOrEqual(0);
   });
 
   it('completed session returns completed status', async () => {
@@ -52,6 +56,7 @@ describe('registerReviewStatusTool', () => {
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.status).toBe('completed');
+    expect(typeof parsed.elapsed_seconds).toBe('number');
   });
 
   it('storage error returns MCP error', async () => {

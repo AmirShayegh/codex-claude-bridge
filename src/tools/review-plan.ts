@@ -3,6 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import type { CodexClient } from '../codex/client.js';
 import { saveReview } from '../storage/reviews.js';
+import { getOrCreateSession } from '../storage/sessions.js';
 
 export function registerReviewPlanTool(server: McpServer, client: CodexClient, db?: Database.Database): void {
   server.registerTool(
@@ -24,6 +25,7 @@ export function registerReviewPlanTool(server: McpServer, client: CodexClient, d
           return { content: [{ type: 'text' as const, text: result.error }], isError: true };
         }
         if (db) {
+          getOrCreateSession(db, result.data.session_id);
           const saveResult = saveReview(db, {
             session_id: result.data.session_id,
             type: 'plan',

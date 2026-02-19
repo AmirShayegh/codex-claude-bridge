@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
-import { initSessionsDb, getOrCreateSession } from './sessions.js';
+import { initSessionsDb, getOrCreateSession, markSessionCompleted } from './sessions.js';
 
 let db: InstanceType<typeof Database>;
 
@@ -23,12 +23,12 @@ describe('initSessionsDb', () => {
 });
 
 describe('getOrCreateSession', () => {
-  it('new session_id creates new entry', () => {
+  it('new session_id creates entry with in_progress status', () => {
     const result = getOrCreateSession(db, 'thread_new');
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.data.session_id).toBe('thread_new');
-      expect(result.data.status).toBe('active');
+      expect(result.data.status).toBe('in_progress');
     }
   });
 
@@ -51,5 +51,23 @@ describe('getOrCreateSession', () => {
     if (a.ok && b.ok) {
       expect(a.data.session_id).not.toBe(b.data.session_id);
     }
+  });
+});
+
+describe('markSessionCompleted', () => {
+  it('changes status from in_progress to completed', () => {
+    getOrCreateSession(db, 'thread_done');
+    const result = markSessionCompleted(db, 'thread_done');
+    expect(result.ok).toBe(true);
+
+    const session = getOrCreateSession(db, 'thread_done');
+    if (session.ok) {
+      expect(session.data.status).toBe('completed');
+    }
+  });
+
+  it('returns ok for non-existent session (no-op)', () => {
+    const result = markSessionCompleted(db, 'nonexistent');
+    expect(result.ok).toBe(true);
   });
 });

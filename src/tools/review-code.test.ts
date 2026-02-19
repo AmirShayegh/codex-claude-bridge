@@ -9,7 +9,12 @@ vi.mock('../storage/reviews.js', () => ({
   saveReview: vi.fn(),
 }));
 
+vi.mock('../storage/sessions.js', () => ({
+  getOrCreateSession: vi.fn(),
+}));
+
 import { saveReview } from '../storage/reviews.js';
+import { getOrCreateSession } from '../storage/sessions.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type HandlerFn = (args: Record<string, unknown>, extra: unknown) => Promise<any>;
@@ -137,6 +142,14 @@ describe('registerReviewCodeTool with db', () => {
       summary: 'Issues found',
       findings_json: JSON.stringify(validResult.findings),
     });
+  });
+
+  it('creates session entry on success', async () => {
+    vi.mocked(mockClient.reviewCode).mockResolvedValue(ok(validResult));
+
+    await handler({ diff: 'some diff' }, {});
+
+    expect(getOrCreateSession).toHaveBeenCalledWith(mockDb, 'thread_xyz');
   });
 
   it('does not save on client error', async () => {

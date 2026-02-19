@@ -4,6 +4,7 @@ import type Database from 'better-sqlite3';
 import type { CodexClient } from '../codex/client.js';
 import { getStagedDiff } from '../utils/git.js';
 import { saveReview } from '../storage/reviews.js';
+import { getOrCreateSession } from '../storage/sessions.js';
 
 export function registerReviewPrecommitTool(server: McpServer, client: CodexClient, db?: Database.Database): void {
   server.registerTool(
@@ -62,6 +63,7 @@ export function registerReviewPrecommitTool(server: McpServer, client: CodexClie
           return { content: [{ type: 'text' as const, text: result.error }], isError: true };
         }
         if (db) {
+          getOrCreateSession(db, result.data.session_id);
           const saveResult = saveReview(db, {
             session_id: result.data.session_id,
             type: 'precommit',

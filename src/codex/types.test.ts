@@ -293,6 +293,7 @@ describe('ReviewStatusSchema', () => {
   it('parses a valid status', () => {
     const result = ReviewStatusSchema.safeParse({
       status: 'in_progress',
+      session_id: 'thread_1',
       progress: 'Reviewing file 2 of 5',
       elapsed_seconds: 12.5,
     });
@@ -303,20 +304,21 @@ describe('ReviewStatusSchema', () => {
     }
   });
 
-  it('allows omitting optional progress', () => {
+  it('allows omitting optional fields', () => {
     const result = ReviewStatusSchema.safeParse({
       status: 'completed',
-      elapsed_seconds: 30,
+      session_id: 'thread_1',
     });
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.progress).toBeUndefined();
+      expect(result.data.elapsed_seconds).toBeUndefined();
     }
   });
 
   it('accepts all valid statuses', () => {
-    for (const status of ['in_progress', 'completed', 'failed']) {
-      const result = ReviewStatusSchema.safeParse({ status, elapsed_seconds: 0 });
+    for (const status of ['in_progress', 'completed', 'failed', 'not_found']) {
+      const result = ReviewStatusSchema.safeParse({ status, session_id: 'thread_1' });
       expect(result.success).toBe(true);
     }
   });

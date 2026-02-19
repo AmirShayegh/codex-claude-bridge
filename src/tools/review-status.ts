@@ -24,8 +24,18 @@ export function registerReviewStatusTool(server: McpServer, db: Database.Databas
           };
         }
 
+        const createdAt = new Date(row.created_at + 'Z');
+        const elapsedSeconds = Math.round((Date.now() - createdAt.getTime()) / 1000);
+
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ status: row.status, session_id: row.session_id, created_at: row.created_at }) }],
+          content: [{
+            type: 'text' as const,
+            text: JSON.stringify({
+              status: row.status,
+              session_id: row.session_id,
+              elapsed_seconds: elapsedSeconds,
+            }),
+          }],
         };
       } catch (e) {
         return {

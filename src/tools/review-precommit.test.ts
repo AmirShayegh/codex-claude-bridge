@@ -13,8 +13,13 @@ vi.mock('../storage/reviews.js', () => ({
   saveReview: vi.fn(),
 }));
 
+vi.mock('../storage/sessions.js', () => ({
+  getOrCreateSession: vi.fn(),
+}));
+
 import { getStagedDiff } from '../utils/git.js';
 import { saveReview } from '../storage/reviews.js';
+import { getOrCreateSession } from '../storage/sessions.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type HandlerFn = (args: Record<string, unknown>, extra: unknown) => Promise<any>;
@@ -185,6 +190,15 @@ describe('registerReviewPrecommitTool with db', () => {
       summary: 'Large diff',
       findings_json: '[]',
     });
+  });
+
+  it('creates session entry on success', async () => {
+    vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
+    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(validResult));
+
+    await handler({}, {});
+
+    expect(getOrCreateSession).toHaveBeenCalledWith(mockDb, 'thread_pre');
   });
 
   it('rejected review with blockers uses blockers for summary', async () => {

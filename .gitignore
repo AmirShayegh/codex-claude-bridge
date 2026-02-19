@@ -1,0 +1,26 @@
+# AI project instructions
+CLAUDE.md
+CLAUDE_RULES.md
+docs/
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment
+.env
+.env.*
+
+# Logs
+*.log
+
+# Config
+.reviewbridge.json
+
+# Coverage
+coverage/
+
+# OS
+.DS_Store

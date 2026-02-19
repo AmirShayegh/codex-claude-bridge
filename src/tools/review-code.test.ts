@@ -80,6 +80,15 @@ describe('registerReviewCodeTool', () => {
     expect(result.content[0].text).toContain('CODEX_PARSE_ERROR');
   });
 
+  it('unexpected thrown error returns MCP error', async () => {
+    vi.mocked(mockClient.reviewCode).mockRejectedValue(new Error('connection reset'));
+
+    const result = await handler({ diff: 'some diff' }, {});
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('connection reset');
+  });
+
   it('session_id forwarded to client', async () => {
     vi.mocked(mockClient.reviewCode).mockResolvedValue(ok(validResult));
 

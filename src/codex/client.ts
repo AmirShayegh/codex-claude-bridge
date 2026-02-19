@@ -1,6 +1,5 @@
 import { Codex } from '@openai/codex-sdk';
-import { toJSONSchema } from 'zod';
-import type { z } from 'zod';
+import { toJSONSchema, type z } from 'zod';
 import { ok, err, ErrorCode } from '../utils/errors.js';
 import type { Result } from '../utils/errors.js';
 import {
@@ -64,7 +63,7 @@ function threadOpts(config: ReviewBridgeConfig) {
   };
 }
 
-async function runReview<T>(params: {
+async function runReview<T extends Record<string, unknown>>(params: {
   codex: Codex;
   config: ReviewBridgeConfig;
   prompt: string;
@@ -73,7 +72,6 @@ async function runReview<T>(params: {
 }): Promise<Result<T & { session_id: string }>> {
   const { codex, config, prompt, responseSchema, sessionId } = params;
 
-  // Get or create thread
   let thread;
   try {
     thread = sessionId
@@ -85,18 +83,15 @@ async function runReview<T>(params: {
   }
 
   const outputSchema = toJSONSchema(responseSchema);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), config.timeout_seconds * 1000);
-
+  const signal = AbortSignal.timeout(config.timeout_seconds * 1000);
   let lastError: string | undefined;
 
   // Attempt up to 2 times (initial + 1 retry)
   for (let attempt = 0; attempt < 2; attempt++) {
     let turn;
     try {
-      turn = await thread.run(prompt, { outputSchema, signal: controller.signal });
+      turn = await thread.run(prompt, { outputSchema, signal });
     } catch (e: unknown) {
-      clearTimeout(timeout);
       if (isAbortError(e)) {
         return err(`${ErrorCode.CODEX_TIMEOUT}: review timed out after ${config.timeout_seconds}s`);
       }
@@ -104,7 +99,6 @@ async function runReview<T>(params: {
       return err(`${ErrorCode.UNKNOWN_ERROR}: ${msg}`);
     }
 
-    // Parse JSON
     let parsed: unknown;
     try {
       parsed = JSON.parse(turn.finalResponse);
@@ -113,28 +107,37 @@ async function runReview<T>(params: {
       continue;
     }
 
-    // Validate with Zod
     const result = responseSchema.safeParse(parsed);
     if (!result.success) {
       lastError = result.error.message;
       continue;
     }
 
-    clearTimeout(timeout);
     const resolvedId = thread.id ?? sessionId;
     if (!resolvedId) {
       return err(`${ErrorCode.CODEX_PARSE_ERROR}: missing session ID after successful review`);
     }
-    const data = result.data as Record<string, unknown>;
-    return ok({ ...data, session_id: resolvedId } as T & { session_id: string });
+    // Single cast justified: safeParse validated result.data matches the schema
+    const validated = result.data as T;
+    return ok({ ...validated, session_id: resolvedId });
   }
 
-  clearTimeout(timeout);
   return err(`${ErrorCode.CODEX_PARSE_ERROR}: ${lastError}`);
 }
 
 export function createCodexClient(config: ReviewBridgeConfig): CodexClient {
-  const codex = new Codex();
+  let codex: Codex;
+  try {
+    codex = new Codex();
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    const errorMsg = `${ErrorCode.UNKNOWN_ERROR}: SDK initialization failed: ${msg}`;
+    return {
+      reviewPlan: () => Promise.resolve(err<PlanReviewResult>(errorMsg)),
+      reviewCode: () => Promise.resolve(err<CodeReviewResult>(errorMsg)),
+      reviewPrecommit: () => Promise.resolve(err<PrecommitResult>(errorMsg)),
+    };
+  }
 
   return {
     reviewPlan(input) {

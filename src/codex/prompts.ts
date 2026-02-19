@@ -20,7 +20,7 @@ export function buildPlanReviewPrompt(params: {
     sections.push(`Review depth: ${params.depth}`);
   }
 
-  sections.push(`\n## Plan\n\n${params.plan}`);
+  sections.push(`\n<<<PLAN>>>\n${params.plan}\n<<<END_PLAN>>>`);
 
   sections.push(
     '\nRespond with JSON containing:' +
@@ -49,7 +49,7 @@ export function buildCodeReviewPrompt(params: {
     sections.push(`Review criteria: ${params.criteria.join(', ')}`);
   }
 
-  sections.push(`\n## Diff\n\n${params.diff}`);
+  sections.push(`\n<<<DIFF>>>\n${params.diff}\n<<<END_DIFF>>>`);
 
   sections.push(
     '\nRespond with JSON containing:' +
@@ -73,7 +73,7 @@ export function buildPrecommitPrompt(params: {
     sections.push(`Checklist:\n${params.checklist.map((item) => `- ${item}`).join('\n')}`);
   }
 
-  sections.push(`\n## Staged Changes\n\n${params.diff}`);
+  sections.push(`\n<<<DIFF>>>\n${params.diff}\n<<<END_DIFF>>>`);
 
   sections.push(
     '\nRespond with JSON containing:' +

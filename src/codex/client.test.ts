@@ -22,9 +22,12 @@ type MockFn = ((...args: unknown[]) => unknown) & { mockImplementation: (fn: (..
 let mockStartThread: MockFn;
 let mockResumeThread: MockFn;
 
+let mockConstructorThrow: Error | null;
+
 vi.mock('@openai/codex-sdk', () => {
   // Must use function (not arrow) so it's valid as a constructor with `new`
   function MockCodex() {
+    if (mockConstructorThrow) throw mockConstructorThrow;
     return {
       startThread: (...args: unknown[]) => mockStartThread(...args),
       resumeThread: (...args: unknown[]) => mockResumeThread(...args),
@@ -39,6 +42,7 @@ beforeEach(() => {
   mockRun = vi.fn();
   mockStartThread = vi.fn(() => makeMockThread()) as unknown as MockFn;
   mockResumeThread = vi.fn(() => makeMockThread()) as unknown as MockFn;
+  mockConstructorThrow = null;
 });
 
 const config: ReviewBridgeConfig = { ...DEFAULT_CONFIG };
@@ -268,5 +272,25 @@ describe('config passthrough', () => {
         modelReasoningEffort: 'high',
       }),
     );
+  });
+});
+
+describe('constructor failure', () => {
+  it('returns UNKNOWN_ERROR from all methods when SDK constructor throws', async () => {
+    mockConstructorThrow = new Error('Missing binary');
+
+    const client = createCodexClient(config);
+
+    const plan = await client.reviewPlan({ plan: 'plan' });
+    expect(plan.ok).toBe(false);
+    if (!plan.ok) expect(plan.error).toContain('UNKNOWN_ERROR');
+
+    const code = await client.reviewCode({ diff: 'diff' });
+    expect(code.ok).toBe(false);
+    if (!code.ok) expect(code.error).toContain('SDK initialization failed');
+
+    const pre = await client.reviewPrecommit({ diff: 'diff' });
+    expect(pre.ok).toBe(false);
+    if (!pre.ok) expect(pre.error).toContain('UNKNOWN_ERROR');
   });
 });

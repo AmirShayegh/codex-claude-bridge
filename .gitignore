@@ -1,7 +1,9 @@
 # AI project instructions
 CLAUDE.md
 CLAUDE_RULES.md
-docs/
+docs/*
+!docs/handover/
+!docs/roadmap.md
 
 # Dependencies
 node_modules/

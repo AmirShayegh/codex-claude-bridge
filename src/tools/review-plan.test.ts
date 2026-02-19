@@ -73,6 +73,15 @@ describe('registerReviewPlanTool', () => {
     expect(result.content[0].text).toContain('CODEX_TIMEOUT');
   });
 
+  it('unexpected thrown error returns MCP error', async () => {
+    vi.mocked(mockClient.reviewPlan).mockRejectedValue(new Error('network failure'));
+
+    const result = await handler({ plan: 'My plan' }, {});
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('network failure');
+  });
+
   it('session_id passed through to client', async () => {
     vi.mocked(mockClient.reviewPlan).mockResolvedValue(ok(validResult));
 

@@ -48,6 +48,6 @@ export function createServer(): McpServer {
 
     return server;
   } catch (e) {
-    throw new Error(`Failed to initialize MCP server: ${e instanceof Error ? e.message : String(e)}`);
+    throw new Error(`Failed to initialize MCP server: ${e instanceof Error ? e.message : String(e)}`, { cause: e });
   }
 }

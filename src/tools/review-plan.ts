@@ -1,8 +1,10 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type Database from 'better-sqlite3';
 import type { CodexClient } from '../codex/client.js';
+import { saveReview } from '../storage/reviews.js';
 
-export function registerReviewPlanTool(server: McpServer, client: CodexClient): void {
+export function registerReviewPlanTool(server: McpServer, client: CodexClient, db?: Database.Database): void {
   server.registerTool(
     'review_plan',
     {
@@ -20,6 +22,15 @@ export function registerReviewPlanTool(server: McpServer, client: CodexClient): 
         const result = await client.reviewPlan(args);
         if (!result.ok) {
           return { content: [{ type: 'text' as const, text: result.error }], isError: true };
+        }
+        if (db) {
+          saveReview(db, {
+            session_id: result.data.session_id,
+            type: 'plan',
+            verdict: result.data.verdict,
+            summary: result.data.summary,
+            findings_json: JSON.stringify(result.data.findings),
+          });
         }
         return { content: [{ type: 'text' as const, text: JSON.stringify(result.data) }] };
       } catch (e) {

@@ -9,7 +9,12 @@ vi.mock('../utils/git.js', () => ({
   getStagedDiff: vi.fn(),
 }));
 
+vi.mock('../storage/reviews.js', () => ({
+  saveReview: vi.fn(),
+}));
+
 import { getStagedDiff } from '../utils/git.js';
+import { saveReview } from '../storage/reviews.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type HandlerFn = (args: Record<string, unknown>, extra: unknown) => Promise<any>;
@@ -33,11 +38,16 @@ beforeEach(() => {
     reviewPrecommit: vi.fn(),
   };
   mockServer = { registerTool: vi.fn() };
-  registerReviewPrecommitTool(mockServer as unknown as McpServer, mockClient);
-  handler = mockServer.registerTool.mock.calls[0][2] as HandlerFn;
 });
 
+function setupHandler(db?: unknown) {
+  registerReviewPrecommitTool(mockServer as unknown as McpServer, mockClient, db as never);
+  handler = mockServer.registerTool.mock.calls[0][2] as HandlerFn;
+}
+
 describe('registerReviewPrecommitTool', () => {
+  beforeEach(() => setupHandler());
+
   it('registers tool with name review_precommit', () => {
     expect(mockServer.registerTool).toHaveBeenCalledTimes(1);
     expect(mockServer.registerTool.mock.calls[0][0]).toBe('review_precommit');
@@ -145,5 +155,46 @@ describe('registerReviewPrecommitTool', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('timeout');
+  });
+
+  it('does not save to storage when no db provided', async () => {
+    vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
+    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(validResult));
+
+    await handler({}, {});
+
+    expect(saveReview).not.toHaveBeenCalled();
+  });
+});
+
+describe('registerReviewPrecommitTool with db', () => {
+  const mockDb = {};
+
+  beforeEach(() => setupHandler(mockDb));
+
+  it('saves review to storage on success', async () => {
+    vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
+    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(validResult));
+
+    await handler({}, {});
+
+    expect(saveReview).toHaveBeenCalledWith(mockDb, {
+      session_id: 'thread_pre',
+      type: 'precommit',
+      verdict: 'approve',
+      summary: 'Large diff',
+      findings_json: '[]',
+    });
+  });
+
+  it('does not save on client error', async () => {
+    vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
+    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(
+      err('CODEX_TIMEOUT: timed out'),
+    );
+
+    await handler({}, {});
+
+    expect(saveReview).not.toHaveBeenCalled();
   });
 });

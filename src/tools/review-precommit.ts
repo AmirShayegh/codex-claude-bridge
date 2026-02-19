@@ -1,9 +1,11 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type Database from 'better-sqlite3';
 import type { CodexClient } from '../codex/client.js';
 import { getStagedDiff } from '../utils/git.js';
+import { saveReview } from '../storage/reviews.js';
 
-export function registerReviewPrecommitTool(server: McpServer, client: CodexClient): void {
+export function registerReviewPrecommitTool(server: McpServer, client: CodexClient, db?: Database.Database): void {
   server.registerTool(
     'review_precommit',
     {
@@ -58,6 +60,15 @@ export function registerReviewPrecommitTool(server: McpServer, client: CodexClie
         });
         if (!result.ok) {
           return { content: [{ type: 'text' as const, text: result.error }], isError: true };
+        }
+        if (db) {
+          saveReview(db, {
+            session_id: result.data.session_id,
+            type: 'precommit',
+            verdict: result.data.ready_to_commit ? 'approve' : 'reject',
+            summary: result.data.warnings.join('; ') || 'Clean',
+            findings_json: JSON.stringify(result.data.blockers),
+          });
         }
         return { content: [{ type: 'text' as const, text: JSON.stringify(result.data) }] };
       } catch (e) {

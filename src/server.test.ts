@@ -3,7 +3,6 @@ import { createServer } from './server.js';
 import { err } from './utils/errors.js';
 
 vi.mock('@modelcontextprotocol/sdk/server/mcp.js', () => {
-  // Must use function (not arrow) so it's valid as a constructor with `new`
   function MockMcpServer() {
     return {
       registerTool: vi.fn(),
@@ -26,12 +25,32 @@ vi.mock('./config/loader.js', () => ({
   loadConfig: vi.fn(),
 }));
 
+vi.mock('better-sqlite3', () => {
+  function MockDatabase() {
+    return { exec: vi.fn(), prepare: vi.fn(), close: vi.fn() };
+  }
+  return { default: MockDatabase };
+});
+
+vi.mock('./storage/reviews.js', () => ({
+  initDb: vi.fn(),
+  saveReview: vi.fn(),
+  getReviewsBySession: vi.fn(),
+  getRecentReviews: vi.fn(),
+}));
+
+vi.mock('./storage/sessions.js', () => ({
+  initSessionsDb: vi.fn(),
+  getOrCreateSession: vi.fn(),
+}));
+
 import { loadConfig } from './config/loader.js';
 import { DEFAULT_CONFIG } from './config/types.js';
+import { initDb } from './storage/reviews.js';
+import { initSessionsDb } from './storage/sessions.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  // Default: loadConfig succeeds
   vi.mocked(loadConfig).mockReturnValue({ ok: true, data: DEFAULT_CONFIG });
 });
 
@@ -43,7 +62,6 @@ describe('createServer', () => {
 
   it('registers all 5 tools', () => {
     const server = createServer();
-    // registerTool is on the mock McpServer instance
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const registerTool = (server as any).registerTool as ReturnType<typeof vi.fn>;
     expect(registerTool).toHaveBeenCalledTimes(5);
@@ -61,8 +79,13 @@ describe('createServer', () => {
   it('config error falls back to defaults', () => {
     vi.mocked(loadConfig).mockReturnValue(err('CONFIG_ERROR: file not found'));
 
-    // Should not throw
     const server = createServer();
     expect(typeof server.connect).toBe('function');
+  });
+
+  it('initializes both database tables', () => {
+    createServer();
+    expect(initDb).toHaveBeenCalledTimes(1);
+    expect(initSessionsDb).toHaveBeenCalledTimes(1);
   });
 });

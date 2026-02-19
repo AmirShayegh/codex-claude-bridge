@@ -38,7 +38,7 @@ const sampleDiff = `diff --git a/src/index.ts b/src/index.ts
 
 describe('getStagedDiff', () => {
   it('returns ok with diff string when changes are staged', async () => {
-    mockSuccess(sampleDiff);
+    mockSuccess(sampleDiff + '\n');
     const result = await getStagedDiff();
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -117,7 +117,8 @@ describe('getDiffBetween', () => {
   });
 
   it('returns err for refs starting with - (argument injection guard)', async () => {
-    const result = await getDiffBetween('--output=/tmp/evil', 'HEAD');
+    // --verbose passes the regex (all chars valid) but starts with -
+    const result = await getDiffBetween('--verbose', 'HEAD');
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain('GIT_ERROR');

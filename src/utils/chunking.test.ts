@@ -45,7 +45,7 @@ describe('chunkDiff', () => {
     const singleFileTokens = estimateTokens(file1);
     const result = chunkDiff(diff, singleFileTokens + 10);
 
-    expect(result.length).toBeGreaterThanOrEqual(2);
+    expect(result).toHaveLength(2);
   });
 
   it('keeps single oversized file as one chunk', () => {

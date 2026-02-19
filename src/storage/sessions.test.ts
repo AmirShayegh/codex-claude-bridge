@@ -154,6 +154,8 @@ describe('activateSession', () => {
       expect(result.data.session_id).toBe('thread_activate_new');
       expect(result.data.status).toBe('in_progress');
       expect(result.data.completed_at).toBeNull();
+      expect(typeof result.data.created_at).toBe('string');
+      expect(result.data.created_at.length).toBeGreaterThan(0);
     }
   });
 

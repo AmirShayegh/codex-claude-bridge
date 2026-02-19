@@ -244,4 +244,26 @@ describe('registerReviewPlanTool with db', () => {
     expect(result.isError).toBe(true);
     expect(markSessionFailed).toHaveBeenCalledWith(mockDb, 'thread_abc');
   });
+
+  it('does not mark session failed when activateSession fails', async () => {
+    vi.mocked(activateSession).mockReturnValue(err('STORAGE_ERROR: readonly'));
+    vi.mocked(mockClient.reviewPlan).mockResolvedValue(err('CODEX_TIMEOUT: timed out'));
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await handler({ plan: 'My plan', session_id: 'thread_abc' }, {});
+
+    expect(result.isError).toBe(true);
+    expect(markSessionFailed).not.toHaveBeenCalled();
+    consoleSpy.mockRestore();
+  });
+
+  it('uses preflightId for markSessionCompleted when session_id provided', async () => {
+    vi.mocked(activateSession).mockReturnValue(ok({ session_id: 'thread_abc', status: 'in_progress' as const, created_at: '2026-01-01', completed_at: null }));
+    const codexResult = { ...validResult, session_id: 'thread_different' };
+    vi.mocked(mockClient.reviewPlan).mockResolvedValue(ok(codexResult));
+
+    await handler({ plan: 'My plan', session_id: 'thread_abc' }, {});
+
+    expect(markSessionCompleted).toHaveBeenCalledWith(mockDb, 'thread_abc');
+  });
 });

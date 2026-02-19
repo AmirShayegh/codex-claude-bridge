@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import { ok, err } from '../utils/errors.js';
+import { ok, err, ErrorCode } from '../utils/errors.js';
 import type { Result } from '../utils/errors.js';
 
 export interface SessionInfo {
@@ -50,7 +50,7 @@ export function getOrCreateSession(
     return ok(created);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return err(`STORAGE_ERROR: ${msg}`);
+    return err(`${ErrorCode.STORAGE_ERROR}: ${msg}`);
   }
 }
 
@@ -72,7 +72,7 @@ export function activateSession(
     return ok(row);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return err(`STORAGE_ERROR: ${msg}`);
+    return err(`${ErrorCode.STORAGE_ERROR}: ${msg}`);
   }
 }
 
@@ -87,7 +87,7 @@ export function markSessionCompleted(
     return ok(undefined);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return err(`STORAGE_ERROR: ${msg}`);
+    return err(`${ErrorCode.STORAGE_ERROR}: ${msg}`);
   }
 }
 
@@ -102,6 +102,6 @@ export function markSessionFailed(
     return ok(undefined);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return err(`STORAGE_ERROR: ${msg}`);
+    return err(`${ErrorCode.STORAGE_ERROR}: ${msg}`);
   }
 }

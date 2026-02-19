@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import { ok, err } from '../utils/errors.js';
+import { ok, err, ErrorCode } from '../utils/errors.js';
 import type { Result } from '../utils/errors.js';
 import type { ReviewHistoryEntry } from '../codex/types.js';
 
@@ -33,7 +33,7 @@ export function saveReview(db: Database.Database, input: SaveReviewInput): Resul
     return ok(undefined);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return err(`STORAGE_ERROR: ${msg}`);
+    return err(`${ErrorCode.STORAGE_ERROR}: ${msg}`);
   }
 }
 
@@ -48,7 +48,7 @@ export function getReviewsBySession(
     return ok(rows);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return err(`STORAGE_ERROR: ${msg}`);
+    return err(`${ErrorCode.STORAGE_ERROR}: ${msg}`);
   }
 }
 
@@ -63,6 +63,6 @@ export function getRecentReviews(
     return ok(rows);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return err(`STORAGE_ERROR: ${msg}`);
+    return err(`${ErrorCode.STORAGE_ERROR}: ${msg}`);
   }
 }

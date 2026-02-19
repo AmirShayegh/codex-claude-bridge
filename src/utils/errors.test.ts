@@ -56,6 +56,7 @@ describe('ErrorCode enum', () => {
     expect(ErrorCode.CODEX_PARSE_ERROR).toBe('CODEX_PARSE_ERROR');
     expect(ErrorCode.GIT_ERROR).toBe('GIT_ERROR');
     expect(ErrorCode.CONFIG_ERROR).toBe('CONFIG_ERROR');
+    expect(ErrorCode.STORAGE_ERROR).toBe('STORAGE_ERROR');
     expect(ErrorCode.SESSION_NOT_FOUND).toBe('SESSION_NOT_FOUND');
     expect(ErrorCode.UNKNOWN_ERROR).toBe('UNKNOWN_ERROR');
   });
@@ -68,8 +69,8 @@ describe('ErrorCode enum', () => {
     });
   });
 
-  it('has exactly 6 members', () => {
+  it('has exactly 7 members', () => {
     const keys = Object.keys(ErrorCode);
-    expect(keys).toHaveLength(6);
+    expect(keys).toHaveLength(7);
   });
 });

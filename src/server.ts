@@ -37,13 +37,17 @@ export function createServer(): McpServer {
     console.error(`Database table initialization failed: ${msg}`);
   }
 
-  const server = new McpServer({ name: 'codex-claude-bridge', version: '0.1.0' });
+  try {
+    const server = new McpServer({ name: 'codex-claude-bridge', version: '0.1.0' });
 
-  registerReviewPlanTool(server, client, db);
-  registerReviewCodeTool(server, client, db);
-  registerReviewPrecommitTool(server, client, db);
-  registerReviewHistoryTool(server, db);
-  registerReviewStatusTool(server, db);
+    registerReviewPlanTool(server, client, db);
+    registerReviewCodeTool(server, client, db);
+    registerReviewPrecommitTool(server, client, db);
+    registerReviewHistoryTool(server, db);
+    registerReviewStatusTool(server, db);
 
-  return server;
+    return server;
+  } catch (e) {
+    throw new Error(`Failed to initialize MCP server: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }

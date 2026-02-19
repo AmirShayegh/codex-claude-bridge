@@ -8,9 +8,11 @@ import {
 describe('buildPlanReviewPrompt', () => {
   const plan = '## Step 1\nCreate user auth module\n## Step 2\nAdd JWT tokens';
 
-  it('includes the plan text in output', () => {
+  it('includes the plan text in output with delimiters', () => {
     const result = buildPlanReviewPrompt({ plan });
     expect(result).toContain(plan);
+    expect(result).toContain('<<<PLAN>>>');
+    expect(result).toContain('<<<END_PLAN>>>');
   });
 
   it('includes context when provided', () => {
@@ -50,9 +52,11 @@ describe('buildPlanReviewPrompt', () => {
 describe('buildCodeReviewPrompt', () => {
   const diff = '--- a/src/db.ts\n+++ b/src/db.ts\n@@ -1,3 +1,5 @@\n+import { sanitize } from "./utils";\n const query = `SELECT * FROM users`;';
 
-  it('includes the diff in output', () => {
+  it('includes the diff in output with delimiters', () => {
     const result = buildCodeReviewPrompt({ diff });
     expect(result).toContain(diff);
+    expect(result).toContain('<<<DIFF>>>');
+    expect(result).toContain('<<<END_DIFF>>>');
   });
 
   it('includes context when provided', () => {
@@ -84,9 +88,11 @@ describe('buildCodeReviewPrompt', () => {
 describe('buildPrecommitPrompt', () => {
   const diff = '--- a/src/index.ts\n+++ b/src/index.ts\n@@ -1 +1,2 @@\n+console.log("debug");\n export default app;';
 
-  it('includes the diff in output', () => {
+  it('includes the diff in output with delimiters', () => {
     const result = buildPrecommitPrompt({ diff });
     expect(result).toContain(diff);
+    expect(result).toContain('<<<DIFF>>>');
+    expect(result).toContain('<<<END_DIFF>>>');
   });
 
   it('includes checklist items when provided', () => {

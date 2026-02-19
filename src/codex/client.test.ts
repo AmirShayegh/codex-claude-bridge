@@ -16,11 +16,9 @@ function makeMockThread() {
   };
 }
 
-// Use explicit callable type that also supports mock methods
-type MockFn = ((...args: unknown[]) => unknown) & { mockImplementation: (fn: (...args: unknown[]) => unknown) => void };
-
-let mockStartThread: MockFn;
-let mockResumeThread: MockFn;
+type ThreadFactory = (...args: unknown[]) => ReturnType<typeof makeMockThread>;
+let mockStartThread: ReturnType<typeof vi.fn<ThreadFactory>>;
+let mockResumeThread: ReturnType<typeof vi.fn<ThreadFactory>>;
 
 let mockConstructorThrow: Error | null;
 
@@ -40,8 +38,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockThreadId = 'thread_abc123';
   mockRun = vi.fn();
-  mockStartThread = vi.fn(() => makeMockThread()) as unknown as MockFn;
-  mockResumeThread = vi.fn(() => makeMockThread()) as unknown as MockFn;
+  mockStartThread = vi.fn(() => makeMockThread());
+  mockResumeThread = vi.fn(() => makeMockThread());
   mockConstructorThrow = null;
 });
 

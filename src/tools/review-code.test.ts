@@ -12,10 +12,12 @@ vi.mock('../storage/reviews.js', () => ({
 vi.mock('../storage/sessions.js', () => ({
   getOrCreateSession: vi.fn(),
   markSessionCompleted: vi.fn(),
+  markSessionFailed: vi.fn(),
+  activateSession: vi.fn(),
 }));
 
 import { saveReview } from '../storage/reviews.js';
-import { getOrCreateSession, markSessionCompleted } from '../storage/sessions.js';
+import { getOrCreateSession, markSessionCompleted, markSessionFailed, activateSession } from '../storage/sessions.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type HandlerFn = (args: Record<string, unknown>, extra: unknown) => Promise<any>;
@@ -131,7 +133,9 @@ describe('registerReviewCodeTool with db', () => {
 
   beforeEach(() => {
     vi.mocked(getOrCreateSession).mockReturnValue(ok({ session_id: 'thread_xyz', status: 'in_progress' as const, created_at: '2026-01-01', completed_at: null }));
+    vi.mocked(activateSession).mockReturnValue(ok({ session_id: 'thread_xyz', status: 'in_progress' as const, created_at: '2026-01-01', completed_at: null }));
     vi.mocked(markSessionCompleted).mockReturnValue(ok(undefined));
+    vi.mocked(markSessionFailed).mockReturnValue(ok(undefined));
     vi.mocked(saveReview).mockReturnValue(ok(undefined));
     setupHandler(mockDb);
   });
@@ -210,5 +214,43 @@ describe('registerReviewCodeTool with db', () => {
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('STORAGE_ERROR'));
     expect(result.isError).toBeUndefined();
     consoleSpy.mockRestore();
+  });
+
+  it('activates session before client call when session_id provided', async () => {
+    vi.mocked(mockClient.reviewCode).mockResolvedValue(ok(validResult));
+
+    await handler({ diff: 'some diff', session_id: 'thread_xyz' }, {});
+
+    expect(activateSession).toHaveBeenCalledWith(mockDb, 'thread_xyz');
+    const activateOrder = vi.mocked(activateSession).mock.invocationCallOrder[0];
+    const reviewOrder = vi.mocked(mockClient.reviewCode).mock.invocationCallOrder[0];
+    expect(activateOrder).toBeLessThan(reviewOrder);
+  });
+
+  it('does not activate session when no session_id provided', async () => {
+    vi.mocked(mockClient.reviewCode).mockResolvedValue(ok(validResult));
+
+    await handler({ diff: 'some diff' }, {});
+
+    expect(activateSession).not.toHaveBeenCalled();
+    expect(getOrCreateSession).toHaveBeenCalledWith(mockDb, 'thread_xyz');
+  });
+
+  it('marks session failed when client returns error and session_id provided', async () => {
+    vi.mocked(mockClient.reviewCode).mockResolvedValue(err('CODEX_TIMEOUT: timed out'));
+
+    const result = await handler({ diff: 'some diff', session_id: 'thread_xyz' }, {});
+
+    expect(result.isError).toBe(true);
+    expect(markSessionFailed).toHaveBeenCalledWith(mockDb, 'thread_xyz');
+  });
+
+  it('marks session failed when handler throws and session_id provided', async () => {
+    vi.mocked(mockClient.reviewCode).mockRejectedValue(new Error('network error'));
+
+    const result = await handler({ diff: 'some diff', session_id: 'thread_xyz' }, {});
+
+    expect(result.isError).toBe(true);
+    expect(markSessionFailed).toHaveBeenCalledWith(mockDb, 'thread_xyz');
   });
 });

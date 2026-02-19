@@ -249,3 +249,82 @@ describe('MCP integration — review_status', () => {
     expect(parsed.status).toBe('not_found');
   });
 });
+
+describe('MCP integration — session lifecycle', () => {
+  it('completed session has frozen elapsed_seconds', async () => {
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
+    client = await startServer();
+
+    await client.callTool({ name: 'review_plan', arguments: { plan: 'My plan' } });
+
+    const result1 = await client.callTool({
+      name: 'review_status',
+      arguments: { session_id: 'thread_integ_001' },
+    });
+    await new Promise((r) => setTimeout(r, 1100));
+    const result2 = await client.callTool({
+      name: 'review_status',
+      arguments: { session_id: 'thread_integ_001' },
+    });
+
+    const parsed1 = parseToolResult(result1) as Record<string, unknown>;
+    const parsed2 = parseToolResult(result2) as Record<string, unknown>;
+    expect(parsed1.status).toBe('completed');
+    expect(parsed2.status).toBe('completed');
+    expect(parsed1.elapsed_seconds).toBe(parsed2.elapsed_seconds);
+  });
+
+  it('review_status shows failed after Codex error on resumed session', async () => {
+    mockRun.mockRejectedValue(new Error('network timeout'));
+    client = await startServer();
+
+    await client.callTool({
+      name: 'review_plan',
+      arguments: { plan: 'My plan', session_id: 'thread_integ_001' },
+    });
+
+    const result = await client.callTool({
+      name: 'review_status',
+      arguments: { session_id: 'thread_integ_001' },
+    });
+
+    const parsed = parseToolResult(result) as Record<string, unknown>;
+    expect(parsed.status).toBe('failed');
+  });
+
+  it('review_history accumulates across plan and code phases', async () => {
+    mockRun
+      .mockResolvedValueOnce({ finalResponse: JSON.stringify(validPlanResponse) })
+      .mockResolvedValueOnce({ finalResponse: JSON.stringify(validCodeResponse) });
+    client = await startServer();
+
+    await client.callTool({ name: 'review_plan', arguments: { plan: 'My plan' } });
+    await client.callTool({
+      name: 'review_code',
+      arguments: { diff: 'some diff', session_id: 'thread_integ_001' },
+    });
+
+    const result = await client.callTool({ name: 'review_history', arguments: { last_n: 10 } });
+
+    const parsed = parseToolResult(result) as { reviews: Record<string, unknown>[] };
+    expect(parsed.reviews).toHaveLength(2);
+    const types = parsed.reviews.map((r) => r.type);
+    expect(types).toContain('plan');
+    expect(types).toContain('code');
+  });
+
+  it('server survives Codex failure and handles next request', async () => {
+    mockRun
+      .mockRejectedValueOnce(new Error('transient failure'))
+      .mockResolvedValueOnce({ finalResponse: JSON.stringify(validPlanResponse) });
+    client = await startServer();
+
+    const failResult = await client.callTool({ name: 'review_plan', arguments: { plan: 'Plan A' } });
+    const failText = getErrorText(failResult);
+    expect(failText).toContain('transient failure');
+
+    const okResult = await client.callTool({ name: 'review_plan', arguments: { plan: 'Plan B' } });
+    const parsed = parseToolResult(okResult) as Record<string, unknown>;
+    expect(parsed.verdict).toBe('approve');
+  });
+});

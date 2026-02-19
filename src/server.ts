@@ -9,6 +9,9 @@ import { registerReviewPrecommitTool } from './tools/review-precommit.js';
 
 export function createServer(): McpServer {
   const configResult = loadConfig();
+  if (!configResult.ok) {
+    console.error(`Config load failed, using defaults: ${configResult.error}`);
+  }
   const config = configResult.ok ? configResult.data : DEFAULT_CONFIG;
 
   const client = createCodexClient(config);

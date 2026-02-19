@@ -1,20 +1,40 @@
 # Claude ↔ Codex Review Bridge
 
-MCP server for automated code review. Claude Code writes, Codex reviews.
+MCP server for automated code review. Claude Code writes the code, [OpenAI Codex](https://developers.openai.com/codex) reviews it — structured feedback comes back inline, no copy-pasting between tools.
 
-## Install
+## Setup
 
-```bash
-claude mcp add codex-bridge -- npx -y codex-claude-bridge
-```
+1. **Install Node.js 18+** — download from [nodejs.org](https://nodejs.org/)
 
-## Prerequisites
+2. **Install Claude Code** — follow the guide at [code.claude.com](https://code.claude.com/docs/en/overview)
 
-- [Claude Code](https://claude.ai/claude-code) installed
-- [Codex CLI](https://github.com/openai/codex) installed and authenticated (`OPENAI_API_KEY` set)
-- Node.js 18+
+3. **Get an OpenAI API key** — create one at [platform.openai.com/api-keys](https://platform.openai.com/api-keys), then set it in your terminal:
 
-## Tools
+   ```bash
+   export OPENAI_API_KEY=your-key-here
+   ```
+
+4. **Add the bridge to Claude Code:**
+
+   ```bash
+   claude mcp add codex-bridge -- npx -y codex-claude-bridge
+   ```
+
+5. **Restart Claude Code** — the review tools are now available.
+
+## What You Get
+
+Once set up, Claude Code gains five new tools:
+
+- **`review_plan`** — Send an implementation plan for architectural review. Get a verdict (approve / revise / reject) with specific findings.
+- **`review_code`** — Send a code diff for review. Get findings with file and line references.
+- **`review_precommit`** — Quick sanity check before committing. Automatically captures your staged git changes.
+- **`review_status`** — Check whether a review is still in progress, completed, or failed.
+- **`review_history`** — Look up past reviews by session or count.
+
+All tools return structured JSON that Claude Code can act on directly.
+
+## Tools Reference
 
 ### `review_plan`
 

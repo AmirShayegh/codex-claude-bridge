@@ -62,13 +62,16 @@ export function registerReviewPrecommitTool(server: McpServer, client: CodexClie
           return { content: [{ type: 'text' as const, text: result.error }], isError: true };
         }
         if (db) {
-          saveReview(db, {
+          const saveResult = saveReview(db, {
             session_id: result.data.session_id,
             type: 'precommit',
             verdict: result.data.ready_to_commit ? 'approve' : 'reject',
             summary: result.data.warnings.join('; ') || result.data.blockers.join('; ') || 'Clean',
             findings_json: JSON.stringify(result.data.blockers),
           });
+          if (!saveResult.ok) {
+            console.error(`Failed to save review: ${saveResult.error}`);
+          }
         }
         return { content: [{ type: 'text' as const, text: JSON.stringify(result.data) }] };
       } catch (e) {

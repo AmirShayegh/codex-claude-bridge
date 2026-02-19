@@ -148,4 +148,16 @@ describe('registerReviewCodeTool with db', () => {
 
     expect(saveReview).not.toHaveBeenCalled();
   });
+
+  it('logs warning when saveReview fails but still returns success', async () => {
+    vi.mocked(mockClient.reviewCode).mockResolvedValue(ok(validResult));
+    vi.mocked(saveReview).mockReturnValue(err('STORAGE_ERROR: disk full'));
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await handler({ diff: 'some diff' }, {});
+
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('STORAGE_ERROR'));
+    expect(result.isError).toBeUndefined();
+    consoleSpy.mockRestore();
+  });
 });

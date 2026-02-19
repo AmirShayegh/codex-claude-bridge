@@ -23,13 +23,16 @@ export function registerReviewCodeTool(server: McpServer, client: CodexClient, d
           return { content: [{ type: 'text' as const, text: result.error }], isError: true };
         }
         if (db) {
-          saveReview(db, {
+          const saveResult = saveReview(db, {
             session_id: result.data.session_id,
             type: 'code',
             verdict: result.data.verdict,
             summary: result.data.summary,
             findings_json: JSON.stringify(result.data.findings),
           });
+          if (!saveResult.ok) {
+            console.error(`Failed to save review: ${saveResult.error}`);
+          }
         }
         return { content: [{ type: 'text' as const, text: JSON.stringify(result.data) }] };
       } catch (e) {

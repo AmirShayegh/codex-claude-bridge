@@ -1,3 +1,16 @@
+import { randomBytes } from 'node:crypto';
+
+function makeDelimiter(tag: string, content: string): { open: string; close: string } {
+  let open = `<<<${tag}>>>`;
+  let close = `<<<END_${tag}>>>`;
+  while (content.includes(open) || content.includes(close)) {
+    const suffix = randomBytes(4).toString('hex');
+    open = `<<<${tag}_${suffix}>>>`;
+    close = `<<<END_${tag}_${suffix}>>>`;
+  }
+  return { open, close };
+}
+
 export function buildPlanReviewPrompt(params: {
   plan: string;
   context?: string;
@@ -20,7 +33,8 @@ export function buildPlanReviewPrompt(params: {
     sections.push(`Review depth: ${params.depth}`);
   }
 
-  sections.push(`\n<<<PLAN>>>\n${params.plan}\n<<<END_PLAN>>>`);
+  const d = makeDelimiter('PLAN', params.plan);
+  sections.push(`\n${d.open}\n${params.plan}\n${d.close}`);
 
   sections.push(
     '\nRespond with JSON containing:' +
@@ -49,7 +63,8 @@ export function buildCodeReviewPrompt(params: {
     sections.push(`Review criteria: ${params.criteria.join(', ')}`);
   }
 
-  sections.push(`\n<<<DIFF>>>\n${params.diff}\n<<<END_DIFF>>>`);
+  const d = makeDelimiter('DIFF', params.diff);
+  sections.push(`\n${d.open}\n${params.diff}\n${d.close}`);
 
   sections.push(
     '\nRespond with JSON containing:' +
@@ -73,7 +88,8 @@ export function buildPrecommitPrompt(params: {
     sections.push(`Checklist:\n${params.checklist.map((item) => `- ${item}`).join('\n')}`);
   }
 
-  sections.push(`\n<<<DIFF>>>\n${params.diff}\n<<<END_DIFF>>>`);
+  const d = makeDelimiter('DIFF', params.diff);
+  sections.push(`\n${d.open}\n${params.diff}\n${d.close}`);
 
   sections.push(
     '\nRespond with JSON containing:' +

@@ -49,7 +49,7 @@ export interface CodexClient {
 
 function isAbortError(e: unknown): boolean {
   if (e instanceof Error) {
-    return e.name === 'AbortError' || e.message.includes('aborted');
+    return e.name === 'AbortError' || e.message.toLowerCase().includes('aborted');
   }
   return false;
 }
@@ -79,7 +79,8 @@ async function runReview<T extends Record<string, unknown>>(params: {
       : codex.startThread(threadOpts(config));
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    return err(`${ErrorCode.SESSION_NOT_FOUND}: ${msg}`);
+    const code = sessionId ? ErrorCode.SESSION_NOT_FOUND : ErrorCode.UNKNOWN_ERROR;
+    return err(`${code}: ${msg}`);
   }
 
   const outputSchema = toJSONSchema(responseSchema);

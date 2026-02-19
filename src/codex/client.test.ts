@@ -187,6 +187,19 @@ describe('timeout handling', () => {
       expect(result.error).toContain('CODEX_TIMEOUT');
     }
   });
+
+  it('returns CODEX_TIMEOUT on case-variant abort message', async () => {
+    const err = new Error('Request Aborted by signal');
+    mockRun.mockRejectedValue(err);
+
+    const client = createCodexClient(config);
+    const result = await client.reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('CODEX_TIMEOUT');
+    }
+  });
 });
 
 describe('session management', () => {
@@ -221,6 +234,21 @@ describe('session management', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain('SESSION_NOT_FOUND');
+    }
+  });
+
+  it('returns UNKNOWN_ERROR when startThread throws (no session_id)', async () => {
+    mockStartThread.mockImplementation(() => {
+      throw new Error('Failed to spawn');
+    });
+
+    const client = createCodexClient(config);
+    const result = await client.reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('UNKNOWN_ERROR');
+      expect(result.error).not.toContain('SESSION_NOT_FOUND');
     }
   });
 

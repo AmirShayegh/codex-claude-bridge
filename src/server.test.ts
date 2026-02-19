@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createServer } from './server.js';
 import { err } from './utils/errors.js';
 
+let shouldThrow = false;
+
 vi.mock('@modelcontextprotocol/sdk/server/mcp.js', () => {
   function MockMcpServer() {
     return {
@@ -26,9 +28,13 @@ vi.mock('./config/loader.js', () => ({
 }));
 
 vi.mock('better-sqlite3', () => {
-  function MockDatabase() {
+  const MockDatabase = vi.fn(function () {
+    if (shouldThrow) {
+      shouldThrow = false;
+      throw new Error('SQLITE_CANTOPEN');
+    }
     return { exec: vi.fn(), prepare: vi.fn(), close: vi.fn() };
-  }
+  });
   return { default: MockDatabase };
 });
 
@@ -48,9 +54,11 @@ import { loadConfig } from './config/loader.js';
 import { DEFAULT_CONFIG } from './config/types.js';
 import { initDb } from './storage/reviews.js';
 import { initSessionsDb } from './storage/sessions.js';
+import Database from 'better-sqlite3';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  shouldThrow = false;
   vi.mocked(loadConfig).mockReturnValue({ ok: true, data: DEFAULT_CONFIG });
 });
 
@@ -87,5 +95,17 @@ describe('createServer', () => {
     createServer();
     expect(initDb).toHaveBeenCalledTimes(1);
     expect(initSessionsDb).toHaveBeenCalledTimes(1);
+  });
+
+  it('database open failure falls back to in-memory', () => {
+    shouldThrow = true;
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const server = createServer();
+
+    expect(typeof server.connect).toBe('function');
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('SQLITE_CANTOPEN'));
+    expect(Database).toHaveBeenCalledTimes(2);
+    consoleSpy.mockRestore();
   });
 });

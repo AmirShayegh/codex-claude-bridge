@@ -21,7 +21,14 @@ export function createServer(): McpServer {
   const client = createCodexClient(config);
 
   const dbPath = process.env.REVIEW_BRIDGE_DB ?? 'reviews.db';
-  const db = new Database(dbPath);
+  let db: InstanceType<typeof Database>;
+  try {
+    db = new Database(dbPath);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(`Database open failed (${dbPath}), falling back to in-memory: ${msg}`);
+    db = new Database(':memory:');
+  }
   initDb(db);
   initSessionsDb(db);
 

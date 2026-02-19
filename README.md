@@ -1,6 +1,6 @@
-# codex-claude-bridge
+# Claude ↔ Codex Review Bridge
 
-MCP server that automates code review workflows between Claude Code and OpenAI Codex. Instead of manually copying plans and diffs between terminals, Claude Code calls MCP tools and gets structured review feedback inline.
+MCP server for automated code review. Claude Code writes, Codex reviews.
 
 ## Install
 
@@ -13,19 +13,6 @@ claude mcp add codex-bridge -- npx -y codex-claude-bridge
 - [Claude Code](https://claude.ai/claude-code) installed
 - [Codex CLI](https://github.com/openai/codex) installed and authenticated (`OPENAI_API_KEY` set)
 - Node.js 18+
-
-## How It Works
-
-```
-Before (manual):
-  Claude Code writes plan → ⌘C → paste in Codex → Codex reviews → ⌘C → paste back
-  6+ context switches per feature
-
-After (this tool):
-  Claude Code writes plan → calls review_plan → gets structured feedback inline
-  Claude Code writes code → calls review_code → gets structured findings inline
-  0 context switches
-```
 
 ## Tools
 

@@ -20,16 +20,16 @@ const PrecommitStandardsSchema = z.object({
 });
 
 const ReviewStandardsSchema = z.object({
-  plan_review: PlanReviewStandardsSchema.default(PlanReviewStandardsSchema.parse({})),
-  code_review: CodeReviewStandardsSchema.default(CodeReviewStandardsSchema.parse({})),
-  precommit: PrecommitStandardsSchema.default(PrecommitStandardsSchema.parse({})),
+  plan_review: PlanReviewStandardsSchema.default(() => PlanReviewStandardsSchema.parse({})),
+  code_review: CodeReviewStandardsSchema.default(() => CodeReviewStandardsSchema.parse({})),
+  precommit: PrecommitStandardsSchema.default(() => PrecommitStandardsSchema.parse({})),
 });
 
 export const ReviewBridgeConfigSchema = z.object({
   model: z.string().default('o4-mini'),
   reasoning_effort: z.enum(['low', 'medium', 'high']).default('medium'),
   timeout_seconds: z.number().int().positive().default(300),
-  review_standards: ReviewStandardsSchema.default(ReviewStandardsSchema.parse({})),
+  review_standards: ReviewStandardsSchema.default(() => ReviewStandardsSchema.parse({})),
   project_context: z.string().default(''),
 });
 

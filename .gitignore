@@ -4,6 +4,7 @@ CLAUDE_RULES.md
 docs/*
 !docs/handover/
 !docs/roadmap.md
+!docs/phases.md
 
 # Dependencies
 node_modules/

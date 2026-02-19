@@ -63,7 +63,7 @@ export const ReviewStatusSchema = z.object({
   elapsed_seconds: z.number(),
 });
 
-const VerdictSchema = z.enum(['approve', 'revise', 'reject', 'request_changes']);
+export const VerdictSchema = z.enum(['approve', 'revise', 'reject', 'request_changes']);
 
 export const ReviewHistoryEntrySchema = z.object({
   session_id: z.string(),
@@ -84,4 +84,5 @@ export type PlanReviewResult = z.infer<typeof PlanReviewResultSchema>;
 export type CodeReviewResult = z.infer<typeof CodeReviewResultSchema>;
 export type PrecommitResult = z.infer<typeof PrecommitResultSchema>;
 export type ReviewStatus = z.infer<typeof ReviewStatusSchema>;
+export type Verdict = z.infer<typeof VerdictSchema>;
 export type ReviewHistoryEntry = z.infer<typeof ReviewHistoryEntrySchema>;

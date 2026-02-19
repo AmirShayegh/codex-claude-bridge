@@ -124,4 +124,50 @@ describe('loadConfig', () => {
       'utf-8',
     );
   });
+
+  it('uses process.cwd() when no cwd argument is provided', () => {
+    const enoent = new Error('ENOENT');
+    (enoent as NodeJS.ErrnoException).code = 'ENOENT';
+    mockReadFileSync.mockImplementation(() => {
+      throw enoent;
+    });
+
+    const originalCwd = process.cwd;
+    process.cwd = () => '/mocked/cwd';
+    try {
+      loadConfig();
+      expect(mockReadFileSync).toHaveBeenCalledWith(
+        '/mocked/cwd/.reviewbridge.json',
+        'utf-8',
+      );
+    } finally {
+      process.cwd = originalCwd;
+    }
+  });
+
+  it('returns isolated objects on repeated ENOENT calls (no shared mutation)', () => {
+    const enoent = new Error('ENOENT');
+    (enoent as NodeJS.ErrnoException).code = 'ENOENT';
+    mockReadFileSync.mockImplementation(() => {
+      throw enoent;
+    });
+
+    const result1 = loadConfig('/some/project');
+    const result2 = loadConfig('/some/project');
+
+    expect(result1.ok).toBe(true);
+    expect(result2.ok).toBe(true);
+    if (result1.ok && result2.ok) {
+      // Mutate the first result
+      result1.data.model = 'mutated';
+      result1.data.review_standards.precommit.block_on.push('minor');
+
+      // Second result must be unaffected
+      expect(result2.data.model).toBe('o4-mini');
+      expect(result2.data.review_standards.precommit.block_on).toEqual([
+        'critical',
+        'major',
+      ]);
+    }
+  });
 });

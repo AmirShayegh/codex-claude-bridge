@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ok, err, ErrorCode } from '../utils/errors.js';
 import type { Result } from '../utils/errors.js';
-import { ReviewBridgeConfigSchema, DEFAULT_CONFIG } from './types.js';
+import { ReviewBridgeConfigSchema } from './types.js';
 import type { ReviewBridgeConfig } from './types.js';
 
 const CONFIG_FILENAME = '.reviewbridge.json';
@@ -14,8 +14,8 @@ export function loadConfig(cwd?: string): Result<ReviewBridgeConfig> {
   try {
     raw = readFileSync(configPath, 'utf-8');
   } catch (e: unknown) {
-    if (e instanceof Error && 'code' in e && (e as NodeJS.ErrnoException).code === 'ENOENT') {
-      return ok(DEFAULT_CONFIG);
+    if (e instanceof Error && 'code' in e && e.code === 'ENOENT') {
+      return ok(ReviewBridgeConfigSchema.parse({}));
     }
     const msg = e instanceof Error ? e.message : String(e);
     return err(`${ErrorCode.CONFIG_ERROR}: failed to read ${CONFIG_FILENAME}: ${msg}`);

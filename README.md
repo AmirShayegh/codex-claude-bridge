@@ -122,6 +122,16 @@ Create `.reviewbridge.json` in your project root to customize review behavior:
 
 All fields are optional. Missing fields use the defaults shown above.
 
+## Storage
+
+Set `REVIEW_BRIDGE_DB` to persist review history and session state:
+
+```bash
+export REVIEW_BRIDGE_DB=~/.codex-reviews.db
+```
+
+Defaults to `reviews.db` in the current directory. Set to `:memory:` for ephemeral storage.
+
 ## Architecture
 
 ```
@@ -141,6 +151,24 @@ src/
   storage/          → SQLite persistence (reviews, sessions)
   utils/            → Git diff, chunking, error types
 ```
+
+## Development
+
+```bash
+git clone https://github.com/AmirShayegh/codex-claude-bridge.git
+cd codex-claude-bridge
+npm install
+npm test
+npm run build
+```
+
+| Command | Description |
+|---------|-------------|
+| `npm test` | Run tests (Vitest) |
+| `npm run build` | Bundle with tsup |
+| `npm run typecheck` | Type checking |
+| `npm run lint` | ESLint |
+| `npm run format` | Prettier |
 
 ## License
 

@@ -11,10 +11,11 @@ vi.mock('../storage/reviews.js', () => ({
 
 vi.mock('../storage/sessions.js', () => ({
   getOrCreateSession: vi.fn(),
+  markSessionCompleted: vi.fn(),
 }));
 
 import { saveReview } from '../storage/reviews.js';
-import { getOrCreateSession } from '../storage/sessions.js';
+import { getOrCreateSession, markSessionCompleted } from '../storage/sessions.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type HandlerFn = (args: Record<string, unknown>, extra: unknown) => Promise<any>;
@@ -118,7 +119,12 @@ describe('registerReviewPlanTool', () => {
 describe('registerReviewPlanTool with db', () => {
   const mockDb = {};
 
-  beforeEach(() => setupHandler(mockDb));
+  beforeEach(() => {
+    vi.mocked(getOrCreateSession).mockReturnValue(ok({ session_id: 'thread_abc', status: 'in_progress' as const, created_at: '2026-01-01' }));
+    vi.mocked(markSessionCompleted).mockReturnValue(ok(undefined));
+    vi.mocked(saveReview).mockReturnValue(ok(undefined));
+    setupHandler(mockDb);
+  });
 
   it('saves review to storage on success', async () => {
     vi.mocked(mockClient.reviewPlan).mockResolvedValue(ok(validResult));
@@ -150,6 +156,38 @@ describe('registerReviewPlanTool with db', () => {
     await handler({ plan: 'My plan' }, {});
 
     expect(saveReview).not.toHaveBeenCalled();
+  });
+
+  it('marks session completed after save', async () => {
+    vi.mocked(mockClient.reviewPlan).mockResolvedValue(ok(validResult));
+
+    await handler({ plan: 'My plan' }, {});
+
+    expect(markSessionCompleted).toHaveBeenCalledWith(mockDb, 'thread_abc');
+  });
+
+  it('logs warning when getOrCreateSession fails', async () => {
+    vi.mocked(mockClient.reviewPlan).mockResolvedValue(ok(validResult));
+    vi.mocked(getOrCreateSession).mockReturnValue(err('STORAGE_ERROR: table missing'));
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await handler({ plan: 'My plan' }, {});
+
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to track session'));
+    expect(result.isError).toBeUndefined();
+    consoleSpy.mockRestore();
+  });
+
+  it('logs warning when markSessionCompleted fails', async () => {
+    vi.mocked(mockClient.reviewPlan).mockResolvedValue(ok(validResult));
+    vi.mocked(markSessionCompleted).mockReturnValue(err('STORAGE_ERROR: readonly'));
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await handler({ plan: 'My plan' }, {});
+
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to complete session'));
+    expect(result.isError).toBeUndefined();
+    consoleSpy.mockRestore();
   });
 
   it('logs warning when saveReview fails but still returns success', async () => {

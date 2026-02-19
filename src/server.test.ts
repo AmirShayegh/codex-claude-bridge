@@ -97,6 +97,17 @@ describe('createServer', () => {
     expect(initSessionsDb).toHaveBeenCalledTimes(1);
   });
 
+  it('table init failure logs warning but server still starts', () => {
+    vi.mocked(initDb).mockImplementationOnce(() => { throw new Error('SQLITE_READONLY'); });
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const server = createServer();
+
+    expect(typeof server.connect).toBe('function');
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('SQLITE_READONLY'));
+    consoleSpy.mockRestore();
+  });
+
   it('database open failure falls back to in-memory', () => {
     shouldThrow = true;
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});

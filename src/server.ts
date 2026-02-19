@@ -29,8 +29,13 @@ export function createServer(): McpServer {
     console.error(`Database open failed (${dbPath}), falling back to in-memory: ${msg}`);
     db = new Database(':memory:');
   }
-  initDb(db);
-  initSessionsDb(db);
+  try {
+    initDb(db);
+    initSessionsDb(db);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(`Database table initialization failed: ${msg}`);
+  }
 
   const server = new McpServer({ name: 'codex-claude-bridge', version: '0.1.0' });
 

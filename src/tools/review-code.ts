@@ -3,7 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import type { CodexClient } from '../codex/client.js';
 import { saveReview } from '../storage/reviews.js';
-import { getOrCreateSession } from '../storage/sessions.js';
+import { getOrCreateSession, markSessionCompleted } from '../storage/sessions.js';
 
 export function registerReviewCodeTool(server: McpServer, client: CodexClient, db?: Database.Database): void {
   server.registerTool(
@@ -24,7 +24,10 @@ export function registerReviewCodeTool(server: McpServer, client: CodexClient, d
           return { content: [{ type: 'text' as const, text: result.error }], isError: true };
         }
         if (db) {
-          getOrCreateSession(db, result.data.session_id);
+          const sessionResult = getOrCreateSession(db, result.data.session_id);
+          if (!sessionResult.ok) {
+            console.error(`Failed to track session: ${sessionResult.error}`);
+          }
           const saveResult = saveReview(db, {
             session_id: result.data.session_id,
             type: 'code',
@@ -34,6 +37,10 @@ export function registerReviewCodeTool(server: McpServer, client: CodexClient, d
           });
           if (!saveResult.ok) {
             console.error(`Failed to save review: ${saveResult.error}`);
+          }
+          const completeResult = markSessionCompleted(db, result.data.session_id);
+          if (!completeResult.ok) {
+            console.error(`Failed to complete session: ${completeResult.error}`);
           }
         }
         return { content: [{ type: 'text' as const, text: JSON.stringify(result.data) }] };

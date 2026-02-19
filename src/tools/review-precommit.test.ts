@@ -15,11 +15,12 @@ vi.mock('../storage/reviews.js', () => ({
 
 vi.mock('../storage/sessions.js', () => ({
   getOrCreateSession: vi.fn(),
+  markSessionCompleted: vi.fn(),
 }));
 
 import { getStagedDiff } from '../utils/git.js';
 import { saveReview } from '../storage/reviews.js';
-import { getOrCreateSession } from '../storage/sessions.js';
+import { getOrCreateSession, markSessionCompleted } from '../storage/sessions.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type HandlerFn = (args: Record<string, unknown>, extra: unknown) => Promise<any>;
@@ -175,7 +176,12 @@ describe('registerReviewPrecommitTool', () => {
 describe('registerReviewPrecommitTool with db', () => {
   const mockDb = {};
 
-  beforeEach(() => setupHandler(mockDb));
+  beforeEach(() => {
+    vi.mocked(getOrCreateSession).mockReturnValue(ok({ session_id: 'thread_pre', status: 'in_progress' as const, created_at: '2026-01-01' }));
+    vi.mocked(markSessionCompleted).mockReturnValue(ok(undefined));
+    vi.mocked(saveReview).mockReturnValue(ok(undefined));
+    setupHandler(mockDb);
+  });
 
   it('saves review to storage on success', async () => {
     vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
@@ -228,6 +234,41 @@ describe('registerReviewPrecommitTool with db', () => {
     await handler({}, {});
 
     expect(saveReview).not.toHaveBeenCalled();
+  });
+
+  it('marks session completed after save', async () => {
+    vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
+    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(validResult));
+
+    await handler({}, {});
+
+    expect(markSessionCompleted).toHaveBeenCalledWith(mockDb, 'thread_pre');
+  });
+
+  it('logs warning when getOrCreateSession fails', async () => {
+    vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
+    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(validResult));
+    vi.mocked(getOrCreateSession).mockReturnValue(err('STORAGE_ERROR: table missing'));
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await handler({}, {});
+
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to track session'));
+    expect(result.isError).toBeUndefined();
+    consoleSpy.mockRestore();
+  });
+
+  it('logs warning when markSessionCompleted fails', async () => {
+    vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
+    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(validResult));
+    vi.mocked(markSessionCompleted).mockReturnValue(err('STORAGE_ERROR: readonly'));
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await handler({}, {});
+
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to complete session'));
+    expect(result.isError).toBeUndefined();
+    consoleSpy.mockRestore();
   });
 
   it('logs warning when saveReview fails but still returns success', async () => {

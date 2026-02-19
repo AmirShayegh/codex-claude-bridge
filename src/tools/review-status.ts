@@ -15,7 +15,7 @@ export function registerReviewStatusTool(server: McpServer, db: Database.Databas
     async (args) => {
       try {
         const row = db
-          .prepare('SELECT session_id, status, created_at FROM sessions WHERE session_id = ?')
+          .prepare('SELECT session_id, status, created_at, completed_at FROM sessions WHERE session_id = ?')
           .get(args.session_id) as SessionInfo | undefined;
 
         if (!row) {
@@ -25,7 +25,13 @@ export function registerReviewStatusTool(server: McpServer, db: Database.Databas
         }
 
         const createdAt = new Date(row.created_at + 'Z');
-        const elapsedSeconds = Math.round((Date.now() - createdAt.getTime()) / 1000);
+        let elapsedSeconds: number;
+        if (row.completed_at) {
+          const completedAt = new Date(row.completed_at + 'Z');
+          elapsedSeconds = Math.round((completedAt.getTime() - createdAt.getTime()) / 1000);
+        } else {
+          elapsedSeconds = Math.round((Date.now() - createdAt.getTime()) / 1000);
+        }
 
         return {
           content: [{

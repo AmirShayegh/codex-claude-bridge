@@ -48,15 +48,42 @@ describe('registerReviewStatusTool', () => {
     expect(parsed.elapsed_seconds).toBeGreaterThanOrEqual(0);
   });
 
-  it('completed session returns completed status', async () => {
-    getOrCreateSession(db, 'thread_done');
-    db.prepare("UPDATE sessions SET status = 'completed' WHERE session_id = ?").run('thread_done');
+  it('completed session returns frozen elapsed_seconds', async () => {
+    // Set created_at and completed_at to known values 30 seconds apart
+    db.prepare(
+      "INSERT INTO sessions (session_id, status, created_at, completed_at) VALUES (?, 'completed', '2026-01-01 00:00:00', '2026-01-01 00:00:30')",
+    ).run('thread_frozen');
 
-    const result = await handler({ session_id: 'thread_done' }, {});
+    const result = await handler({ session_id: 'thread_frozen' }, {});
+
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.status).toBe('completed');
+    expect(parsed.elapsed_seconds).toBe(30);
+  });
+
+  it('failed session returns frozen elapsed_seconds', async () => {
+    db.prepare(
+      "INSERT INTO sessions (session_id, status, created_at, completed_at) VALUES (?, 'failed', '2026-01-01 00:00:00', '2026-01-01 00:01:00')",
+    ).run('thread_failed');
+
+    const result = await handler({ session_id: 'thread_failed' }, {});
+
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.status).toBe('failed');
+    expect(parsed.elapsed_seconds).toBe(60);
+  });
+
+  it('completed session without completed_at falls back to now', async () => {
+    // Edge case: old data before migration
+    getOrCreateSession(db, 'thread_old');
+    db.prepare("UPDATE sessions SET status = 'completed' WHERE session_id = ?").run('thread_old');
+
+    const result = await handler({ session_id: 'thread_old' }, {});
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.status).toBe('completed');
     expect(typeof parsed.elapsed_seconds).toBe('number');
+    expect(parsed.elapsed_seconds).toBeGreaterThanOrEqual(0);
   });
 
   it('storage error returns MCP error', async () => {

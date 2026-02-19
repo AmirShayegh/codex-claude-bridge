@@ -187,6 +187,24 @@ describe('registerReviewPrecommitTool with db', () => {
     });
   });
 
+  it('rejected review with blockers uses blockers for summary', async () => {
+    vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
+    const blockedResult: PrecommitResult = {
+      ready_to_commit: false,
+      blockers: ['Missing error handling', 'SQL injection risk'],
+      warnings: [],
+      session_id: 'thread_blocked',
+    };
+    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(blockedResult));
+
+    await handler({}, {});
+
+    expect(saveReview).toHaveBeenCalledWith(mockDb, expect.objectContaining({
+      verdict: 'reject',
+      summary: 'Missing error handling; SQL injection risk',
+    }));
+  });
+
   it('does not save on client error', async () => {
     vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
     vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(

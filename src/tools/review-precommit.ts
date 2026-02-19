@@ -66,7 +66,7 @@ export function registerReviewPrecommitTool(server: McpServer, client: CodexClie
             session_id: result.data.session_id,
             type: 'precommit',
             verdict: result.data.ready_to_commit ? 'approve' : 'reject',
-            summary: result.data.warnings.join('; ') || 'Clean',
+            summary: result.data.warnings.join('; ') || result.data.blockers.join('; ') || 'Clean',
             findings_json: JSON.stringify(result.data.blockers),
           });
         }

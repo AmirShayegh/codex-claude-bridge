@@ -20,7 +20,7 @@ export function registerReviewHistoryTool(server: McpServer, db: Database.Databa
           if (!result.ok) {
             return { content: [{ type: 'text' as const, text: result.error }], isError: true };
           }
-          return { content: [{ type: 'text' as const, text: JSON.stringify(result.data) }] };
+          return { content: [{ type: 'text' as const, text: JSON.stringify({ reviews: result.data }) }] };
         }
 
         const limit = args.last_n ?? 10;
@@ -28,7 +28,7 @@ export function registerReviewHistoryTool(server: McpServer, db: Database.Databa
         if (!result.ok) {
           return { content: [{ type: 'text' as const, text: result.error }], isError: true };
         }
-        return { content: [{ type: 'text' as const, text: JSON.stringify(result.data) }] };
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ reviews: result.data }) }] };
       } catch (e) {
         return {
           content: [{ type: 'text' as const, text: `Unexpected error: ${e instanceof Error ? e.message : String(e)}` }],

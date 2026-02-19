@@ -38,8 +38,8 @@ describe('registerReviewHistoryTool', () => {
 
     expect(result.isError).toBeUndefined();
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed).toHaveLength(1);
-    expect(parsed[0].summary).toBe('Good plan');
+    expect(parsed.reviews).toHaveLength(1);
+    expect(parsed.reviews[0].summary).toBe('Good plan');
   });
 
   it('returns last_n recent reviews when no session_id', async () => {
@@ -62,8 +62,8 @@ describe('registerReviewHistoryTool', () => {
 
     expect(result.isError).toBeUndefined();
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed).toHaveLength(1);
-    expect(parsed[0].summary).toBe('Second');
+    expect(parsed.reviews).toHaveLength(1);
+    expect(parsed.reviews[0].summary).toBe('Second');
   });
 
   it('defaults to last 10 reviews when neither session_id nor last_n', async () => {
@@ -81,7 +81,7 @@ describe('registerReviewHistoryTool', () => {
 
     expect(result.isError).toBeUndefined();
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed).toHaveLength(10);
+    expect(parsed.reviews).toHaveLength(10);
   });
 
   it('empty result returns empty array (not error)', async () => {
@@ -89,7 +89,7 @@ describe('registerReviewHistoryTool', () => {
 
     expect(result.isError).toBeUndefined();
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed).toEqual([]);
+    expect(parsed.reviews).toEqual([]);
   });
 
   it('storage error returns MCP error', async () => {

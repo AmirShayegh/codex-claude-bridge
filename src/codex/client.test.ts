@@ -237,7 +237,7 @@ describe('session management', () => {
     }
   });
 
-  it('returns UNKNOWN_ERROR when startThread throws (no session_id)', async () => {
+  it('returns UNKNOWN_ERROR when startThread throws unrecognized error (no session_id)', async () => {
     mockStartThread.mockImplementation(() => {
       throw new Error('Failed to spawn');
     });
@@ -249,6 +249,34 @@ describe('session management', () => {
     if (!result.ok) {
       expect(result.error).toContain('UNKNOWN_ERROR');
       expect(result.error).not.toContain('SESSION_NOT_FOUND');
+    }
+  });
+
+  it('classifies auth errors from startThread', async () => {
+    mockStartThread.mockImplementation(() => {
+      throw new Error('api_key not set');
+    });
+
+    const client = createCodexClient(config);
+    const result = await client.reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('AUTH_ERROR');
+    }
+  });
+
+  it('classifies network errors from startThread', async () => {
+    mockStartThread.mockImplementation(() => {
+      throw new Error('fetch failed');
+    });
+
+    const client = createCodexClient(config);
+    const result = await client.reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('NETWORK_ERROR');
     }
   });
 

@@ -122,9 +122,12 @@ async function runReview<T extends Record<string, unknown>>(params: {
       ? codex.resumeThread(sessionId, threadOpts(config))
       : codex.startThread(threadOpts(config));
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    const code = sessionId ? ErrorCode.SESSION_NOT_FOUND : ErrorCode.UNKNOWN_ERROR;
-    return err(`${code}: ${msg}`);
+    if (sessionId) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return err(`${ErrorCode.SESSION_NOT_FOUND}: ${msg}`);
+    }
+    const classified = classifyError(e, { model: config.model });
+    return err(`${classified.code}: ${classified.message}`);
   }
 
   const outputSchema = toJSONSchema(responseSchema);

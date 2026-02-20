@@ -54,6 +54,50 @@ function isAbortError(e: unknown): boolean {
   return false;
 }
 
+export function classifyError(
+  error: unknown,
+  context?: { model?: string },
+): { code: ErrorCode; message: string } {
+  const raw = error instanceof Error ? error.message : String(error);
+  const lower = raw.toLowerCase();
+
+  // Auth: missing or invalid API key
+  if (lower.includes('api_key') || lower.includes('authentication') || lower.includes('401')) {
+    return {
+      code: ErrorCode.AUTH_ERROR,
+      message: 'No OpenAI API key found. Set OPENAI_API_KEY or run: codex login --api-key YOUR_KEY',
+    };
+  }
+
+  // Model: unsupported or not found
+  if (lower.includes('model') && (lower.includes('not supported') || lower.includes('not found'))) {
+    const quoted = raw.match(/["']([^"']+)["']/);
+    const modelName = quoted?.[1] ?? context?.model ?? 'your configured model';
+    return {
+      code: ErrorCode.MODEL_ERROR,
+      message: `Model "${modelName}" is not supported. Try gpt-5.2-codex or configure a different model in .reviewbridge.json.`,
+    };
+  }
+
+  // Rate limit
+  if (lower.includes('429') || lower.includes('rate_limit') || lower.includes('rate limit')) {
+    return {
+      code: ErrorCode.RATE_LIMITED,
+      message: 'Rate limited by OpenAI. Wait a moment and retry.',
+    };
+  }
+
+  // Network
+  if (lower.includes('fetch failed') || lower.includes('econnrefused') || lower.includes('enotfound')) {
+    return {
+      code: ErrorCode.NETWORK_ERROR,
+      message: 'Could not reach OpenAI API. Check your internet connection.',
+    };
+  }
+
+  return { code: ErrorCode.UNKNOWN_ERROR, message: raw };
+}
+
 function threadOpts(config: ReviewBridgeConfig) {
   return {
     model: config.model,
@@ -96,8 +140,8 @@ async function runReview<T extends Record<string, unknown>>(params: {
       if (isAbortError(e)) {
         return err(`${ErrorCode.CODEX_TIMEOUT}: review timed out after ${config.timeout_seconds}s`);
       }
-      const msg = e instanceof Error ? e.message : String(e);
-      return err(`${ErrorCode.UNKNOWN_ERROR}: ${msg}`);
+      const classified = classifyError(e, { model: config.model });
+      return err(`${classified.code}: ${classified.message}`);
     }
 
     let parsed: unknown;
@@ -131,8 +175,8 @@ export function createCodexClient(config: ReviewBridgeConfig): CodexClient {
   try {
     codex = new Codex();
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    const errorMsg = `${ErrorCode.UNKNOWN_ERROR}: SDK initialization failed: ${msg}`;
+    const classified = classifyError(e);
+    const errorMsg = `${classified.code}: SDK initialization failed: ${classified.message}`;
     return {
       reviewPlan: () => Promise.resolve(err<PlanReviewResult>(errorMsg)),
       reviewCode: () => Promise.resolve(err<CodeReviewResult>(errorMsg)),

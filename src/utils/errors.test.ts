@@ -58,6 +58,10 @@ describe('ErrorCode enum', () => {
     expect(ErrorCode.CONFIG_ERROR).toBe('CONFIG_ERROR');
     expect(ErrorCode.STORAGE_ERROR).toBe('STORAGE_ERROR');
     expect(ErrorCode.SESSION_NOT_FOUND).toBe('SESSION_NOT_FOUND');
+    expect(ErrorCode.AUTH_ERROR).toBe('AUTH_ERROR');
+    expect(ErrorCode.MODEL_ERROR).toBe('MODEL_ERROR');
+    expect(ErrorCode.RATE_LIMITED).toBe('RATE_LIMITED');
+    expect(ErrorCode.NETWORK_ERROR).toBe('NETWORK_ERROR');
     expect(ErrorCode.UNKNOWN_ERROR).toBe('UNKNOWN_ERROR');
   });
 
@@ -69,8 +73,8 @@ describe('ErrorCode enum', () => {
     });
   });
 
-  it('has exactly 7 members', () => {
+  it('has exactly 11 members', () => {
     const keys = Object.keys(ErrorCode);
-    expect(keys).toHaveLength(7);
+    expect(keys).toHaveLength(11);
   });
 });

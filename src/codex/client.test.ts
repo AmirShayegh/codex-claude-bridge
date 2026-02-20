@@ -268,7 +268,7 @@ describe('session management', () => {
 
 describe('runtime errors', () => {
   it('returns UNKNOWN_ERROR when thread.run throws non-abort error', async () => {
-    mockRun.mockRejectedValue(new Error('Authentication failed'));
+    mockRun.mockRejectedValue(new Error('Something completely unexpected'));
 
     const client = createCodexClient(config);
     const result = await client.reviewPlan({ plan: 'plan' });
@@ -276,6 +276,163 @@ describe('runtime errors', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain('UNKNOWN_ERROR');
+    }
+  });
+});
+
+describe('error classification', () => {
+  it('returns AUTH_ERROR when thread.run throws with "api_key"', async () => {
+    mockRun.mockRejectedValue(new Error('Invalid api_key provided'));
+
+    const client = createCodexClient(config);
+    const result = await client.reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('AUTH_ERROR');
+      expect(result.error).toContain('Set OPENAI_API_KEY');
+    }
+  });
+
+  it('returns AUTH_ERROR when error contains "authentication"', async () => {
+    mockRun.mockRejectedValue(new Error('Authentication failed'));
+
+    const client = createCodexClient(config);
+    const result = await client.reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('AUTH_ERROR');
+    }
+  });
+
+  it('returns AUTH_ERROR when error contains "401"', async () => {
+    mockRun.mockRejectedValue(new Error('401 Unauthorized'));
+
+    const client = createCodexClient(config);
+    const result = await client.reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('AUTH_ERROR');
+    }
+  });
+
+  it('returns MODEL_ERROR with extracted model name', async () => {
+    mockRun.mockRejectedValue(new Error('The model "o9-turbo" is not supported'));
+
+    const client = createCodexClient(config);
+    const result = await client.reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('MODEL_ERROR');
+      expect(result.error).toContain('o9-turbo');
+    }
+  });
+
+  it('returns MODEL_ERROR with config model when name not in error', async () => {
+    const customConfig = { ...config, model: 'custom-model-7' };
+    mockRun.mockRejectedValue(new Error('The model is not found'));
+
+    const client = createCodexClient(customConfig);
+    const result = await client.reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('MODEL_ERROR');
+      expect(result.error).toContain('custom-model-7');
+    }
+  });
+
+  it('returns RATE_LIMITED when error contains "rate_limit"', async () => {
+    mockRun.mockRejectedValue(new Error('rate_limit exceeded'));
+
+    const client = createCodexClient(config);
+    const result = await client.reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('RATE_LIMITED');
+      expect(result.error).toContain('Wait a moment');
+    }
+  });
+
+  it('returns NETWORK_ERROR when error contains "fetch failed"', async () => {
+    mockRun.mockRejectedValue(new Error('fetch failed'));
+
+    const client = createCodexClient(config);
+    const result = await client.reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('NETWORK_ERROR');
+      expect(result.error).toContain('Check your internet connection');
+    }
+  });
+
+  it('returns NETWORK_ERROR when error contains "ECONNREFUSED"', async () => {
+    mockRun.mockRejectedValue(new Error('connect ECONNREFUSED 127.0.0.1:443'));
+
+    const client = createCodexClient(config);
+    const result = await client.reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('NETWORK_ERROR');
+    }
+  });
+
+  it('returns NETWORK_ERROR when error contains "ENOTFOUND"', async () => {
+    mockRun.mockRejectedValue(new Error('getaddrinfo ENOTFOUND api.openai.com'));
+
+    const client = createCodexClient(config);
+    const result = await client.reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('NETWORK_ERROR');
+    }
+  });
+
+  it('preserves raw message for unknown errors', async () => {
+    mockRun.mockRejectedValue(new Error('Something totally unknown'));
+
+    const client = createCodexClient(config);
+    const result = await client.reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('UNKNOWN_ERROR');
+      expect(result.error).toContain('Something totally unknown');
+    }
+  });
+});
+
+describe('constructor error classification', () => {
+  it('classifies auth errors during SDK init', async () => {
+    mockConstructorThrow = new Error('api_key not set');
+
+    const client = createCodexClient(config);
+    const result = await client.reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('AUTH_ERROR');
+      expect(result.error).toContain('SDK initialization failed');
+    }
+  });
+
+  it('classifies network errors during SDK init', async () => {
+    mockConstructorThrow = new Error('fetch failed');
+
+    const client = createCodexClient(config);
+    const result = await client.reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('NETWORK_ERROR');
+      expect(result.error).toContain('SDK initialization failed');
     }
   });
 });

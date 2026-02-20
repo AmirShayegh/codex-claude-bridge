@@ -26,7 +26,7 @@ const ReviewStandardsSchema = z.object({
 });
 
 export const ReviewBridgeConfigSchema = z.object({
-  model: z.string().default('o4-mini'),
+  model: z.string().default('gpt-5.2-codex'),
   reasoning_effort: z.enum(['low', 'medium', 'high']).default('medium'),
   timeout_seconds: z.number().int().positive().default(300),
   review_standards: ReviewStandardsSchema.default(() => ReviewStandardsSchema.parse({})),

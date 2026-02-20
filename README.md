@@ -105,7 +105,7 @@ Create `.reviewbridge.json` in your project root to customize review behavior:
 
 ```json
 {
-  "model": "o4-mini",
+  "model": "gpt-5.2-codex",
   "reasoning_effort": "medium",
   "timeout_seconds": 300,
   "review_standards": {

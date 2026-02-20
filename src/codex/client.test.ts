@@ -49,13 +49,13 @@ const config: ReviewBridgeConfig = { ...DEFAULT_CONFIG };
 const validPlanResponse = {
   verdict: 'approve',
   summary: 'Plan looks solid',
-  findings: [{ severity: 'minor', category: 'style', description: 'Consider renaming' }],
+  findings: [{ severity: 'minor', category: 'style', description: 'Consider renaming', file: null, line: null, suggestion: null }],
 };
 
 const validCodeResponse = {
   verdict: 'request_changes',
   summary: 'Issues found',
-  findings: [{ severity: 'critical', category: 'bug', description: 'Null pointer' }],
+  findings: [{ severity: 'critical', category: 'bug', description: 'Null pointer', file: null, line: null, suggestion: null }],
 };
 
 const validPrecommitResponse = {

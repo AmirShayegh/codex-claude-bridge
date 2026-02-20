@@ -56,6 +56,9 @@ describe('PlanFindingSchema', () => {
     severity: 'suggestion',
     category: 'architecture',
     description: 'Consider using a factory pattern here',
+    file: null,
+    line: null,
+    suggestion: null,
   };
 
   it('parses a valid plan finding', () => {
@@ -83,13 +86,13 @@ describe('PlanFindingSchema', () => {
     }
   });
 
-  it('allows omitting optional fields', () => {
+  it('accepts null for nullable fields', () => {
     const result = PlanFindingSchema.safeParse(validPlanFinding);
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.file).toBeUndefined();
-      expect(result.data.line).toBeUndefined();
-      expect(result.data.suggestion).toBeUndefined();
+      expect(result.data.file).toBeNull();
+      expect(result.data.line).toBeNull();
+      expect(result.data.suggestion).toBeNull();
     }
   });
 
@@ -104,6 +107,9 @@ describe('CodeFindingSchema', () => {
     severity: 'nitpick',
     category: 'style',
     description: 'Prefer const over let',
+    file: null,
+    line: null,
+    suggestion: null,
   };
 
   it('parses a valid code finding', () => {
@@ -155,7 +161,7 @@ describe('ReviewFindingSchema', () => {
   });
 
   it('accepts both suggestion and nitpick severities', () => {
-    const base = { category: 'test', description: 'test' };
+    const base = { category: 'test', description: 'test', file: null, line: null, suggestion: null };
     expect(ReviewFindingSchema.safeParse({ ...base, severity: 'suggestion' }).success).toBe(true);
     expect(ReviewFindingSchema.safeParse({ ...base, severity: 'nitpick' }).success).toBe(true);
   });
@@ -165,7 +171,9 @@ describe('ReviewFindingSchema', () => {
       severity: 'minor',
       category: 'test',
       description: 'test',
+      file: null,
       line: -1,
+      suggestion: null,
     });
     expect(result.success).toBe(false);
   });
@@ -175,7 +183,9 @@ describe('ReviewFindingSchema', () => {
       severity: 'minor',
       category: 'test',
       description: 'test',
+      file: null,
       line: 3.5,
+      suggestion: null,
     });
     expect(result.success).toBe(false);
   });
@@ -186,7 +196,7 @@ describe('PlanReviewResultSchema', () => {
     verdict: 'approve',
     summary: 'Plan looks solid',
     findings: [
-      { severity: 'minor', category: 'style', description: 'Consider renaming' },
+      { severity: 'minor', category: 'style', description: 'Consider renaming', file: null, line: null, suggestion: null },
     ],
     session_id: 'sess_abc123',
   };
@@ -227,7 +237,7 @@ describe('CodeReviewResultSchema', () => {
     verdict: 'request_changes',
     summary: 'Several issues found',
     findings: [
-      { severity: 'critical', category: 'bug', description: 'Null pointer dereference' },
+      { severity: 'critical', category: 'bug', description: 'Null pointer dereference', file: null, line: null, suggestion: null },
     ],
     session_id: 'sess_def456',
   };

@@ -15,9 +15,9 @@ export const FindingSeveritySchema = z.enum([
 const BaseFindingFields = {
   category: z.string(),
   description: z.string(),
-  file: z.string().optional(),
-  line: z.number().int().positive().optional(),
-  suggestion: z.string().optional(),
+  file: z.string().nullable(),
+  line: z.number().int().positive().nullable(),
+  suggestion: z.string().nullable(),
 };
 
 export const PlanFindingSchema = z.object({

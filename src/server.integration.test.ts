@@ -45,13 +45,13 @@ import { getStagedDiff } from './utils/git.js';
 const validPlanResponse = {
   verdict: 'approve',
   summary: 'Plan looks solid',
-  findings: [{ severity: 'minor', category: 'style', description: 'Consider renaming' }],
+  findings: [{ severity: 'minor', category: 'style', description: 'Consider renaming', file: null, line: null, suggestion: null }],
 };
 
 const validCodeResponse = {
   verdict: 'request_changes',
   summary: 'Issues found',
-  findings: [{ severity: 'critical', category: 'bug', description: 'Null pointer', file: 'src/foo.ts', line: 42 }],
+  findings: [{ severity: 'critical', category: 'bug', description: 'Null pointer', file: 'src/foo.ts', line: 42, suggestion: null }],
 };
 
 const validPrecommitResponse = {

@@ -29,7 +29,7 @@ let handler: HandlerFn;
 const validResult: PlanReviewResult = {
   verdict: 'approve',
   summary: 'Plan looks solid',
-  findings: [{ severity: 'minor', category: 'style', description: 'Consider renaming' }],
+  findings: [{ severity: 'minor', category: 'style', description: 'Consider renaming', file: null, line: null, suggestion: null }],
   session_id: 'thread_abc',
 };
 

@@ -8,7 +8,7 @@ describe('ReviewBridgeConfigSchema', () => {
     expect(result.success).toBe(true);
     if (result.success) {
       const config: ReviewBridgeConfig = result.data;
-      expect(config.model).toBe('o4-mini');
+      expect(config.model).toBe('gpt-5.2-codex');
       expect(config.reasoning_effort).toBe('medium');
       expect(config.timeout_seconds).toBe(300);
       expect(config.project_context).toBe('');
@@ -144,7 +144,7 @@ describe('ReviewBridgeConfigSchema', () => {
 
 describe('DEFAULT_CONFIG', () => {
   it('has all expected default values', () => {
-    expect(DEFAULT_CONFIG.model).toBe('o4-mini');
+    expect(DEFAULT_CONFIG.model).toBe('gpt-5.2-codex');
     expect(DEFAULT_CONFIG.reasoning_effort).toBe('medium');
     expect(DEFAULT_CONFIG.timeout_seconds).toBe(300);
     expect(DEFAULT_CONFIG.project_context).toBe('');

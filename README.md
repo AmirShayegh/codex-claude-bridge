@@ -2,25 +2,36 @@
 
 MCP server for automated code review. Claude Code writes the code, [OpenAI Codex](https://developers.openai.com/codex) reviews it — structured feedback comes back inline, no copy-pasting between tools.
 
-## Setup
+**Works with your ChatGPT subscription — no API costs.**
 
-1. **Install Node.js 18+** — download from [nodejs.org](https://nodejs.org/)
+## Quick Start
 
-2. **Install Claude Code** — follow the guide at [code.claude.com](https://code.claude.com/docs/en/overview)
+### Free (ChatGPT subscription)
 
-3. **Get an OpenAI API key** — create one at [platform.openai.com/api-keys](https://platform.openai.com/api-keys), then set it in your terminal:
+```bash
+npm install -g @openai/codex        # install the Codex CLI
+codex login                          # sign in with your ChatGPT account
+claude mcp add codex-bridge -- npx -y codex-claude-bridge
+```
 
-   ```bash
-   export OPENAI_API_KEY=your-key-here
-   ```
+### API key (pay per token)
 
-4. **Add the bridge to Claude Code:**
+```bash
+export OPENAI_API_KEY=sk-...
+claude mcp add codex-bridge -- npx -y codex-claude-bridge
+```
 
-   ```bash
-   claude mcp add codex-bridge -- npx -y codex-claude-bridge
-   ```
+Restart Claude Code after setup. The review tools are now available.
 
-5. **Restart Claude Code** — the review tools are now available.
+### How auth works
+
+The SDK reads OAuth tokens from `~/.codex/auth.json` (created by `codex login`). When no `OPENAI_API_KEY` is set, it uses your ChatGPT subscription automatically. Both auth paths use identical code — no configuration changes needed.
+
+### Prerequisites
+
+- **Node.js 18+** — [nodejs.org](https://nodejs.org/)
+- **Claude Code** — [code.claude.com](https://code.claude.com/docs/en/overview)
+- **Codex CLI** (free path only) — installed via `npm install -g @openai/codex`
 
 ## What You Get
 
@@ -33,6 +44,24 @@ Once set up, Claude Code gains five new tools:
 - **`review_history`** — Look up past reviews by session or count.
 
 All tools return structured JSON that Claude Code can act on directly.
+
+## Usage
+
+In Claude Code, just describe what you want reviewed. Claude Code will pick the right tool:
+
+**Plan review:**
+> "Review this implementation plan before I start coding."
+> "Check my plan for security issues and scalability risks."
+
+**Code review:**
+> "Review the changes I just made." (Claude Code runs `git diff` and passes it)
+> "Review this diff for bugs and security issues."
+
+**Pre-commit check:**
+> "Run a pre-commit check on my staged changes."
+> "Check if these changes are safe to commit."
+
+**Session continuity** — pass the `session_id` from a plan review into a code review to maintain context across the full review lifecycle.
 
 ## Tools Reference
 
@@ -129,6 +158,8 @@ Create `.reviewbridge.json` in your project root to customize review behavior:
 
 All fields are optional. Missing fields use the defaults shown above.
 
+**Model options:** The default is `gpt-5.2-codex`. You can also use `gpt-5.3-codex` or other models supported by your account.
+
 ## Storage
 
 Set `REVIEW_BRIDGE_DB` to persist review history and session state:
@@ -139,6 +170,16 @@ export REVIEW_BRIDGE_DB=~/.codex-reviews.db
 
 Defaults to `reviews.db` in the current directory. Set to `:memory:` for ephemeral storage.
 
+## Troubleshooting
+
+| Error | Fix |
+|-------|-----|
+| `AUTH_ERROR: No OpenAI API key found` | Run `codex login` to authenticate, or set `OPENAI_API_KEY`. Check that `~/.codex/auth.json` exists. |
+| `MODEL_ERROR: Model "X" is not supported` | Try `gpt-5.2-codex` or `gpt-5.3-codex`. Set `"model"` in `.reviewbridge.json`. |
+| `NETWORK_ERROR: Could not reach OpenAI API` | Check your internet connection. |
+| `RATE_LIMITED: Rate limited by OpenAI` | Wait a moment and retry. |
+| `CODEX_TIMEOUT: review timed out` | Increase `"timeout_seconds"` in `.reviewbridge.json` (default: 300). |
+
 ## Architecture
 
 ```
@@ -147,6 +188,8 @@ Claude Code ──MCP──► codex-claude-bridge ──SDK──► OpenAI Cod
                         SQLite DB
                      (review history)
 ```
+
+The SDK (`@openai/codex-sdk`) internally spawns `codex exec` as a subprocess — there is no separate "CLI mode." Both ChatGPT subscription auth and API key auth use the same SDK path.
 
 ```
 src/

@@ -1,6 +1,6 @@
 {
   "name": "codex-claude-bridge",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "MCP server that automates code review workflows between Claude Code and OpenAI Codex",
   "type": "module",
   "main": "./dist/index.js",
@@ -46,6 +46,8 @@
     "@modelcontextprotocol/sdk": "^1.26.0",
     "@openai/codex-sdk": "^0.104.0",
     "better-sqlite3": "^12.6.2",
+    "commander": "^13.1.0",
+    "picocolors": "^1.1.1",
     "zod": "^4.3.6"
   },
   "devDependencies": {

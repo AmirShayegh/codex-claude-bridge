@@ -8,16 +8,30 @@ MCP server for automated code review. Claude Code writes the code, [OpenAI Codex
 
 ### Free (ChatGPT subscription)
 
+Install the Codex CLI and sign in with your ChatGPT account:
+
 ```bash
-npm install -g @openai/codex        # install the Codex CLI
-codex login                          # sign in with your ChatGPT account
+npm install -g @openai/codex
+codex login
+```
+
+Then add the MCP server to Claude Code:
+
+```bash
 claude mcp add codex-bridge -- npx -y codex-claude-bridge
 ```
 
 ### API key (pay per token)
 
+Set your API key:
+
 ```bash
 export OPENAI_API_KEY=sk-...
+```
+
+Then add the MCP server to Claude Code:
+
+```bash
 claude mcp add codex-bridge -- npx -y codex-claude-bridge
 ```
 
@@ -25,7 +39,7 @@ Restart Claude Code after setup. The review tools are now available.
 
 ### How auth works
 
-The SDK reads OAuth tokens from `~/.codex/auth.json` (created by `codex login`). When no `OPENAI_API_KEY` is set, it uses your ChatGPT subscription automatically. Both auth paths use identical code — no configuration changes needed.
+The SDK reads OAuth tokens from `~/.codex/auth.json` (created by `codex login`). When no `OPENAI_API_KEY` is set, it uses your ChatGPT subscription automatically.
 
 ### Prerequisites
 

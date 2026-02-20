@@ -11,91 +11,248 @@ function makeDelimiter(tag: string, content: string): { open: string; close: str
   return { open, close };
 }
 
-export function buildPlanReviewPrompt(params: {
-  plan: string;
-  context?: string;
-  focus?: string[];
-  depth?: 'quick' | 'thorough';
-}): string {
+// --- Shared prompt fragments ---
+
+const PLAN_SEVERITY_RUBRIC =
+  'Severity definitions (use exactly these values):\n' +
+  '- critical: Will cause bugs, data loss, security vulnerabilities, or crashes in production\n' +
+  '- major: Significant issues that should be fixed before merge — incorrect logic, missing error handling, performance problems\n' +
+  '- minor: Improvements worth making but not blocking — naming, minor refactors, test gaps\n' +
+  '- suggestion: Style preferences, optional improvements';
+
+const CODE_SEVERITY_RUBRIC =
+  'Severity definitions (use exactly these values):\n' +
+  '- critical: Will cause bugs, data loss, security vulnerabilities, or crashes in production\n' +
+  '- major: Significant issues that should be fixed before merge — incorrect logic, missing error handling, performance problems\n' +
+  '- minor: Improvements worth making but not blocking — naming, minor refactors, test gaps\n' +
+  '- nitpick: Style preferences, optional improvements';
+
+const BASE_OUTPUT_RULES =
+  'Output rules:\n' +
+  '- Respond ONLY with valid JSON — no markdown fencing, no explanation outside the JSON object\n' +
+  '- Summary must be 1-2 sentences max\n' +
+  '- If nothing is wrong, return an empty findings array — do not invent issues\n' +
+  '- Do not pad with praise — be direct\n' +
+  '- Suggestions must be concrete — show the fix, not "consider improving"';
+
+const CODE_OUTPUT_RULES =
+  BASE_OUTPUT_RULES +
+  '\n- Every finding MUST include "file" and "line" referencing the diff' +
+  '\n- Do not comment on unchanged code — only review what was added or modified';
+
+const PRECOMMIT_OUTPUT_RULES =
+  'Output rules:\n' +
+  '- Respond ONLY with valid JSON — no markdown fencing, no explanation outside the JSON object\n' +
+  '- If nothing is wrong, return empty arrays for both blockers and warnings\n' +
+  '- Be specific — name the file and describe the exact issue\n' +
+  '- Do not invent issues — only flag real problems in the diff';
+
+// --- Config interfaces ---
+
+export interface PlanReviewConfig {
+  project_context: string;
+  focus: string[];
+  depth: 'quick' | 'thorough';
+}
+
+export interface CodeReviewConfig {
+  project_context: string;
+  criteria: string[];
+  require_tests: boolean;
+}
+
+export interface PrecommitConfig {
+  project_context: string;
+  block_on: string[];
+}
+
+// --- Prompt builders ---
+
+export function buildPlanReviewPrompt(
+  input: {
+    plan: string;
+    context?: string;
+    focus?: string[];
+    depth?: 'quick' | 'thorough';
+  },
+  config?: PlanReviewConfig,
+): string {
   const sections: string[] = [
-    'You are a code review expert. Review the following implementation plan.',
+    'You are a senior software architect reviewing an implementation plan. Your job is to identify flaws, risks, and gaps before any code is written.',
   ];
 
-  if (params.context) {
-    sections.push(`Project context: ${params.context}`);
+  if (config?.project_context) {
+    sections.push(`Project background: ${config.project_context}`);
   }
 
-  if (params.focus && params.focus.length > 0) {
-    sections.push(`Focus areas: ${params.focus.join(', ')}`);
+  if (input.context) {
+    sections.push(`Additional context: ${input.context}`);
   }
 
-  if (params.depth) {
-    sections.push(`Review depth: ${params.depth}`);
+  // Focus: user input overrides config entirely
+  const focus = input.focus && input.focus.length > 0 ? input.focus : config?.focus;
+  if (focus && focus.length > 0) {
+    sections.push(`Focus your review on: ${focus.join(', ')}`);
   }
 
-  const d = makeDelimiter('PLAN', params.plan);
-  sections.push(`\n${d.open}\n${params.plan}\n${d.close}`);
+  // Depth: user input overrides config
+  const depth = input.depth ?? config?.depth;
+  if (depth === 'quick') {
+    sections.push('Review depth: quick scan — focus on critical and major issues only.');
+  } else if (depth === 'thorough') {
+    sections.push('Review depth: thorough — examine all aspects in detail.');
+  }
+
+  sections.push(PLAN_SEVERITY_RUBRIC);
 
   sections.push(
-    '\nRespond with JSON containing:' +
-      '\n- "verdict": "approve", "revise", or "reject"' +
-      '\n- "summary": a brief summary of your review' +
-      '\n- "findings": an array of objects, each with "severity" (critical/major/minor/suggestion), "category", "description", and optionally "file", "line", "suggestion"',
+    'Review checklist:\n' +
+      '- Feasibility: Can this plan actually be implemented as described?\n' +
+      '- Edge cases: Are there missing edge cases or error scenarios?\n' +
+      '- Scalability: Will this approach scale with usage?\n' +
+      '- Dependencies: Are there risky or missing dependency assumptions?\n' +
+      '- Security: Are there security implications not addressed?\n' +
+      '- Overengineering: Is any part unnecessarily complex for the stated goal?',
+  );
+
+  const d = makeDelimiter('PLAN', input.plan);
+  sections.push(`${d.open}\n${input.plan}\n${d.close}`);
+
+  sections.push(
+    'Respond with a JSON object:\n' +
+      '{\n' +
+      '  "verdict": "approve" | "revise" | "reject",\n' +
+      '  "summary": "string",\n' +
+      '  "findings": [{\n' +
+      '    "severity": "critical" | "major" | "minor" | "suggestion",\n' +
+      '    "category": "string",\n' +
+      '    "description": "string",\n' +
+      '    "file": "string or null",\n' +
+      '    "line": "number or null",\n' +
+      '    "suggestion": "string or null"\n' +
+      '  }]\n' +
+      '}\n\n' +
+      BASE_OUTPUT_RULES,
   );
 
   return sections.join('\n\n');
 }
 
-export function buildCodeReviewPrompt(params: {
-  diff: string;
-  context?: string;
-  criteria?: string[];
-}): string {
+export function buildCodeReviewPrompt(
+  input: {
+    diff: string;
+    context?: string;
+    criteria?: string[];
+  },
+  config?: CodeReviewConfig,
+): string {
   const sections: string[] = [
-    'You are a code review expert. Review the following code changes.',
+    'You are a senior software engineer performing a code review. Your job is to identify bugs, security issues, and quality problems in the changes.',
   ];
 
-  if (params.context) {
-    sections.push(`Context: ${params.context}`);
+  if (config?.project_context) {
+    sections.push(`Project background: ${config.project_context}`);
   }
 
-  if (params.criteria && params.criteria.length > 0) {
-    sections.push(`Review criteria: ${params.criteria.join(', ')}`);
+  if (input.context) {
+    sections.push(`Change context: ${input.context}`);
   }
 
-  const d = makeDelimiter('DIFF', params.diff);
-  sections.push(`\n${d.open}\n${params.diff}\n${d.close}`);
+  // Criteria: user input overrides config entirely
+  const criteria = input.criteria && input.criteria.length > 0 ? input.criteria : config?.criteria;
+  if (criteria && criteria.length > 0) {
+    sections.push(`Review criteria: ${criteria.join(', ')}`);
+  }
+
+  sections.push(CODE_SEVERITY_RUBRIC);
+
+  // The checklist is always included as a safety net, even when criteria narrows the
+  // review focus. criteria tells the model what to prioritize; the checklist ensures
+  // critical issues (e.g. injection vulnerabilities) aren't missed just because the
+  // user asked for a "performance" review.
+  const requireTests = config?.require_tests ?? false;
+  let checklist =
+    'Review checklist:\n' +
+    '- Null safety: Potential null/undefined access errors?\n' +
+    '- Error handling: Are errors caught and handled appropriately?\n' +
+    '- Injection vulnerabilities: SQL injection, XSS, command injection, path traversal?\n' +
+    '- Race conditions: Concurrent access issues?\n' +
+    '- Edge cases: Missing boundary checks, empty inputs, overflow?\n' +
+    '- API contracts: Do function signatures and return types match usage?';
+  if (requireTests) {
+    checklist += '\n- Test coverage: Are new code paths tested?';
+  }
+  sections.push(checklist);
+
+  const d = makeDelimiter('DIFF', input.diff);
+  sections.push(`${d.open}\n${input.diff}\n${d.close}`);
 
   sections.push(
-    '\nRespond with JSON containing:' +
-      '\n- "verdict": "approve", "request_changes", or "reject"' +
-      '\n- "summary": a brief summary of your review' +
-      '\n- "findings": an array of objects, each with "severity" (critical/major/minor/nitpick), "category", "description", and optionally "file", "line", "suggestion"',
+    'Respond with a JSON object:\n' +
+      '{\n' +
+      '  "verdict": "approve" | "request_changes" | "reject",\n' +
+      '  "summary": "string",\n' +
+      '  "findings": [{\n' +
+      '    "severity": "critical" | "major" | "minor" | "nitpick",\n' +
+      '    "category": "string",\n' +
+      '    "description": "string",\n' +
+      '    "file": "string or null",\n' +
+      '    "line": "number or null",\n' +
+      '    "suggestion": "string or null"\n' +
+      '  }]\n' +
+      '}\n\n' +
+      CODE_OUTPUT_RULES,
   );
 
   return sections.join('\n\n');
 }
 
-export function buildPrecommitPrompt(params: {
-  diff: string;
-  checklist?: string[];
-}): string {
+export function buildPrecommitPrompt(
+  input: {
+    diff: string;
+    checklist?: string[];
+  },
+  config?: PrecommitConfig,
+): string {
   const sections: string[] = [
-    'You are a pre-commit reviewer. Check the following staged changes for issues that should block a commit.',
+    'You are performing a final pre-commit check on staged changes. Your job is to catch obvious problems that should not be committed.',
   ];
 
-  if (params.checklist && params.checklist.length > 0) {
-    sections.push(`Checklist:\n${params.checklist.map((item) => `- ${item}`).join('\n')}`);
+  if (config?.project_context) {
+    sections.push(`Project background: ${config.project_context}`);
   }
 
-  const d = makeDelimiter('DIFF', params.diff);
-  sections.push(`\n${d.open}\n${params.diff}\n${d.close}`);
+  if (input.checklist && input.checklist.length > 0) {
+    sections.push(`Custom checks:\n${input.checklist.map((item) => `- ${item}`).join('\n')}`);
+  }
 
   sections.push(
-    '\nRespond with JSON containing:' +
-      '\n- "ready_to_commit": boolean indicating if changes are safe to commit' +
-      '\n- "blockers": array of strings describing issues that must be fixed' +
-      '\n- "warnings": array of strings describing non-blocking concerns',
+    'Pre-commit checklist:\n' +
+      '- Debug code: console.log, debugger statements, TODO/FIXME left behind\n' +
+      '- Hardcoded secrets: API keys, passwords, tokens in source code\n' +
+      '- Broken imports: Missing or incorrect import paths\n' +
+      '- Syntax errors: Obvious syntax problems\n' +
+      '- Committed secrets: .env files, credential files that should not be tracked',
+  );
+
+  const blockOn = config?.block_on;
+  if (blockOn && blockOn.length > 0) {
+    sections.push(
+      `Severity threshold: Issues that would be ${blockOn.join(' or ')} severity belong in "blockers". Lesser issues belong in "warnings".`,
+    );
+  }
+
+  const d = makeDelimiter('DIFF', input.diff);
+  sections.push(`${d.open}\n${input.diff}\n${d.close}`);
+
+  sections.push(
+    'Respond with a JSON object:\n' +
+      '{\n' +
+      '  "ready_to_commit": true | false,\n' +
+      '  "blockers": ["string — issues that must be fixed before committing"],\n' +
+      '  "warnings": ["string — non-blocking concerns"]\n' +
+      '}\n\n' +
+      PRECOMMIT_OUTPUT_RULES,
   );
 
   return sections.join('\n\n');

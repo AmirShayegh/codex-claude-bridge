@@ -301,6 +301,110 @@ describe('config passthrough', () => {
   });
 });
 
+describe('config flows to prompts', () => {
+  const configWithContext: ReviewBridgeConfig = {
+    ...DEFAULT_CONFIG,
+    project_context: 'Fintech app, PCI-DSS required',
+    review_standards: {
+      ...DEFAULT_CONFIG.review_standards,
+      plan_review: {
+        focus: ['security', 'compliance'],
+        depth: 'thorough' as const,
+      },
+      code_review: {
+        criteria: ['security', 'performance'],
+        require_tests: true,
+        max_file_size: 500,
+      },
+      precommit: {
+        auto_diff: true,
+        block_on: ['critical', 'major'] as Array<'critical' | 'major' | 'minor' | 'suggestion' | 'nitpick'>,
+      },
+    },
+  };
+
+  it('reviewPlan prompt includes project_context from config', async () => {
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
+
+    const client = createCodexClient(configWithContext);
+    await client.reviewPlan({ plan: 'My plan' });
+
+    const prompt = mockRun.mock.calls[0][0] as string;
+    expect(prompt).toContain('Fintech app, PCI-DSS required');
+  });
+
+  it('reviewPlan prompt uses config focus as fallback', async () => {
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
+
+    const client = createCodexClient(configWithContext);
+    await client.reviewPlan({ plan: 'My plan' });
+
+    const prompt = mockRun.mock.calls[0][0] as string;
+    expect(prompt).toContain('security');
+    expect(prompt).toContain('compliance');
+  });
+
+  it('reviewCode prompt includes project_context from config', async () => {
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validCodeResponse) });
+
+    const client = createCodexClient(configWithContext);
+    await client.reviewCode({ diff: 'some diff' });
+
+    const prompt = mockRun.mock.calls[0][0] as string;
+    expect(prompt).toContain('Fintech app, PCI-DSS required');
+  });
+
+  it('reviewCode prompt includes test coverage when require_tests is true', async () => {
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validCodeResponse) });
+
+    const client = createCodexClient(configWithContext);
+    await client.reviewCode({ diff: 'some diff' });
+
+    const prompt = mockRun.mock.calls[0][0] as string;
+    expect(prompt).toContain('Test coverage');
+  });
+
+  it('reviewPrecommit prompt includes project_context from config', async () => {
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPrecommitResponse) });
+
+    const client = createCodexClient(configWithContext);
+    await client.reviewPrecommit({ diff: 'staged diff' });
+
+    const prompt = mockRun.mock.calls[0][0] as string;
+    expect(prompt).toContain('Fintech app, PCI-DSS required');
+  });
+
+  it('reviewPrecommit prompt includes block_on severity threshold', async () => {
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPrecommitResponse) });
+
+    const client = createCodexClient(configWithContext);
+    await client.reviewPrecommit({ diff: 'staged diff' });
+
+    const prompt = mockRun.mock.calls[0][0] as string;
+    expect(prompt).toContain('critical or major');
+  });
+
+  it('reviewPlan prompt uses severity rubric', async () => {
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
+
+    const client = createCodexClient(config);
+    await client.reviewPlan({ plan: 'My plan' });
+
+    const prompt = mockRun.mock.calls[0][0] as string;
+    expect(prompt).toContain('Severity definitions');
+  });
+
+  it('reviewCode prompt uses severity rubric', async () => {
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validCodeResponse) });
+
+    const client = createCodexClient(config);
+    await client.reviewCode({ diff: 'some diff' });
+
+    const prompt = mockRun.mock.calls[0][0] as string;
+    expect(prompt).toContain('Severity definitions');
+  });
+});
+
 describe('constructor failure', () => {
   it('returns UNKNOWN_ERROR from all methods when SDK constructor throws', async () => {
     mockConstructorThrow = new Error('Missing binary');

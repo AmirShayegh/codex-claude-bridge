@@ -142,7 +142,11 @@ export function createCodexClient(config: ReviewBridgeConfig): CodexClient {
 
   return {
     reviewPlan(input) {
-      const prompt = buildPlanReviewPrompt(input);
+      const prompt = buildPlanReviewPrompt(input, {
+        project_context: config.project_context,
+        focus: config.review_standards.plan_review.focus,
+        depth: config.review_standards.plan_review.depth,
+      });
       return runReview<Omit<PlanReviewResult, 'session_id'>>({
         codex,
         config,
@@ -153,7 +157,11 @@ export function createCodexClient(config: ReviewBridgeConfig): CodexClient {
     },
 
     reviewCode(input) {
-      const prompt = buildCodeReviewPrompt(input);
+      const prompt = buildCodeReviewPrompt(input, {
+        project_context: config.project_context,
+        criteria: config.review_standards.code_review.criteria,
+        require_tests: config.review_standards.code_review.require_tests,
+      });
       return runReview<Omit<CodeReviewResult, 'session_id'>>({
         codex,
         config,
@@ -164,7 +172,10 @@ export function createCodexClient(config: ReviewBridgeConfig): CodexClient {
     },
 
     reviewPrecommit(input) {
-      const prompt = buildPrecommitPrompt(input);
+      const prompt = buildPrecommitPrompt(input, {
+        project_context: config.project_context,
+        block_on: config.review_standards.precommit.block_on,
+      });
       return runReview<Omit<PrecommitResult, 'session_id'>>({
         codex,
         config,

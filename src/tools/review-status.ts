@@ -7,7 +7,9 @@ export function registerReviewStatusTool(server: McpServer, db: Database.Databas
   server.registerTool(
     'review_status',
     {
-      description: 'Check status of an in-progress review',
+      description:
+        'Check whether a review session is still running, completed, or failed. ' +
+        'Use this if a review call timed out or you need to verify session state.',
       inputSchema: {
         session_id: z.string().describe('Session ID to check status of'),
       },

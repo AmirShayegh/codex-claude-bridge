@@ -9,7 +9,10 @@ export function registerReviewPrecommitTool(server: McpServer, client: CodexClie
   server.registerTool(
     'review_precommit',
     {
-      description: 'Quick pre-commit sanity check. Auto-captures staged git changes by default.',
+      description:
+        'Final sanity check right before committing. Auto-captures staged git changes. ' +
+        'Call this after git add and before git commit to catch last-minute issues. ' +
+        'Returns ready_to_commit (boolean), blockers that must be fixed, and warnings.',
       inputSchema: {
         auto_diff: z.boolean().optional().default(true).describe('Auto-capture staged git changes'),
         diff: z.string().optional().describe('Explicit diff to review instead of auto-capture'),

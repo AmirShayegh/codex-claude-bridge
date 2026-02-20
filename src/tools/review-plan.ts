@@ -8,7 +8,11 @@ export function registerReviewPlanTool(server: McpServer, client: CodexClient, d
   server.registerTool(
     'review_plan',
     {
-      description: 'Send an implementation plan to Codex for architectural/feasibility review',
+      description:
+        'Get an independent code review of your implementation plan before writing code. ' +
+        'Call this after drafting a plan and before implementing it. ' +
+        'Returns a verdict (approve/revise/reject), findings with severity and suggestions, and a session_id. ' +
+        'Pass the returned session_id to review_code later so the reviewer has full context.',
       inputSchema: {
         plan: z.string().describe('The implementation plan to review'),
         context: z.string().optional().describe('Project context and constraints'),

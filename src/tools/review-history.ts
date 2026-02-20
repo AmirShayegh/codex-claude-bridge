@@ -7,7 +7,9 @@ export function registerReviewHistoryTool(server: McpServer, db: Database.Databa
   server.registerTool(
     'review_history',
     {
-      description: 'Query past reviews by session or count',
+      description:
+        'Look up past review results. Query by session_id to see all reviews in a session, ' +
+        'or use last_n to get recent reviews. Useful for checking what was already reviewed.',
       inputSchema: {
         session_id: z.string().optional().describe('Specific session to query'),
         last_n: z.number().int().positive().optional().describe('Return last N reviews'),

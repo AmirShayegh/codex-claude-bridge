@@ -8,7 +8,11 @@ export function registerReviewCodeTool(server: McpServer, client: CodexClient, d
   server.registerTool(
     'review_code',
     {
-      description: 'Send code changes (diff) to Codex for code review',
+      description:
+        'Get an independent code review of your changes before committing. ' +
+        'Call this after writing or modifying code. Pass a git diff as input. ' +
+        'If you reviewed a plan first, pass the same session_id so the reviewer checks the code against the plan. ' +
+        'Returns a verdict (approve/request_changes/reject) and findings with file, line, severity, and suggestions.',
       inputSchema: {
         diff: z.string().describe('Git diff to review'),
         context: z.string().optional().describe('Intent of the changes'),

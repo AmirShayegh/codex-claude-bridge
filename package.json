@@ -1,7 +1,7 @@
 {
   "name": "codex-claude-bridge",
   "version": "0.1.2",
-  "description": "MCP server that automates code review workflows between Claude Code and OpenAI Codex",
+  "description": "Automated code review powered by OpenAI Codex. CLI + Claude Code MCP integration.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -27,7 +27,11 @@
     "codex",
     "code-review",
     "openai",
-    "anthropic"
+    "anthropic",
+    "cli",
+    "precommit",
+    "ai-code-review",
+    "developer-tools"
   ],
   "author": "Amir Shayegh",
   "license": "MIT",

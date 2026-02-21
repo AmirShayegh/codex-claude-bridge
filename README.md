@@ -14,7 +14,7 @@ Stage some changes and run:
 npx -y codex-claude-bridge review-precommit
 ```
 
-Requires the [Codex CLI](https://developers.openai.com/codex) to be installed and authenticated (`codex login` or `OPENAI_API_KEY`). See [Setup](#setup).
+Before running this command, complete the [Setup](#setup) section to install and authenticate the [Codex CLI](https://developers.openai.com/codex).
 
 ## Example Output
 
@@ -249,8 +249,8 @@ Defaults to `reviews.db` in the current directory. Set to `:memory:` for ephemer
 
 | Error | Fix |
 |-------|-----|
-| `AUTH_ERROR: No OpenAI auth configured` | Run `codex login` to use your ChatGPT subscription, or set `OPENAI_API_KEY` for API key auth. |
-| `MODEL_ERROR: Model "X" is not supported` | Try `gpt-5.2-codex` or `gpt-5.3-codex`. Set `"model"` in `.reviewbridge.json`. |
+| `AUTH_ERROR: No OpenAI API key found` | Run `codex login` to authenticate, or set `OPENAI_API_KEY`. |
+| `MODEL_ERROR: Model "X" is not supported` | Try `gpt-5.2-codex`. Set `"model"` in `.reviewbridge.json`. |
 | `NETWORK_ERROR: Could not reach OpenAI API` | Check your internet connection. |
 | `RATE_LIMITED: Rate limited by OpenAI` | Wait a moment and retry. |
 | `CODEX_TIMEOUT: review timed out` | Increase `"timeout_seconds"` in `.reviewbridge.json` (default: 300). |

@@ -1,5 +1,6 @@
 import { Codex } from '@openai/codex-sdk';
 import { toJSONSchema, type z } from 'zod';
+import { randomUUID } from 'node:crypto';
 import { ok, err, ErrorCode } from '../utils/errors.js';
 import type { Result } from '../utils/errors.js';
 import {
@@ -276,12 +277,18 @@ export function createCodexClient(config: ReviewBridgeConfig): CodexClient {
     },
 
     async reviewCode(input) {
-      const criteria = input.criteria ?? config.review_standards.code_review.criteria;
+      // Match prompt builder logic: empty array falls through to config criteria
+      const criteria = input.criteria && input.criteria.length > 0
+        ? input.criteria
+        : config.review_standards.code_review.criteria;
       const variableOverhead = computeVariableOverhead([
         input.context ?? '',
         config.project_context,
         criteria.join(', '),
       ]);
+      // Floor of 500 prevents zero/negative budget when overhead exceeds max_chunk_tokens.
+      // In practice this means very small max_chunk_tokens values may produce chunks
+      // larger than configured — this is preferable to disabling chunking entirely.
       const diffBudget = Math.max(config.max_chunk_tokens - PROMPT_OVERHEAD_TOKENS - variableOverhead, 500);
       const chunks = chunkDiff(input.diff, diffBudget);
 
@@ -291,7 +298,7 @@ export function createCodexClient(config: ReviewBridgeConfig): CodexClient {
           verdict: 'approve',
           summary: 'No changes to review.',
           findings: [],
-          session_id: input.session_id ?? '',
+          session_id: input.session_id ?? randomUUID(),
         });
       }
 
@@ -345,6 +352,9 @@ export function createCodexClient(config: ReviewBridgeConfig): CodexClient {
         config.project_context,
         checklist.join(', '),
       ]);
+      // Floor of 500 prevents zero/negative budget when overhead exceeds max_chunk_tokens.
+      // In practice this means very small max_chunk_tokens values may produce chunks
+      // larger than configured — this is preferable to disabling chunking entirely.
       const diffBudget = Math.max(config.max_chunk_tokens - PROMPT_OVERHEAD_TOKENS - variableOverhead, 500);
       const chunks = chunkDiff(input.diff, diffBudget);
 
@@ -354,7 +364,7 @@ export function createCodexClient(config: ReviewBridgeConfig): CodexClient {
           ready_to_commit: true,
           blockers: [],
           warnings: [],
-          session_id: input.session_id ?? '',
+          session_id: input.session_id ?? randomUUID(),
         });
       }
 

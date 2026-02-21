@@ -812,7 +812,7 @@ describe('chunking', () => {
       expect(result.data.verdict).toBe('approve');
       expect(result.data.summary).toBe('No changes to review.');
       expect(result.data.chunks_reviewed).toBeUndefined();
-      expect(result.data.session_id).toBe('');
+      expect(result.data.session_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     }
     expect(mockStartThread).not.toHaveBeenCalled();
     expect(mockResumeThread).not.toHaveBeenCalled();
@@ -860,7 +860,41 @@ describe('chunking', () => {
       expect(result.data.blockers).toEqual([]);
       expect(result.data.warnings).toEqual([]);
       expect(result.data.chunks_reviewed).toBeUndefined();
+      expect(result.data.session_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     }
     expect(mockStartThread).not.toHaveBeenCalled();
+  });
+
+  it('empty diff without session_id produces unique session_ids per call', async () => {
+    mockChunkDiff.mockReturnValue([]);
+
+    const client = createCodexClient(config);
+    const result1 = await client.reviewCode({ diff: '' });
+    const result2 = await client.reviewCode({ diff: '' });
+
+    expect(result1.ok).toBe(true);
+    expect(result2.ok).toBe(true);
+    if (result1.ok && result2.ok) {
+      expect(result1.data.session_id).not.toBe(result2.data.session_id);
+    }
+  });
+
+  it('criteria: [] falls through to config criteria for budget calculation', async () => {
+    mockChunkDiff.mockReturnValue(['single chunk']);
+    mockRun.mockResolvedValue({ finalResponse: makeCodeResponse('approve') });
+
+    const client = createCodexClient(config);
+
+    // Call with no criteria — should use config criteria for budget
+    await client.reviewCode({ diff: 'some diff' });
+    const budgetWithoutCriteria = mockChunkDiff.mock.calls[0][1];
+
+    mockChunkDiff.mockClear();
+
+    // Call with empty criteria — should also use config criteria for budget (same as above)
+    await client.reviewCode({ diff: 'some diff', criteria: [] });
+    const budgetWithEmptyCriteria = mockChunkDiff.mock.calls[0][1];
+
+    expect(budgetWithEmptyCriteria).toBe(budgetWithoutCriteria);
   });
 });

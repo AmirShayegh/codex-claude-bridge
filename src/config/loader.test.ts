@@ -85,6 +85,7 @@ describe('loadConfig', () => {
       model: 'o3',
       reasoning_effort: 'high',
       timeout_seconds: 600,
+      max_chunk_tokens: 12000,
       project_context: 'React app',
       review_standards: {
         plan_review: {

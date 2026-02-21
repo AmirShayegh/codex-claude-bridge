@@ -262,6 +262,27 @@ describe('CodeReviewResultSchema', () => {
     const result = CodeReviewResultSchema.safeParse({ ...validCodeResult, verdict: 'revise' });
     expect(result.success).toBe(false);
   });
+
+  it('accepts chunks_reviewed when present', () => {
+    const result = CodeReviewResultSchema.safeParse({ ...validCodeResult, chunks_reviewed: 3 });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.chunks_reviewed).toBe(3);
+    }
+  });
+
+  it('allows omitting chunks_reviewed', () => {
+    const result = CodeReviewResultSchema.safeParse(validCodeResult);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.chunks_reviewed).toBeUndefined();
+    }
+  });
+
+  it('rejects chunks_reviewed of 0', () => {
+    const result = CodeReviewResultSchema.safeParse({ ...validCodeResult, chunks_reviewed: 0 });
+    expect(result.success).toBe(false);
+  });
 });
 
 describe('PrecommitResultSchema', () => {

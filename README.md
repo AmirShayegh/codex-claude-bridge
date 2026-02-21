@@ -151,6 +151,7 @@ Create `.reviewbridge.json` in your project root to customize review behavior:
   "model": "gpt-5.2-codex",
   "reasoning_effort": "medium",
   "timeout_seconds": 300,
+  "max_chunk_tokens": 8000,
   "review_standards": {
     "plan_review": {
       "focus": ["architecture", "feasibility"],
@@ -170,7 +171,7 @@ Create `.reviewbridge.json` in your project root to customize review behavior:
 }
 ```
 
-All fields are optional. Missing fields use the defaults shown above.
+All fields are optional. Missing fields use the defaults shown above. Large diffs are automatically split into chunks of approximately `max_chunk_tokens` tokens and reviewed sequentially.
 
 **Model options:** The default is `gpt-5.2-codex`. You can also use `gpt-5.3-codex` or other models supported by your account.
 

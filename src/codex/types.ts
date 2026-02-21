@@ -48,6 +48,7 @@ export const CodeReviewResultSchema = z.object({
   summary: z.string(),
   findings: z.array(CodeFindingSchema),
   session_id: z.string(),
+  chunks_reviewed: z.number().int().positive().optional(),
 });
 
 export const PrecommitResultSchema = z.object({
@@ -55,6 +56,7 @@ export const PrecommitResultSchema = z.object({
   blockers: z.array(z.string()),
   warnings: z.array(z.string()),
   session_id: z.string(),
+  chunks_reviewed: z.number().int().positive().optional(),
 });
 
 export const ReviewStatusSchema = z.object({

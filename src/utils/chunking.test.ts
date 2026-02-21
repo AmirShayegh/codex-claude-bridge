@@ -94,4 +94,65 @@ describe('chunkDiff', () => {
     const result = chunkDiff(rawText, 5); // very small maxTokens
     expect(result).toEqual([rawText]);
   });
+
+  describe('intra-file hunk splitting', () => {
+    const makeMultiHunkDiff = (path: string, hunkCount: number, linesPerHunk: number): string => {
+      const header = `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}`;
+      const hunks: string[] = [];
+      for (let h = 0; h < hunkCount; h++) {
+        const start = h * linesPerHunk + 1;
+        const hunkHeader = `@@ -${start},${linesPerHunk} +${start},${linesPerHunk} @@`;
+        const body = Array.from({ length: linesPerHunk }, (_, i) => `+hunk${h}_line${i}`).join('\n');
+        hunks.push(`${hunkHeader}\n${body}`);
+      }
+      return `${header}\n${hunks.join('\n')}`;
+    };
+
+    it('splits single oversized file with multiple hunks at hunk boundaries', () => {
+      const diff = makeMultiHunkDiff('src/big.ts', 4, 50);
+      const totalTokens = estimateTokens(diff);
+      // Budget fits ~2 hunks but not all 4
+      const result = chunkDiff(diff, Math.floor(totalTokens / 2));
+      expect(result.length).toBeGreaterThan(1);
+    });
+
+    it('each hunk chunk includes the file header', () => {
+      const diff = makeMultiHunkDiff('src/big.ts', 4, 50);
+      const totalTokens = estimateTokens(diff);
+      const result = chunkDiff(diff, Math.floor(totalTokens / 2));
+      for (const chunk of result) {
+        expect(chunk).toMatch(/^diff --git /);
+        expect(chunk).toContain('--- a/src/big.ts');
+        expect(chunk).toContain('+++ b/src/big.ts');
+      }
+    });
+
+    it('keeps single-hunk oversized file as one chunk', () => {
+      const diff = makeFileDiff('src/huge.ts', 500);
+      const tokens = estimateTokens(diff);
+      const result = chunkDiff(diff, Math.floor(tokens / 3));
+      expect(result).toHaveLength(1);
+      expect(result[0]).toBe(diff);
+    });
+
+    it('returns binary/rename diff unchanged when no @@ markers', () => {
+      const binaryDiff =
+        'diff --git a/image.png b/image.png\n' +
+        'Binary files a/image.png and b/image.png differ';
+      const result = chunkDiff(binaryDiff, 5);
+      expect(result).toHaveLength(1);
+      expect(result[0]).toBe(binaryDiff);
+    });
+
+    it('each hunk chunk is a valid diff section', () => {
+      const diff = makeMultiHunkDiff('src/big.ts', 6, 40);
+      const totalTokens = estimateTokens(diff);
+      const result = chunkDiff(diff, Math.floor(totalTokens / 3));
+      expect(result.length).toBeGreaterThan(1);
+      for (const chunk of result) {
+        expect(chunk).toMatch(/^diff --git /);
+        expect(chunk).toContain('@@ ');
+      }
+    });
+  });
 });

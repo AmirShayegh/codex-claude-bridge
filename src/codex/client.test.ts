@@ -3,6 +3,18 @@ import { createCodexClient } from './client.js';
 import type { ReviewBridgeConfig } from '../config/types.js';
 import { DEFAULT_CONFIG } from '../config/types.js';
 
+// Mock chunking so we can control chunk counts without huge diffs
+vi.mock('../utils/chunking.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../utils/chunking.js')>();
+  return {
+    ...actual,
+    chunkDiff: vi.fn(actual.chunkDiff),
+  };
+});
+
+import { chunkDiff } from '../utils/chunking.js';
+const mockChunkDiff = vi.mocked(chunkDiff);
+
 // Mock thread factory — configurable per test
 let mockRun: ReturnType<typeof vi.fn>;
 let mockThreadId: string | null;
@@ -607,5 +619,248 @@ describe('constructor failure', () => {
     const pre = await client.reviewPrecommit({ diff: 'diff' });
     expect(pre.ok).toBe(false);
     if (!pre.ok) expect(pre.error).toContain('UNKNOWN_ERROR');
+  });
+});
+
+describe('chunking', () => {
+  const makeCodeResponse = (verdict: string, findings: Array<{ severity: string; category: string; file: string | null; line: number | null }> = [], summary = 'chunk summary') =>
+    JSON.stringify({
+      verdict,
+      summary,
+      findings: findings.map((f) => ({ ...f, description: 'desc', suggestion: null })),
+    });
+
+  const makePrecommitResponse = (ready: boolean, blockers: string[] = [], warnings: string[] = []) =>
+    JSON.stringify({ ready_to_commit: ready, blockers, warnings });
+
+  it('small diff (under threshold) uses single startThread, no chunks_reviewed', async () => {
+    mockChunkDiff.mockReturnValue(['small diff']);
+    mockRun.mockResolvedValue({ finalResponse: makeCodeResponse('approve') });
+
+    const client = createCodexClient(config);
+    const result = await client.reviewCode({ diff: 'small diff' });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.chunks_reviewed).toBeUndefined();
+    }
+    expect(mockStartThread).toHaveBeenCalledTimes(1);
+  });
+
+  it('multi-chunk code review uses startThread once then resumeThread', async () => {
+    mockChunkDiff.mockReturnValue(['chunk1', 'chunk2']);
+    const thread1Id = 'thread_chunk1';
+    const thread2Id = 'thread_chunk2';
+
+    mockStartThread.mockImplementation(() => {
+      return { run: mockRun, get id() { return thread1Id; } };
+    });
+    mockResumeThread.mockImplementation(() => {
+      return { run: mockRun, get id() { return thread2Id; } };
+    });
+
+    mockRun.mockResolvedValue({ finalResponse: makeCodeResponse('approve') });
+
+    const client = createCodexClient(config);
+    const result = await client.reviewCode({ diff: 'big diff' });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.chunks_reviewed).toBe(2);
+    }
+    expect(mockStartThread).toHaveBeenCalledTimes(1);
+    expect(mockResumeThread).toHaveBeenCalledTimes(1);
+    expect(mockResumeThread).toHaveBeenCalledWith(thread1Id, expect.any(Object));
+  });
+
+  it('verdict precedence: approve + request_changes = request_changes', async () => {
+    mockChunkDiff.mockReturnValue(['chunk1', 'chunk2']);
+    mockRun
+      .mockResolvedValueOnce({ finalResponse: makeCodeResponse('approve') })
+      .mockResolvedValueOnce({ finalResponse: makeCodeResponse('request_changes') });
+
+    const client = createCodexClient(config);
+    const result = await client.reviewCode({ diff: 'big diff' });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.verdict).toBe('request_changes');
+    }
+  });
+
+  it('verdict precedence: reject + approve = reject', async () => {
+    mockChunkDiff.mockReturnValue(['chunk1', 'chunk2']);
+    mockRun
+      .mockResolvedValueOnce({ finalResponse: makeCodeResponse('reject') })
+      .mockResolvedValueOnce({ finalResponse: makeCodeResponse('approve') });
+
+    const client = createCodexClient(config);
+    const result = await client.reviewCode({ diff: 'big diff' });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.verdict).toBe('reject');
+    }
+  });
+
+  it('dedup: same file:line:category from two chunks keeps worst severity', async () => {
+    mockChunkDiff.mockReturnValue(['chunk1', 'chunk2']);
+    mockRun
+      .mockResolvedValueOnce({
+        finalResponse: makeCodeResponse('request_changes', [
+          { severity: 'minor', category: 'bug', file: 'src/a.ts', line: 10 },
+        ]),
+      })
+      .mockResolvedValueOnce({
+        finalResponse: makeCodeResponse('request_changes', [
+          { severity: 'critical', category: 'bug', file: 'src/a.ts', line: 10 },
+        ]),
+      });
+
+    const client = createCodexClient(config);
+    const result = await client.reviewCode({ diff: 'big diff' });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.findings).toHaveLength(1);
+      expect(result.data.findings[0].severity).toBe('critical');
+    }
+  });
+
+  it('null file/line findings are always preserved (no dedup)', async () => {
+    mockChunkDiff.mockReturnValue(['chunk1', 'chunk2']);
+    mockRun
+      .mockResolvedValueOnce({
+        finalResponse: makeCodeResponse('approve', [
+          { severity: 'minor', category: 'style', file: null, line: null },
+        ]),
+      })
+      .mockResolvedValueOnce({
+        finalResponse: makeCodeResponse('approve', [
+          { severity: 'minor', category: 'style', file: null, line: null },
+        ]),
+      });
+
+    const client = createCodexClient(config);
+    const result = await client.reviewCode({ diff: 'big diff' });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.findings).toHaveLength(2);
+    }
+  });
+
+  it('different categories at same file:line are both kept', async () => {
+    mockChunkDiff.mockReturnValue(['chunk1', 'chunk2']);
+    mockRun
+      .mockResolvedValueOnce({
+        finalResponse: makeCodeResponse('request_changes', [
+          { severity: 'major', category: 'bug', file: 'src/a.ts', line: 10 },
+        ]),
+      })
+      .mockResolvedValueOnce({
+        finalResponse: makeCodeResponse('request_changes', [
+          { severity: 'major', category: 'security', file: 'src/a.ts', line: 10 },
+        ]),
+      });
+
+    const client = createCodexClient(config);
+    const result = await client.reviewCode({ diff: 'big diff' });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.findings).toHaveLength(2);
+    }
+  });
+
+  it('error mid-chunk propagates immediately, skips remaining chunks', async () => {
+    mockChunkDiff.mockReturnValue(['chunk1', 'chunk2', 'chunk3']);
+    mockRun
+      .mockResolvedValueOnce({ finalResponse: makeCodeResponse('approve') })
+      .mockRejectedValueOnce(new Error('fetch failed'));
+
+    const client = createCodexClient(config);
+    const result = await client.reviewCode({ diff: 'big diff' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('NETWORK_ERROR');
+    }
+    expect(mockRun).toHaveBeenCalledTimes(2);
+  });
+
+  it('caller session_id: first chunk resumes with provided id', async () => {
+    mockChunkDiff.mockReturnValue(['chunk1', 'chunk2']);
+    mockRun.mockResolvedValue({ finalResponse: makeCodeResponse('approve') });
+
+    const client = createCodexClient(config);
+    await client.reviewCode({ diff: 'big diff', session_id: 'existing_thread' });
+
+    expect(mockStartThread).not.toHaveBeenCalled();
+    expect(mockResumeThread).toHaveBeenCalledTimes(2);
+    expect(mockResumeThread.mock.calls[0][0]).toBe('existing_thread');
+  });
+
+  it('empty diff returns synthetic approve with no thread calls', async () => {
+    mockChunkDiff.mockReturnValue([]);
+
+    const client = createCodexClient(config);
+    const result = await client.reviewCode({ diff: '' });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.verdict).toBe('approve');
+      expect(result.data.summary).toBe('No changes to review.');
+      expect(result.data.chunks_reviewed).toBeUndefined();
+      expect(result.data.session_id).toBe('');
+    }
+    expect(mockStartThread).not.toHaveBeenCalled();
+    expect(mockResumeThread).not.toHaveBeenCalled();
+  });
+
+  it('empty diff with session_id preserves the session_id', async () => {
+    mockChunkDiff.mockReturnValue([]);
+
+    const client = createCodexClient(config);
+    const result = await client.reviewCode({ diff: '', session_id: 'prev_sess' });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.session_id).toBe('prev_sess');
+    }
+  });
+
+  it('precommit multi-chunk: ready_to_commit false if any chunk false', async () => {
+    mockChunkDiff.mockReturnValue(['chunk1', 'chunk2']);
+    mockRun
+      .mockResolvedValueOnce({ finalResponse: makePrecommitResponse(true, [], ['warn1']) })
+      .mockResolvedValueOnce({ finalResponse: makePrecommitResponse(false, ['blocker1'], []) });
+
+    const client = createCodexClient(config);
+    const result = await client.reviewPrecommit({ diff: 'big staged diff' });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.ready_to_commit).toBe(false);
+      expect(result.data.blockers).toEqual(['blocker1']);
+      expect(result.data.warnings).toEqual(['warn1']);
+      expect(result.data.chunks_reviewed).toBe(2);
+    }
+  });
+
+  it('precommit empty diff returns synthetic pass with no thread calls', async () => {
+    mockChunkDiff.mockReturnValue([]);
+
+    const client = createCodexClient(config);
+    const result = await client.reviewPrecommit({ diff: '' });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.ready_to_commit).toBe(true);
+      expect(result.data.blockers).toEqual([]);
+      expect(result.data.warnings).toEqual([]);
+      expect(result.data.chunks_reviewed).toBeUndefined();
+    }
+    expect(mockStartThread).not.toHaveBeenCalled();
   });
 });

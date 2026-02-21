@@ -8,8 +8,8 @@ export async function resolvePrecommitDiff(args: {
   diff?: string;
   auto_diff?: boolean;
 }): Promise<Result<string>> {
-  // Explicit diff takes precedence
-  if (args.diff) {
+  // Explicit diff takes precedence (including empty string)
+  if (args.diff !== undefined) {
     return ok(args.diff);
   }
 

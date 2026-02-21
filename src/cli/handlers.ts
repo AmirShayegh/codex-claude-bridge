@@ -16,7 +16,13 @@ export interface HandlerConfig<TResult> {
 
 export function createHandler<TResult>(config: HandlerConfig<TResult>): (io: HandlerIO) => Promise<void> {
   return async (io: HandlerIO) => {
-    const result = await config.execute();
+    let result: Result<TResult>;
+    try {
+      result = await config.execute();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      result = { ok: false, error: msg };
+    }
 
     if (!result.ok) {
       if (io.json) {

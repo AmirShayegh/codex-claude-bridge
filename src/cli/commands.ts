@@ -119,7 +119,7 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
         execute: () =>
           client.reviewPlan({
             plan: inputResult.data,
-            focus: opts.focus ? opts.focus.split(',').map((s: string) => s.trim()) : undefined,
+            focus: opts.focus ? opts.focus.split(',').map((s: string) => s.trim()).filter(Boolean) : undefined,
             depth: opts.depth,
             session_id: opts.session,
           }),
@@ -157,7 +157,7 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
         execute: () =>
           client.reviewCode({
             diff: inputResult.data,
-            criteria: opts.focus ? opts.focus.split(',').map((s: string) => s.trim()) : undefined,
+            criteria: opts.focus ? opts.focus.split(',').map((s: string) => s.trim()).filter(Boolean) : undefined,
             session_id: opts.session,
           }),
         format: formatCodeResult,

@@ -62,14 +62,33 @@ describe('readInput', () => {
       }
     });
 
-    it('returns partial data on timeout if some data was received', async () => {
+    it('returns partial data on idle timeout if stream stalls', async () => {
       const stream = new Readable({ read() {} });
-      // Push data but never end the stream
+      // Push data but never end the stream — idle timer fires after last chunk
       setImmediate(() => {
         stream.push(Buffer.from('partial'));
       });
       const result = await readInput('-', { stdin: stream, timeoutMs: 100 });
       expect(result).toEqual({ ok: true, data: 'partial' });
+    });
+
+    it('resets idle timer on each data chunk (no truncation)', async () => {
+      const stream = new Readable({ read() {} });
+      // Send chunks spaced 30ms apart, with a 100ms idle timeout.
+      // Total time ~90ms but each chunk resets the timer.
+      const chunks = ['aaa', 'bbb', 'ccc'];
+      let i = 0;
+      const iv = setInterval(() => {
+        if (i < chunks.length) {
+          stream.push(Buffer.from(chunks[i]));
+          i++;
+        } else {
+          clearInterval(iv);
+          stream.push(null); // end stream
+        }
+      }, 30);
+      const result = await readInput('-', { stdin: stream, timeoutMs: 100 });
+      expect(result).toEqual({ ok: true, data: 'aaabbbccc' });
     });
 
     it('returns error on stream error', async () => {

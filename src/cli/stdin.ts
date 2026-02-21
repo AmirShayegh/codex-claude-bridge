@@ -34,23 +34,30 @@ async function readStdin(options?: {
   return new Promise((resolve) => {
     const chunks: Buffer[] = [];
     let settled = false;
+    let timer: ReturnType<typeof setTimeout>;
 
-    const timer = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        stream.removeAllListeners('data');
-        stream.removeAllListeners('end');
-        stream.removeAllListeners('error');
-        if (chunks.length > 0) {
-          resolve(ok(Buffer.concat(chunks).toString('utf-8')));
-        } else {
-          resolve(err('stdin timeout: no input received within ' + timeoutMs + 'ms'));
+    function resetTimer(): void {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          stream.removeAllListeners('data');
+          stream.removeAllListeners('end');
+          stream.removeAllListeners('error');
+          if (chunks.length > 0) {
+            resolve(ok(Buffer.concat(chunks).toString('utf-8')));
+          } else {
+            resolve(err('stdin timeout: no input received within ' + timeoutMs + 'ms'));
+          }
         }
-      }
-    }, timeoutMs);
+      }, timeoutMs);
+    }
+
+    resetTimer();
 
     stream.on('data', (chunk: Buffer) => {
       chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      resetTimer();
     });
 
     stream.on('end', () => {

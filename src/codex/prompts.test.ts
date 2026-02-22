@@ -292,6 +292,16 @@ describe('buildCodeReviewPrompt', () => {
     expect(result).toContain(diff);
     expect(result).toContain('verdict');
   });
+
+  it('includes chunkHeader when provided', () => {
+    const result = buildCodeReviewPrompt({ diff, chunkHeader: 'Chunk 2 of 4: reviewing src/db.ts only.' });
+    expect(result).toContain('Chunk 2 of 4: reviewing src/db.ts only.');
+  });
+
+  it('omits chunkHeader when not provided', () => {
+    const result = buildCodeReviewPrompt({ diff });
+    expect(result).not.toContain('Chunk');
+  });
 });
 
 // =============================================
@@ -371,5 +381,15 @@ describe('buildPrecommitPrompt', () => {
     const result = buildPrecommitPrompt({ diff });
     expect(result).toContain(diff);
     expect(result).toContain('ready_to_commit');
+  });
+
+  it('includes chunkHeader when provided', () => {
+    const result = buildPrecommitPrompt({ diff, chunkHeader: 'Chunk 1 of 3: checking staged files.' });
+    expect(result).toContain('Chunk 1 of 3: checking staged files.');
+  });
+
+  it('omits chunkHeader when not provided', () => {
+    const result = buildPrecommitPrompt({ diff });
+    expect(result).not.toContain('Chunk');
   });
 });

@@ -11,6 +11,7 @@ describe('ReviewBridgeConfigSchema', () => {
       expect(config.model).toBe('gpt-5.2-codex');
       expect(config.reasoning_effort).toBe('medium');
       expect(config.timeout_seconds).toBe(300);
+      expect(config.max_chunk_tokens).toBe(8000);
       expect(config.project_context).toBe('');
       expect(config.review_standards.plan_review.focus).toEqual([
         'architecture',
@@ -95,6 +96,7 @@ describe('ReviewBridgeConfigSchema', () => {
       model: 'o3',
       reasoning_effort: 'high',
       timeout_seconds: 600,
+      max_chunk_tokens: 12000,
       project_context: 'React SPA with GraphQL backend',
       review_standards: {
         plan_review: {
@@ -130,6 +132,27 @@ describe('ReviewBridgeConfigSchema', () => {
     expect(result.success).toBe(false);
   });
 
+  it('defaults max_chunk_tokens to 8000', () => {
+    const result = ReviewBridgeConfigSchema.safeParse({});
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.max_chunk_tokens).toBe(8000);
+    }
+  });
+
+  it('allows custom max_chunk_tokens', () => {
+    const result = ReviewBridgeConfigSchema.safeParse({ max_chunk_tokens: 16000 });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.max_chunk_tokens).toBe(16000);
+    }
+  });
+
+  it('rejects max_chunk_tokens of 0', () => {
+    const result = ReviewBridgeConfigSchema.safeParse({ max_chunk_tokens: 0 });
+    expect(result.success).toBe(false);
+  });
+
   it('accepts all valid block_on severities', () => {
     const result = ReviewBridgeConfigSchema.safeParse({
       review_standards: {
@@ -147,6 +170,7 @@ describe('DEFAULT_CONFIG', () => {
     expect(DEFAULT_CONFIG.model).toBe('gpt-5.2-codex');
     expect(DEFAULT_CONFIG.reasoning_effort).toBe('medium');
     expect(DEFAULT_CONFIG.timeout_seconds).toBe(300);
+    expect(DEFAULT_CONFIG.max_chunk_tokens).toBe(8000);
     expect(DEFAULT_CONFIG.project_context).toBe('');
     expect(DEFAULT_CONFIG.review_standards.precommit.block_on).toEqual([
       'critical',

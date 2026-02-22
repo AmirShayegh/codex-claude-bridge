@@ -1,24 +1,27 @@
 import { Codex } from '@openai/codex-sdk';
 import { toJSONSchema, type z } from 'zod';
+import { randomUUID } from 'node:crypto';
 import { ok, err, ErrorCode } from '../utils/errors.js';
 import type { Result } from '../utils/errors.js';
 import {
   PlanReviewResultSchema,
   CodeReviewResultSchema,
   PrecommitResultSchema,
+  CodeFindingSeveritySchema,
 } from './types.js';
-import type { PlanReviewResult, CodeReviewResult, PrecommitResult } from './types.js';
+import type { PlanReviewResult, CodeReviewResult, PrecommitResult, CodeFinding, CodeFindingSeverity } from './types.js';
 import {
   buildPlanReviewPrompt,
   buildCodeReviewPrompt,
   buildPrecommitPrompt,
 } from './prompts.js';
 import type { ReviewBridgeConfig } from '../config/types.js';
+import { chunkDiff, estimateTokens } from '../utils/chunking.js';
 
-// Response schemas omit session_id — the reviewer doesn't know our session concept
+// Response schemas omit fields the reviewer doesn't produce
 const PlanReviewResponseSchema = PlanReviewResultSchema.omit({ session_id: true });
-const CodeReviewResponseSchema = CodeReviewResultSchema.omit({ session_id: true });
-const PrecommitResponseSchema = PrecommitResultSchema.omit({ session_id: true });
+const CodeReviewResponseSchema = CodeReviewResultSchema.omit({ session_id: true, chunks_reviewed: true });
+const PrecommitResponseSchema = PrecommitResultSchema.omit({ session_id: true, chunks_reviewed: true });
 
 interface PlanReviewInput {
   plan: string;
@@ -173,6 +176,76 @@ async function runReview<T extends Record<string, unknown>>(params: {
   return err(`${ErrorCode.CODEX_PARSE_ERROR}: ${lastError}`);
 }
 
+// Fixed overhead for prompt framing (role, rubric, schema, chunk header)
+const PROMPT_OVERHEAD_TOKENS = 2000;
+
+function computeVariableOverhead(parts: string[]): number {
+  let total = 0;
+  for (const part of parts) {
+    if (part) total += estimateTokens(part);
+  }
+  return total;
+}
+
+// Higher rank = more severe. Options are ['critical','major','minor','nitpick'] so reverse index.
+const severityRank: Record<CodeFindingSeverity, number> = Object.fromEntries(
+  CodeFindingSeveritySchema.options.map((s, i, arr) => [s, arr.length - 1 - i]),
+) as Record<CodeFindingSeverity, number>;
+
+function deduplicateFindings(findings: CodeFinding[]): CodeFinding[] {
+  const map = new Map<string, CodeFinding>();
+  const keyless: CodeFinding[] = [];
+
+  for (const f of findings) {
+    if (f.file === null || f.line === null) {
+      keyless.push(f);
+      continue;
+    }
+    const key = `${f.file}:${f.line}:${f.category}`;
+    const existing = map.get(key);
+    if (!existing || severityRank[f.severity] > severityRank[existing.severity]) {
+      map.set(key, f);
+    }
+  }
+
+  return [...map.values(), ...keyless];
+}
+
+const codeVerdictRank: Record<string, number> = { approve: 0, request_changes: 1, reject: 2 };
+
+function mergeCodeResults(
+  results: Omit<CodeReviewResult, 'chunks_reviewed'>[],
+  sessionId: string,
+): CodeReviewResult {
+  let worstVerdict = results[0].verdict;
+  for (const r of results) {
+    if (codeVerdictRank[r.verdict] > codeVerdictRank[worstVerdict]) {
+      worstVerdict = r.verdict;
+    }
+  }
+
+  return {
+    verdict: worstVerdict,
+    summary: results.map((r) => r.summary).join(' '),
+    findings: deduplicateFindings(results.flatMap((r) => r.findings)),
+    session_id: sessionId,
+    chunks_reviewed: results.length,
+  };
+}
+
+function mergePrecommitResults(
+  results: Omit<PrecommitResult, 'chunks_reviewed'>[],
+  sessionId: string,
+): PrecommitResult {
+  return {
+    ready_to_commit: results.every((r) => r.ready_to_commit),
+    blockers: results.flatMap((r) => r.blockers),
+    warnings: results.flatMap((r) => r.warnings),
+    session_id: sessionId,
+    chunks_reviewed: results.length,
+  };
+}
+
 export function createCodexClient(config: ReviewBridgeConfig): CodexClient {
   let codex: Codex;
   try {
@@ -203,33 +276,138 @@ export function createCodexClient(config: ReviewBridgeConfig): CodexClient {
       });
     },
 
-    reviewCode(input) {
-      const prompt = buildCodeReviewPrompt(input, {
+    async reviewCode(input) {
+      // Match prompt builder logic: empty array falls through to config criteria
+      const criteria = input.criteria && input.criteria.length > 0
+        ? input.criteria
+        : config.review_standards.code_review.criteria;
+      const variableOverhead = computeVariableOverhead([
+        input.context ?? '',
+        config.project_context,
+        criteria.join(', '),
+      ]);
+      // Floor of 500 prevents zero/negative budget when overhead exceeds max_chunk_tokens.
+      // In practice this means very small max_chunk_tokens values may produce chunks
+      // larger than configured — this is preferable to disabling chunking entirely.
+      const diffBudget = Math.max(config.max_chunk_tokens - PROMPT_OVERHEAD_TOKENS - variableOverhead, 500);
+      const chunks = chunkDiff(input.diff, diffBudget);
+
+      // Empty diff — synthetic approve
+      if (chunks.length === 0) {
+        return ok<CodeReviewResult>({
+          verdict: 'approve',
+          summary: 'No changes to review.',
+          findings: [],
+          session_id: input.session_id ?? randomUUID(),
+        });
+      }
+
+      // Single chunk — standard path (no chunks_reviewed)
+      if (chunks.length === 1) {
+        const prompt = buildCodeReviewPrompt(input, {
+          project_context: config.project_context,
+          criteria: config.review_standards.code_review.criteria,
+          require_tests: config.review_standards.code_review.require_tests,
+        });
+        return runReview<Omit<CodeReviewResult, 'session_id' | 'chunks_reviewed'>>({
+          codex,
+          config,
+          prompt,
+          responseSchema: CodeReviewResponseSchema,
+          sessionId: input.session_id,
+        });
+      }
+
+      // Multi-chunk — sequential review with per-chunk timeout
+      const codeConfig = {
         project_context: config.project_context,
         criteria: config.review_standards.code_review.criteria,
         require_tests: config.review_standards.code_review.require_tests,
-      });
-      return runReview<Omit<CodeReviewResult, 'session_id'>>({
-        codex,
-        config,
-        prompt,
-        responseSchema: CodeReviewResponseSchema,
-        sessionId: input.session_id,
-      });
+      };
+      const chunkResults: Omit<CodeReviewResult, 'chunks_reviewed'>[] = [];
+      let sessionId = input.session_id;
+
+      for (let i = 0; i < chunks.length; i++) {
+        const chunkHeader = `Chunk ${i + 1} of ${chunks.length}: reviewing the following files only.`;
+        const prompt = buildCodeReviewPrompt({ ...input, diff: chunks[i], chunkHeader }, codeConfig);
+        const result = await runReview<Omit<CodeReviewResult, 'session_id' | 'chunks_reviewed'>>({
+          codex,
+          config,
+          prompt,
+          responseSchema: CodeReviewResponseSchema,
+          sessionId,
+        });
+
+        if (!result.ok) return result;
+        chunkResults.push(result.data);
+        sessionId = result.data.session_id;
+      }
+
+      return ok(mergeCodeResults(chunkResults, sessionId!));
     },
 
-    reviewPrecommit(input) {
-      const prompt = buildPrecommitPrompt(input, {
+    async reviewPrecommit(input) {
+      const checklist = input.checklist ?? [];
+      const variableOverhead = computeVariableOverhead([
+        config.project_context,
+        checklist.join(', '),
+      ]);
+      // Floor of 500 prevents zero/negative budget when overhead exceeds max_chunk_tokens.
+      // In practice this means very small max_chunk_tokens values may produce chunks
+      // larger than configured — this is preferable to disabling chunking entirely.
+      const diffBudget = Math.max(config.max_chunk_tokens - PROMPT_OVERHEAD_TOKENS - variableOverhead, 500);
+      const chunks = chunkDiff(input.diff, diffBudget);
+
+      // Empty diff — synthetic pass
+      if (chunks.length === 0) {
+        return ok<PrecommitResult>({
+          ready_to_commit: true,
+          blockers: [],
+          warnings: [],
+          session_id: input.session_id ?? randomUUID(),
+        });
+      }
+
+      // Single chunk — standard path (no chunks_reviewed)
+      if (chunks.length === 1) {
+        const prompt = buildPrecommitPrompt(input, {
+          project_context: config.project_context,
+          block_on: config.review_standards.precommit.block_on,
+        });
+        return runReview<Omit<PrecommitResult, 'session_id' | 'chunks_reviewed'>>({
+          codex,
+          config,
+          prompt,
+          responseSchema: PrecommitResponseSchema,
+          sessionId: input.session_id,
+        });
+      }
+
+      // Multi-chunk — sequential review
+      const precommitConfig = {
         project_context: config.project_context,
         block_on: config.review_standards.precommit.block_on,
-      });
-      return runReview<Omit<PrecommitResult, 'session_id'>>({
-        codex,
-        config,
-        prompt,
-        responseSchema: PrecommitResponseSchema,
-        sessionId: input.session_id,
-      });
+      };
+      const chunkResults: Omit<PrecommitResult, 'chunks_reviewed'>[] = [];
+      let sessionId = input.session_id;
+
+      for (let i = 0; i < chunks.length; i++) {
+        const chunkHeader = `Chunk ${i + 1} of ${chunks.length}: checking the following files only.`;
+        const prompt = buildPrecommitPrompt({ ...input, diff: chunks[i], chunkHeader }, precommitConfig);
+        const result = await runReview<Omit<PrecommitResult, 'session_id' | 'chunks_reviewed'>>({
+          codex,
+          config,
+          prompt,
+          responseSchema: PrecommitResponseSchema,
+          sessionId,
+        });
+
+        if (!result.ok) return result;
+        chunkResults.push(result.data);
+        sessionId = result.data.session_id;
+      }
+
+      return ok(mergePrecommitResults(chunkResults, sessionId!));
     },
   };
 }

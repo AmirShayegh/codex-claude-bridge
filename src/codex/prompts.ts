@@ -143,6 +143,7 @@ export function buildCodeReviewPrompt(
     diff: string;
     context?: string;
     criteria?: string[];
+    chunkHeader?: string;
   },
   config?: CodeReviewConfig,
 ): string {
@@ -184,6 +185,10 @@ export function buildCodeReviewPrompt(
   }
   sections.push(checklist);
 
+  if (input.chunkHeader) {
+    sections.push(input.chunkHeader);
+  }
+
   const d = makeDelimiter('DIFF', input.diff);
   sections.push(`${d.open}\n${input.diff}\n${d.close}`);
 
@@ -211,6 +216,7 @@ export function buildPrecommitPrompt(
   input: {
     diff: string;
     checklist?: string[];
+    chunkHeader?: string;
   },
   config?: PrecommitConfig,
 ): string {
@@ -240,6 +246,10 @@ export function buildPrecommitPrompt(
     sections.push(
       `Severity threshold: Issues that would be ${blockOn.join(' or ')} severity belong in "blockers". Lesser issues belong in "warnings".`,
     );
+  }
+
+  if (input.chunkHeader) {
+    sections.push(input.chunkHeader);
   }
 
   const d = makeDelimiter('DIFF', input.diff);

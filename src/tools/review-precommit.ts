@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import type { CodexClient } from '../codex/client.js';
-import { getStagedDiff } from '../utils/git.js';
+import { resolvePrecommitDiff, NO_STAGED_CHANGES } from '../utils/resolve-diff.js';
 import { createSessionTracker } from '../storage/session-tracker.js';
 
 export function registerReviewPrecommitTool(server: McpServer, client: CodexClient, db?: Database.Database): void {
@@ -23,18 +23,10 @@ export function registerReviewPrecommitTool(server: McpServer, client: CodexClie
     async (args) => {
       const tracker = createSessionTracker(db);
       try {
-        let diff: string;
-
-        // Diff resolution precedence: explicit diff > auto_diff > error
-        // auto_diff defaults to true when not provided (undefined !== false)
-        if (args.diff) {
-          diff = args.diff;
-        } else if (args.auto_diff !== false) {
-          const gitResult = await getStagedDiff();
-          if (!gitResult.ok) {
-            return { content: [{ type: 'text' as const, text: gitResult.error }], isError: true };
-          }
-          if (!gitResult.data) {
+        const diffResult = await resolvePrecommitDiff({ diff: args.diff, auto_diff: args.auto_diff });
+        if (!diffResult.ok) {
+          // "No staged changes" is not an error — return structured response
+          if (diffResult.error.startsWith(NO_STAGED_CHANGES)) {
             return {
               content: [
                 {
@@ -49,13 +41,9 @@ export function registerReviewPrecommitTool(server: McpServer, client: CodexClie
               ],
             };
           }
-          diff = gitResult.data;
-        } else {
-          return {
-            content: [{ type: 'text' as const, text: 'auto_diff disabled and no diff provided' }],
-            isError: true,
-          };
+          return { content: [{ type: 'text' as const, text: diffResult.error }], isError: true };
         }
+        const diff = diffResult.data;
 
         // Pre-flight: activate session after diff resolved, before client call
         tracker.preflight(args.session_id);

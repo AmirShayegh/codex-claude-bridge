@@ -1,13 +1,14 @@
-import { createServer } from './server.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+// No args = MCP server (Claude Code integration). Any arg = CLI mode.
+const isCli = process.argv.length > 2;
 
-async function main() {
-  const server = createServer();
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+if (isCli) {
+  import('./cli/commands.js').then(({ runCli }) => runCli()).catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+} else {
+  import('./mcp.js').then(({ startMcpServer }) => startMcpServer()).catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
 }
-
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});

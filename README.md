@@ -59,7 +59,7 @@ Once set up, Claude Code gains five new tools:
 
 All tools return structured JSON that Claude Code can act on directly.
 
-## Usage
+## Usage (MCP)
 
 In Claude Code, just describe what you want reviewed. Claude Code will pick the right tool:
 
@@ -76,6 +76,36 @@ In Claude Code, just describe what you want reviewed. Claude Code will pick the 
 > "Check if these changes are safe to commit."
 
 **Session continuity** — pass the `session_id` from a plan review into a code review to maintain context across the full review lifecycle.
+
+## Standalone CLI
+
+Run reviews directly from the terminal — no MCP setup required.
+
+**Pre-commit check (auto-captures staged changes):**
+
+```bash
+npx codex-claude-bridge review-precommit
+```
+
+**Block commits on issues (CI-friendly, exits 2 on blockers):**
+
+```bash
+npx codex-claude-bridge review-precommit && git commit
+```
+
+**Review a plan:**
+
+```bash
+npx codex-claude-bridge review-plan --plan plan.md
+```
+
+**Review a diff:**
+
+```bash
+git diff main | npx codex-claude-bridge review-code --diff -
+```
+
+Add `--json` to any command for raw JSON output. Use `--help` to see all options.
 
 ## Tools Reference
 
@@ -207,8 +237,10 @@ The SDK (`@openai/codex-sdk`) internally spawns `codex exec` as a subprocess —
 
 ```
 src/
-  index.ts          → Entry point (stdio transport)
+  index.ts          → Entry point (routes to MCP or CLI)
+  mcp.ts            → MCP server startup
   server.ts         → Server setup, tool registration
+  cli/              → Standalone CLI (Commander.js)
   tools/            → MCP tool handlers (5 tools)
   codex/            → Codex SDK wrapper, prompts, types
   config/           → .reviewbridge.json loader

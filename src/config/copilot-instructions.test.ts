@@ -336,6 +336,19 @@ describe('filterByFiles', () => {
     expect(result.scoped).toHaveLength(1);
   });
 
+  it('handles non-matching glob patterns gracefully', () => {
+    const instr: CopilotInstructions = {
+      repoWide: null,
+      scoped: [
+        { applyTo: '[invalid', body: 'Bad glob', filename: 'bad.instructions.md' },
+        { applyTo: '**/*.ts', body: 'Good glob', filename: 'good.instructions.md' },
+      ],
+    };
+    const result = filterByFiles(instr, ['src/foo.ts']);
+    expect(result.scoped).toHaveLength(1);
+    expect(result.scoped[0].filename).toBe('good.instructions.md');
+  });
+
   it('passes through instructions with no scoped entries', () => {
     const instr: CopilotInstructions = { repoWide: '# Global', scoped: [] };
     const result = filterByFiles(instr, ['any-file.ts']);

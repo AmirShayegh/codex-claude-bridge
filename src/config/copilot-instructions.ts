@@ -145,7 +145,15 @@ export function filterByFiles(
   if (files.length === 0) return { repoWide: instructions.repoWide, scoped: [] };
 
   const matched = instructions.scoped.filter(instr => {
-    const matchers = instr.applyTo.split(',').map(p => picomatch(p.trim()));
+    const matchers: picomatch.Matcher[] = [];
+    for (const p of instr.applyTo.split(',')) {
+      try {
+        matchers.push(picomatch(p.trim()));
+      } catch {
+        console.error(`Invalid applyTo glob in ${instr.filename}: ${p.trim()}`);
+      }
+    }
+    if (matchers.length === 0) return false;
     return files.some(file => matchers.some(m => m(file)));
   });
 

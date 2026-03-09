@@ -7,6 +7,7 @@ import { DEFAULT_CONFIG } from '../config/types.js';
 import { createCodexClient } from '../codex/client.js';
 import type { CodexClient } from '../codex/client.js';
 import { loadCopilotInstructions } from '../config/copilot-instructions.js';
+import type { CopilotInstructions } from '../config/copilot-instructions.js';
 import { readInput, resetStdinGuard } from './stdin.js';
 import { resolvePrecommitDiff } from '../utils/resolve-diff.js';
 import { createHandler } from './handlers.js';
@@ -52,7 +53,7 @@ function initClient(configDir: string | undefined, deps: CliDeps): CodexClient |
   }
   const config = configResult.ok ? configResult.data : DEFAULT_CONFIG;
 
-  let copilotInstr;
+  let copilotInstr: CopilotInstructions | undefined;
   if (config.copilot_instructions) {
     const instrResult = loadCopilotInstructions(configDir);
     if (instrResult.ok) {

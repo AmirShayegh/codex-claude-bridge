@@ -78,7 +78,7 @@ export function classifyError(
     const modelName = quoted?.[1] ?? context?.model ?? 'your configured model';
     return {
       code: ErrorCode.MODEL_ERROR,
-      message: `Model "${modelName}" is not supported. Try gpt-5.2-codex or configure a different model in .reviewbridge.json.`,
+      message: `Model "${modelName}" is not supported. Try gpt-5.4 or configure a different model in .reviewbridge.json.`,
     };
   }
 

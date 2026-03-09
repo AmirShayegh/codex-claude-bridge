@@ -26,7 +26,7 @@ const ReviewStandardsSchema = z.object({
 });
 
 export const ReviewBridgeConfigSchema = z.object({
-  model: z.string().default('gpt-5.2-codex'),
+  model: z.string().default('gpt-5.4'),
   reasoning_effort: z.enum(['low', 'medium', 'high']).default('medium'),
   timeout_seconds: z.number().int().positive().default(300),
   max_chunk_tokens: z.number().int().positive().default(8000),

@@ -178,7 +178,7 @@ Create `.reviewbridge.json` in your project root to customize review behavior:
 
 ```json
 {
-  "model": "gpt-5.2-codex",
+  "model": "gpt-5.4",
   "reasoning_effort": "medium",
   "timeout_seconds": 300,
   "max_chunk_tokens": 8000,
@@ -203,7 +203,26 @@ Create `.reviewbridge.json` in your project root to customize review behavior:
 
 All fields are optional. Missing fields use the defaults shown above. Large diffs are automatically split into chunks of approximately `max_chunk_tokens` tokens and reviewed sequentially.
 
-**Model options:** The default is `gpt-5.2-codex`. You can also use `gpt-5.3-codex` or other models supported by your account.
+### Model selection
+
+The default model is `gpt-5.4`. Set the `"model"` field in `.reviewbridge.json` to use a different model:
+
+```json
+{
+  "model": "gpt-5.3-codex"
+}
+```
+
+Any model supported by the Codex CLI works. Some common options:
+
+| Model | Description |
+|-------|-------------|
+| `gpt-5.4` | Flagship frontier model (default) |
+| `gpt-5.3-codex` | Optimized for complex software engineering |
+| `gpt-5.2-codex` | Stable, cost-effective option |
+| `gpt-5.1-codex-mini` | Smaller, faster variant |
+
+The model is passed to the Codex SDK at the thread level (`startThread({ model })`), so each review session uses whatever model is configured at the time.
 
 ## Storage
 
@@ -220,7 +239,7 @@ Defaults to `reviews.db` in the current directory. Set to `:memory:` for ephemer
 | Error | Fix |
 |-------|-----|
 | `AUTH_ERROR: No OpenAI API key found` | Run `codex login` to authenticate, or set `OPENAI_API_KEY`. Check that `~/.codex/auth.json` exists. |
-| `MODEL_ERROR: Model "X" is not supported` | Try `gpt-5.2-codex` or `gpt-5.3-codex`. Set `"model"` in `.reviewbridge.json`. |
+| `MODEL_ERROR: Model "X" is not supported` | Try `gpt-5.4` or `gpt-5.3-codex`. Set `"model"` in `.reviewbridge.json`. |
 | `NETWORK_ERROR: Could not reach OpenAI API` | Check your internet connection. |
 | `RATE_LIMITED: Rate limited by OpenAI` | Wait a moment and retry. |
 | `CODEX_TIMEOUT: review timed out` | Increase `"timeout_seconds"` in `.reviewbridge.json` (default: 300). |

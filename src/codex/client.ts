@@ -57,7 +57,8 @@ export function looksLikeDiff(text: string): boolean {
   const hasDiffGit = /^diff --git /m.test(text);
   const hasHunks = /^@@ /m.test(text);
   const hasFileHeaders = /^--- [ab]\//m.test(text) && /^\+\+\+ [ab]\//m.test(text);
-  return hasDiffGit || (hasFileHeaders && hasHunks);
+  // Require at least two structural markers to reduce false positives
+  return (hasDiffGit && (hasHunks || hasFileHeaders)) || (hasFileHeaders && hasHunks);
 }
 
 function isAbortError(e: unknown): boolean {
@@ -381,7 +382,8 @@ export function createCodexClient(
       if (input.diff.length > 20 && !looksLikeDiff(input.diff)) {
         return err<PrecommitResult>(
           `${ErrorCode.INVALID_INPUT}: Input doesn't look like a git diff. ` +
-          `Expected unified diff format (with 'diff --git', '---/+++', or '@@' markers).`,
+          `Expected unified diff format (with 'diff --git', '---/+++', or '@@' markers). ` +
+          `If reviewing a plan or description, use review_plan instead.`,
         );
       }
       const checklist = input.checklist ?? [];

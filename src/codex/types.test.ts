@@ -124,6 +124,46 @@ describe('CodeFindingSchema', () => {
     const result = CodeFindingSchema.safeParse({ ...validCodeFinding, severity: 'suggestion' });
     expect(result.success).toBe(false);
   });
+
+  it('coerces string line number to number', () => {
+    const result = CodeFindingSchema.safeParse({ ...validCodeFinding, line: '42' });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.line).toBe(42);
+    }
+  });
+
+  it('coerces empty string line to null', () => {
+    const result = CodeFindingSchema.safeParse({ ...validCodeFinding, line: '' });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.line).toBeNull();
+    }
+  });
+
+  it('coerces boolean line to null', () => {
+    const result = CodeFindingSchema.safeParse({ ...validCodeFinding, line: true });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.line).toBeNull();
+    }
+  });
+
+  it('accepts null line', () => {
+    const result = CodeFindingSchema.safeParse({ ...validCodeFinding, line: null });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.line).toBeNull();
+    }
+  });
+
+  it('accepts numeric line', () => {
+    const result = CodeFindingSchema.safeParse({ ...validCodeFinding, line: 10 });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.line).toBe(10);
+    }
+  });
 });
 
 describe('ReviewFindingSchema', () => {

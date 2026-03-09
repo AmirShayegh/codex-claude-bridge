@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createCodexClient } from './client.js';
+import { createCodexClient, looksLikeDiff } from './client.js';
 import type { ReviewBridgeConfig } from '../config/types.js';
 import { DEFAULT_CONFIG } from '../config/types.js';
 
@@ -75,6 +75,45 @@ const validPrecommitResponse = {
   blockers: [],
   warnings: ['Large diff'],
 };
+
+describe('looksLikeDiff', () => {
+  it('accepts standard git diff with headers and hunks', () => {
+    const diff = `diff --git a/src/foo.ts b/src/foo.ts
+--- a/src/foo.ts
++++ b/src/foo.ts
+@@ -1,3 +1,4 @@
++new line`;
+    expect(looksLikeDiff(diff)).toBe(true);
+  });
+
+  it('accepts diff with diff --git and hunks only', () => {
+    expect(looksLikeDiff('diff --git a/f b/f\n@@ -1 +1 @@\n-old\n+new')).toBe(true);
+  });
+
+  it('accepts diff with file headers and hunks (no diff --git)', () => {
+    expect(looksLikeDiff('--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new')).toBe(true);
+  });
+
+  it('rejects plain prose', () => {
+    expect(looksLikeDiff('This is a summary of my changes to the authentication system.')).toBe(false);
+  });
+
+  it('rejects prose that mentions diff --git without hunks', () => {
+    expect(looksLikeDiff('I ran diff --git and saw some changes in the auth module.')).toBe(false);
+  });
+
+  it('rejects empty string', () => {
+    expect(looksLikeDiff('')).toBe(false);
+  });
+
+  it('rejects text with only hunk markers (no file headers)', () => {
+    expect(looksLikeDiff('@@ -1,3 +1,4 @@\nsome content')).toBe(false);
+  });
+
+  it('accepts diff --git with file headers (no hunks)', () => {
+    expect(looksLikeDiff('diff --git a/f b/f\n--- a/f\n+++ b/f\ncontext line')).toBe(true);
+  });
+});
 
 describe('createCodexClient', () => {
   it('returns object with reviewPlan, reviewCode, reviewPrecommit', () => {

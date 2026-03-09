@@ -3,6 +3,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { loadConfig } from './config/loader.js';
 import { DEFAULT_CONFIG } from './config/types.js';
 import { createCodexClient } from './codex/client.js';
+import { loadCopilotInstructions } from './config/copilot-instructions.js';
+import type { CopilotInstructions } from './config/copilot-instructions.js';
 import { initDb } from './storage/reviews.js';
 import { initSessionsDb } from './storage/sessions.js';
 import { registerReviewPlanTool } from './tools/review-plan.js';
@@ -50,7 +52,17 @@ export function createServer(): McpServer {
   }
   const config = configResult.ok ? configResult.data : DEFAULT_CONFIG;
 
-  const client = createCodexClient(config);
+  let copilotInstr: CopilotInstructions | undefined;
+  if (config.copilot_instructions) {
+    const instrResult = loadCopilotInstructions();
+    if (instrResult.ok) {
+      copilotInstr = instrResult.data;
+    } else {
+      console.error(`Copilot instructions load failed, skipping: ${instrResult.error}`);
+    }
+  }
+
+  const client = createCodexClient(config, copilotInstr);
 
   const dbPath = process.env.REVIEW_BRIDGE_DB ?? 'reviews.db';
   let db: InstanceType<typeof Database>;

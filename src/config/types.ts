@@ -32,6 +32,7 @@ export const ReviewBridgeConfigSchema = z.object({
   max_chunk_tokens: z.number().int().positive().default(8000),
   review_standards: ReviewStandardsSchema.default(() => ReviewStandardsSchema.parse({})),
   project_context: z.string().default(''),
+  copilot_instructions: z.boolean().default(true),
 });
 
 export type ReviewBridgeConfig = z.infer<typeof ReviewBridgeConfigSchema>;

@@ -51,18 +51,21 @@ const PRECOMMIT_OUTPUT_RULES =
 
 export interface PlanReviewConfig {
   project_context: string;
+  copilot_instructions?: string;
   focus: string[];
   depth: 'quick' | 'thorough';
 }
 
 export interface CodeReviewConfig {
   project_context: string;
+  copilot_instructions?: string;
   criteria: string[];
   require_tests: boolean;
 }
 
 export interface PrecommitConfig {
   project_context: string;
+  copilot_instructions?: string;
   block_on: string[];
 }
 
@@ -83,6 +86,10 @@ export function buildPlanReviewPrompt(
 
   if (config?.project_context) {
     sections.push(`Project background: ${config.project_context}`);
+  }
+
+  if (config?.copilot_instructions) {
+    sections.push(`Project review guidelines (from repository instruction files):\n${config.copilot_instructions}`);
   }
 
   if (input.context) {
@@ -153,6 +160,10 @@ export function buildCodeReviewPrompt(
 
   if (config?.project_context) {
     sections.push(`Project background: ${config.project_context}`);
+  }
+
+  if (config?.copilot_instructions) {
+    sections.push(`Project review guidelines (from repository instruction files):\n${config.copilot_instructions}`);
   }
 
   if (input.context) {
@@ -226,6 +237,10 @@ export function buildPrecommitPrompt(
 
   if (config?.project_context) {
     sections.push(`Project background: ${config.project_context}`);
+  }
+
+  if (config?.copilot_instructions) {
+    sections.push(`Project review guidelines (from repository instruction files):\n${config.copilot_instructions}`);
   }
 
   if (input.checklist && input.checklist.length > 0) {

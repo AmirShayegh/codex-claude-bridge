@@ -87,6 +87,7 @@ describe('loadConfig', () => {
       timeout_seconds: 600,
       max_chunk_tokens: 12000,
       project_context: 'React app',
+      copilot_instructions: true,
       review_standards: {
         plan_review: {
           focus: ['security'],

@@ -98,6 +98,7 @@ describe('ReviewBridgeConfigSchema', () => {
       timeout_seconds: 600,
       max_chunk_tokens: 12000,
       project_context: 'React SPA with GraphQL backend',
+      copilot_instructions: true,
       review_standards: {
         plan_review: {
           focus: ['security', 'scalability'],

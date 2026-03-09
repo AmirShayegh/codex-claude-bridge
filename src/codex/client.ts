@@ -17,6 +17,9 @@ import {
 } from './prompts.js';
 import type { ReviewBridgeConfig } from '../config/types.js';
 import { chunkDiff, estimateTokens } from '../utils/chunking.js';
+import { filterByFiles, formatForPrompt } from '../config/copilot-instructions.js';
+import type { CopilotInstructions } from '../config/copilot-instructions.js';
+import { extractFilesFromDiff } from '../utils/diff-files.js';
 
 // Response schemas omit fields the reviewer doesn't produce
 const PlanReviewResponseSchema = PlanReviewResultSchema.omit({ session_id: true });
@@ -246,7 +249,10 @@ function mergePrecommitResults(
   };
 }
 
-export function createCodexClient(config: ReviewBridgeConfig): CodexClient {
+export function createCodexClient(
+  config: ReviewBridgeConfig,
+  copilotInstructions?: CopilotInstructions,
+): CodexClient {
   let codex: Codex;
   try {
     codex = new Codex();
@@ -264,6 +270,7 @@ export function createCodexClient(config: ReviewBridgeConfig): CodexClient {
     reviewPlan(input) {
       const prompt = buildPlanReviewPrompt(input, {
         project_context: config.project_context,
+        copilot_instructions: formatForPrompt(copilotInstructions),
         focus: config.review_standards.plan_review.focus,
         depth: config.review_standards.plan_review.depth,
       });
@@ -281,10 +288,13 @@ export function createCodexClient(config: ReviewBridgeConfig): CodexClient {
       const criteria = input.criteria && input.criteria.length > 0
         ? input.criteria
         : config.review_standards.code_review.criteria;
+      const files = extractFilesFromDiff(input.diff);
+      const instrText = formatForPrompt(filterByFiles(copilotInstructions, files));
       const variableOverhead = computeVariableOverhead([
         input.context ?? '',
         config.project_context,
         criteria.join(', '),
+        instrText,
       ]);
       // Floor of 500 prevents zero/negative budget when overhead exceeds max_chunk_tokens.
       // In practice this means very small max_chunk_tokens values may produce chunks
@@ -306,6 +316,7 @@ export function createCodexClient(config: ReviewBridgeConfig): CodexClient {
       if (chunks.length === 1) {
         const prompt = buildCodeReviewPrompt(input, {
           project_context: config.project_context,
+          copilot_instructions: instrText,
           criteria: config.review_standards.code_review.criteria,
           require_tests: config.review_standards.code_review.require_tests,
         });
@@ -321,6 +332,7 @@ export function createCodexClient(config: ReviewBridgeConfig): CodexClient {
       // Multi-chunk — sequential review with per-chunk timeout
       const codeConfig = {
         project_context: config.project_context,
+        copilot_instructions: instrText,
         criteria: config.review_standards.code_review.criteria,
         require_tests: config.review_standards.code_review.require_tests,
       };
@@ -348,9 +360,12 @@ export function createCodexClient(config: ReviewBridgeConfig): CodexClient {
 
     async reviewPrecommit(input) {
       const checklist = input.checklist ?? [];
+      const precommitFiles = extractFilesFromDiff(input.diff);
+      const precommitInstrText = formatForPrompt(filterByFiles(copilotInstructions, precommitFiles));
       const variableOverhead = computeVariableOverhead([
         config.project_context,
         checklist.join(', '),
+        precommitInstrText,
       ]);
       // Floor of 500 prevents zero/negative budget when overhead exceeds max_chunk_tokens.
       // In practice this means very small max_chunk_tokens values may produce chunks
@@ -372,6 +387,7 @@ export function createCodexClient(config: ReviewBridgeConfig): CodexClient {
       if (chunks.length === 1) {
         const prompt = buildPrecommitPrompt(input, {
           project_context: config.project_context,
+          copilot_instructions: precommitInstrText,
           block_on: config.review_standards.precommit.block_on,
         });
         return runReview<Omit<PrecommitResult, 'session_id' | 'chunks_reviewed'>>({
@@ -386,6 +402,7 @@ export function createCodexClient(config: ReviewBridgeConfig): CodexClient {
       // Multi-chunk — sequential review
       const precommitConfig = {
         project_context: config.project_context,
+        copilot_instructions: precommitInstrText,
         block_on: config.review_standards.precommit.block_on,
       };
       const chunkResults: Omit<PrecommitResult, 'chunks_reviewed'>[] = [];

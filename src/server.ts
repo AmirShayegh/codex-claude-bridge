@@ -83,7 +83,7 @@ export function createServer(): McpServer {
 
   try {
     const server = new McpServer(
-      { name: 'codex-claude-bridge', version: '0.1.3' },
+      { name: 'codex-claude-bridge', version: '0.1.4' },
       { instructions: SERVER_INSTRUCTIONS },
     );
 

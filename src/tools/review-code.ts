@@ -11,10 +11,15 @@ export function registerReviewCodeTool(server: McpServer, client: CodexClient, d
       description:
         'Get an independent code review of your changes before committing. ' +
         'Call this after writing or modifying code. Pass a git diff as input. ' +
+        'The diff parameter MUST contain actual git diff output (from git diff, gh pr diff, etc.), ' +
+        'NOT a summary or description of changes. ' +
         'If you reviewed a plan first, pass the same session_id so the reviewer checks the code against the plan. ' +
         'Returns a verdict (approve/request_changes/reject) and findings with file, line, severity, and suggestions.',
       inputSchema: {
-        diff: z.string().describe('Git diff to review'),
+        diff: z.string().describe(
+          'Raw git diff output to review. Must be unified diff format ' +
+          '(output of git diff, gh pr diff, etc.). Do NOT pass summaries or descriptions.',
+        ),
         context: z.string().optional().describe('Intent of the changes'),
         session_id: z.string().optional().describe('Continue from previous review'),
         criteria: z.array(z.string()).optional().describe('Review criteria to focus on'),

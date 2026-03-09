@@ -180,6 +180,33 @@ TS rules.`;
     }
   });
 
+  it('skips files with excludeAgent containing code-review in comma-separated list', () => {
+    mockReadFileSync.mockImplementation((path) => {
+      const p = String(path);
+      if (p.endsWith('copilot-instructions.md')) throw enoent();
+      if (p.endsWith('multi.instructions.md')) {
+        return `---
+applyTo: '**/*.yml'
+excludeAgent: 'coding-agent, code-review'
+---
+Multi-excluded.`;
+      }
+      return `---
+applyTo: '**/*.ts'
+---
+TS rules.`;
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    mockReaddirSync.mockReturnValue(['multi.instructions.md', 'ts.instructions.md'] as any);
+
+    const result = loadCopilotInstructions('/project');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.scoped).toHaveLength(1);
+      expect(result.data.scoped[0].filename).toBe('ts.instructions.md');
+    }
+  });
+
   it('skips files without applyTo', () => {
     mockReadFileSync.mockImplementation((path) => {
       if (String(path).endsWith('copilot-instructions.md')) throw enoent();
@@ -334,6 +361,19 @@ describe('filterByFiles', () => {
     };
     const result = filterByFiles(instr, ['src/App.tsx']);
     expect(result.scoped).toHaveLength(1);
+  });
+
+  it('handles non-matching glob patterns gracefully', () => {
+    const instr: CopilotInstructions = {
+      repoWide: null,
+      scoped: [
+        { applyTo: '[invalid', body: 'Bad glob', filename: 'bad.instructions.md' },
+        { applyTo: '**/*.ts', body: 'Good glob', filename: 'good.instructions.md' },
+      ],
+    };
+    const result = filterByFiles(instr, ['src/foo.ts']);
+    expect(result.scoped).toHaveLength(1);
+    expect(result.scoped[0].filename).toBe('good.instructions.md');
   });
 
   it('passes through instructions with no scoped entries', () => {

@@ -37,12 +37,28 @@ diff --git a/src/foo.ts b/src/foo.ts
     expect(extractFilesFromDiff(diff)).toEqual(['src/foo.ts']);
   });
 
-  it('handles renamed files (uses b/ path)', () => {
+  it('handles renamed files (captures both paths)', () => {
     const diff = `diff --git a/old-name.ts b/new-name.ts
 similarity index 90%
 rename from old-name.ts
 rename to new-name.ts`;
-    expect(extractFilesFromDiff(diff)).toEqual(['new-name.ts']);
+    expect(extractFilesFromDiff(diff)).toEqual(['old-name.ts', 'new-name.ts']);
+  });
+
+  it('handles deleted files (excludes dev/null)', () => {
+    const diff = `diff --git a/src/removed.ts b/dev/null
+deleted file mode 100644
+--- a/src/removed.ts
++++ /dev/null`;
+    expect(extractFilesFromDiff(diff)).toEqual(['src/removed.ts']);
+  });
+
+  it('handles new files (excludes dev/null)', () => {
+    const diff = `diff --git a/dev/null b/src/new-file.ts
+new file mode 100644
+--- /dev/null
++++ b/src/new-file.ts`;
+    expect(extractFilesFromDiff(diff)).toEqual(['src/new-file.ts']);
   });
 
   it('returns empty array for empty diff', () => {

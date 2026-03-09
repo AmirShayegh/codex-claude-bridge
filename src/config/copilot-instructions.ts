@@ -26,21 +26,28 @@ export function parseFrontmatter(content: string): {
   frontmatter: Record<string, string>;
   body: string;
 } {
-  const trimmed = content.trimStart();
-  if (!trimmed.startsWith('---')) {
+  const lines = content.trimStart().split('\n');
+  if (lines[0]?.trim() !== '---') {
     return { frontmatter: {}, body: content };
   }
 
-  const endIdx = trimmed.indexOf('---', 3);
-  if (endIdx === -1) {
+  // Find closing delimiter on its own line
+  let closeIdx = -1;
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === '---') {
+      closeIdx = i;
+      break;
+    }
+  }
+  if (closeIdx === -1) {
     return { frontmatter: {}, body: content };
   }
 
-  const fmBlock = trimmed.slice(3, endIdx).trim();
-  const body = trimmed.slice(endIdx + 3).trim();
+  const fmLines = lines.slice(1, closeIdx);
+  const body = lines.slice(closeIdx + 1).join('\n').trim();
 
   const frontmatter: Record<string, string> = {};
-  for (const line of fmBlock.split('\n')) {
+  for (const line of fmLines) {
     const colonIdx = line.indexOf(':');
     if (colonIdx === -1) continue;
     const key = line.slice(0, colonIdx).trim();
@@ -138,8 +145,8 @@ export function filterByFiles(
   if (files.length === 0) return { repoWide: instructions.repoWide, scoped: [] };
 
   const matched = instructions.scoped.filter(instr => {
-    const patterns = instr.applyTo.split(',').map(p => p.trim());
-    return files.some(file => patterns.some(pattern => picomatch(pattern)(file)));
+    const matchers = instr.applyTo.split(',').map(p => picomatch(p.trim()));
+    return files.some(file => matchers.some(m => m(file)));
   });
 
   return { repoWide: instructions.repoWide, scoped: matched };

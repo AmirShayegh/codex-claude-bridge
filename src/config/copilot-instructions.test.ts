@@ -92,6 +92,20 @@ excludeAgent: 'code-review'
 body`;
     expect(parseFrontmatter(content).frontmatter.excludeAgent).toBe('code-review');
   });
+
+  it('does not match --- inside body content', () => {
+    const content = `---
+applyTo: '**/*.ts'
+---
+Some text
+---
+More text after horizontal rule`;
+    const result = parseFrontmatter(content);
+    expect(result.frontmatter.applyTo).toBe('**/*.ts');
+    expect(result.body).toContain('Some text');
+    expect(result.body).toContain('---');
+    expect(result.body).toContain('More text after horizontal rule');
+  });
 });
 
 // ---------------------------------------------------------------------------

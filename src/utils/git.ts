@@ -8,7 +8,7 @@ const GIT_REF_PATTERN = /^[\w.\-/^~@{}]+$/;
 
 function execAsync(cmd: string): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    exec(cmd, { maxBuffer: MAX_BUFFER }, (error, stdout, stderr) => {
+    exec(cmd, { maxBuffer: MAX_BUFFER, timeout: 30_000 }, (error, stdout, stderr) => {
       if (error) {
         reject(Object.assign(error, { stderr }));
         return;

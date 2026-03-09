@@ -16,7 +16,10 @@ const BaseFindingFields = {
   category: z.string(),
   description: z.string(),
   file: z.string().nullable(),
-  line: z.number().int().positive().nullable(),
+  line: z.preprocess(
+    v => (v === '' || v === null || v === undefined ? null : v),
+    z.coerce.number().int().positive().nullable(),
+  ),
   suggestion: z.string().nullable(),
 };
 

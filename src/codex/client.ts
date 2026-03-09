@@ -53,6 +53,13 @@ export interface CodexClient {
   reviewPrecommit(input: PrecommitReviewInput): Promise<Result<PrecommitResult>>;
 }
 
+export function looksLikeDiff(text: string): boolean {
+  const hasDiffGit = /^diff --git /m.test(text);
+  const hasHunks = /^@@ /m.test(text);
+  const hasFileHeaders = /^--- [ab]\//m.test(text) && /^\+\+\+ [ab]\//m.test(text);
+  return hasDiffGit || (hasFileHeaders && hasHunks);
+}
+
 function isAbortError(e: unknown): boolean {
   if (e instanceof Error) {
     return e.name === 'AbortError' || e.message.toLowerCase().includes('aborted');
@@ -147,7 +154,12 @@ async function runReview<T extends Record<string, unknown>>(params: {
       turn = await thread.run(prompt, { outputSchema, signal });
     } catch (e: unknown) {
       if (isAbortError(e)) {
-        return err(`${ErrorCode.CODEX_TIMEOUT}: review timed out after ${config.timeout_seconds}s`);
+        const tokenEst = estimateTokens(prompt);
+        return err(
+          `${ErrorCode.CODEX_TIMEOUT}: review timed out after ${config.timeout_seconds}s ` +
+          `(prompt ~${tokenEst} tokens). ` +
+          `Try: increase timeout_seconds in .reviewbridge.json, reduce diff size, or check input format.`,
+        );
       }
       const classified = classifyError(e, { model: config.model });
       return err(`${classified.code}: ${classified.message}`);
@@ -284,6 +296,13 @@ export function createCodexClient(
     },
 
     async reviewCode(input) {
+      if (input.diff.length > 20 && !looksLikeDiff(input.diff)) {
+        return err<CodeReviewResult>(
+          `${ErrorCode.INVALID_INPUT}: Input doesn't look like a git diff. ` +
+          `Expected unified diff format (with 'diff --git', '---/+++', or '@@' markers). ` +
+          `If reviewing a plan or description, use review_plan instead.`,
+        );
+      }
       // Match prompt builder logic: empty array falls through to config criteria
       const criteria = input.criteria && input.criteria.length > 0
         ? input.criteria
@@ -359,6 +378,12 @@ export function createCodexClient(
     },
 
     async reviewPrecommit(input) {
+      if (input.diff.length > 20 && !looksLikeDiff(input.diff)) {
+        return err<PrecommitResult>(
+          `${ErrorCode.INVALID_INPUT}: Input doesn't look like a git diff. ` +
+          `Expected unified diff format (with 'diff --git', '---/+++', or '@@' markers).`,
+        );
+      }
       const checklist = input.checklist ?? [];
       const precommitFiles = extractFilesFromDiff(input.diff);
       const precommitInstrText = formatForPrompt(filterByFiles(copilotInstructions, precommitFiles));

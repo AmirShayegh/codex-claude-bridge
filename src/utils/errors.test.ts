@@ -62,6 +62,7 @@ describe('ErrorCode enum', () => {
     expect(ErrorCode.MODEL_ERROR).toBe('MODEL_ERROR');
     expect(ErrorCode.RATE_LIMITED).toBe('RATE_LIMITED');
     expect(ErrorCode.NETWORK_ERROR).toBe('NETWORK_ERROR');
+    expect(ErrorCode.INVALID_INPUT).toBe('INVALID_INPUT');
     expect(ErrorCode.UNKNOWN_ERROR).toBe('UNKNOWN_ERROR');
   });
 
@@ -73,8 +74,8 @@ describe('ErrorCode enum', () => {
     });
   });
 
-  it('has exactly 11 members', () => {
+  it('has exactly 12 members', () => {
     const keys = Object.keys(ErrorCode);
-    expect(keys).toHaveLength(11);
+    expect(keys).toHaveLength(12);
   });
 });

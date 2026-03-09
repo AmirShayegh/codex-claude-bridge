@@ -1,11 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createServer } from './server.js';
+import { createServer, SERVER_INSTRUCTIONS } from './server.js';
 import { err } from './utils/errors.js';
 
 let shouldThrow = false;
+let lastConstructorArgs: unknown[] = [];
 
 vi.mock('@modelcontextprotocol/sdk/server/mcp.js', () => {
-  function MockMcpServer() {
+  function MockMcpServer(...args: unknown[]) {
+    lastConstructorArgs = args;
     return {
       registerTool: vi.fn(),
       connect: vi.fn(),
@@ -62,6 +64,7 @@ import Database from 'better-sqlite3';
 beforeEach(() => {
   vi.clearAllMocks();
   shouldThrow = false;
+  lastConstructorArgs = [];
   vi.mocked(loadConfig).mockReturnValue({ ok: true, data: DEFAULT_CONFIG });
 });
 
@@ -121,5 +124,19 @@ describe('createServer', () => {
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('SQLITE_CANTOPEN'));
     expect(Database).toHaveBeenCalledTimes(2);
     consoleSpy.mockRestore();
+  });
+
+  it('passes server instructions to McpServer', () => {
+    createServer();
+    const [serverInfo, options] = lastConstructorArgs as [
+      { name: string; version: string },
+      { instructions?: string },
+    ];
+    expect(serverInfo.name).toBe('codex-claude-bridge');
+    expect(options.instructions).toBe(SERVER_INSTRUCTIONS);
+    expect(options.instructions).toContain('review_plan');
+    expect(options.instructions).toContain('review_code');
+    expect(options.instructions).toContain('review_precommit');
+    expect(options.instructions).toContain('session_id');
   });
 });

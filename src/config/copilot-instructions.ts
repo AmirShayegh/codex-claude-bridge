@@ -15,7 +15,9 @@ export interface CopilotInstructions {
   scoped: ScopedInstruction[];
 }
 
-const EMPTY: CopilotInstructions = { repoWide: null, scoped: [] };
+function empty(): CopilotInstructions {
+  return { repoWide: null, scoped: [] };
+}
 
 /**
  * Parse YAML-like frontmatter delimited by `---`.
@@ -119,7 +121,8 @@ export function loadCopilotInstructions(cwd?: string): Result<CopilotInstruction
     const { frontmatter, body } = parseFrontmatter(content);
 
     // Skip files excluded from code review
-    if (frontmatter.excludeAgent === 'code-review') continue;
+    const excluded = (frontmatter.excludeAgent ?? '').split(',').map(s => s.trim());
+    if (excluded.includes('code-review')) continue;
 
     // Skip files without applyTo (can't be auto-applied)
     if (!frontmatter.applyTo) continue;
@@ -140,7 +143,7 @@ export function filterByFiles(
   instructions: CopilotInstructions | undefined,
   files: string[],
 ): CopilotInstructions {
-  if (!instructions) return EMPTY;
+  if (!instructions) return empty();
   if (instructions.scoped.length === 0) return instructions;
   if (files.length === 0) return { repoWide: instructions.repoWide, scoped: [] };
 

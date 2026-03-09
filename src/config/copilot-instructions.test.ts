@@ -180,6 +180,33 @@ TS rules.`;
     }
   });
 
+  it('skips files with excludeAgent containing code-review in comma-separated list', () => {
+    mockReadFileSync.mockImplementation((path) => {
+      const p = String(path);
+      if (p.endsWith('copilot-instructions.md')) throw enoent();
+      if (p.endsWith('multi.instructions.md')) {
+        return `---
+applyTo: '**/*.yml'
+excludeAgent: 'coding-agent, code-review'
+---
+Multi-excluded.`;
+      }
+      return `---
+applyTo: '**/*.ts'
+---
+TS rules.`;
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    mockReaddirSync.mockReturnValue(['multi.instructions.md', 'ts.instructions.md'] as any);
+
+    const result = loadCopilotInstructions('/project');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.scoped).toHaveLength(1);
+      expect(result.data.scoped[0].filename).toBe('ts.instructions.md');
+    }
+  });
+
   it('skips files without applyTo', () => {
     mockReadFileSync.mockImplementation((path) => {
       if (String(path).endsWith('copilot-instructions.md')) throw enoent();

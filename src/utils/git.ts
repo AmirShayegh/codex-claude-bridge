@@ -57,6 +57,29 @@ export async function getDiffBetween(base: string, head: string): Promise<Result
   }
 }
 
+export async function getWorkingDiff(): Promise<Result<string>> {
+  try {
+    // Check if HEAD exists (fails on repos with no commits)
+    await execAsync('git rev-parse --verify HEAD');
+    const { stdout } = await execAsync('git diff HEAD --no-color');
+    return ok(stdout.trim());
+  } catch (e: unknown) {
+    // If HEAD doesn't exist (unborn repo), fall back to staged + unstaged
+    const stderr = (e as { stderr?: string }).stderr ?? '';
+    if (stderr.includes('HEAD')) {
+      try {
+        const staged = await execAsync('git diff --cached --no-color');
+        const unstaged = await execAsync('git diff --no-color');
+        const combined = [staged.stdout.trim(), unstaged.stdout.trim()].filter(Boolean).join('\n');
+        return ok(combined);
+      } catch (fallbackErr: unknown) {
+        return gitError(fallbackErr);
+      }
+    }
+    return gitError(e);
+  }
+}
+
 export async function isGitRepo(): Promise<boolean> {
   try {
     const { stdout } = await execAsync('git rev-parse --is-inside-work-tree');

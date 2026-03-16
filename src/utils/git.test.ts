@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { getStagedDiff, getUnstagedDiff, getDiffBetween, isGitRepo } from './git.js';
+import { getStagedDiff, getUnstagedDiff, getDiffBetween, getWorkingDiff, isGitRepo } from './git.js';
 
 vi.mock('node:child_process', () => ({ exec: vi.fn() }));
 
@@ -155,6 +155,85 @@ describe('isGitRepo', () => {
     mockSuccess('false\n');
     const result = await isGitRepo();
     expect(result).toBe(false);
+  });
+});
+
+describe('getWorkingDiff', () => {
+  it('returns diff vs HEAD when HEAD exists', async () => {
+    // First call: rev-parse --verify HEAD succeeds
+    // Second call: git diff HEAD returns diff
+    let callCount = 0;
+    mockExec.mockImplementation(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ((cmd: string, opts: any, cb: (err: Error | null, stdout: string, stderr: string) => void) => {
+        callCount++;
+        if (callCount === 1) {
+          cb(null, 'abc123\n', ''); // HEAD exists
+        } else {
+          cb(null, sampleDiff + '\n', '');
+        }
+      }) as typeof exec,
+    );
+
+    const result = await getWorkingDiff();
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data).toBe(sampleDiff);
+    }
+  });
+
+  it('returns empty string when HEAD exists but no changes', async () => {
+    let callCount = 0;
+    mockExec.mockImplementation(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ((cmd: string, opts: any, cb: (err: Error | null, stdout: string, stderr: string) => void) => {
+        callCount++;
+        if (callCount === 1) {
+          cb(null, 'abc123\n', '');
+        } else {
+          cb(null, '', '');
+        }
+      }) as typeof exec,
+    );
+
+    const result = await getWorkingDiff();
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data).toBe('');
+    }
+  });
+
+  it('falls back to staged + unstaged when HEAD does not exist', async () => {
+    let callCount = 0;
+    mockExec.mockImplementation(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ((cmd: string, opts: any, cb: (err: Error | null, stdout: string, stderr: string) => void) => {
+        callCount++;
+        if (callCount === 1) {
+          // rev-parse --verify HEAD fails on unborn repo
+          cb(Object.assign(new Error('HEAD'), { stderr: "fatal: Needed a single revision\nHEAD" }), '', "fatal: Needed a single revision\nHEAD");
+        } else if (callCount === 2) {
+          cb(null, sampleDiff + '\n', ''); // staged
+        } else {
+          cb(null, '', ''); // unstaged (empty)
+        }
+      }) as typeof exec,
+    );
+
+    const result = await getWorkingDiff();
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data).toBe(sampleDiff);
+    }
+  });
+
+  it('returns GIT_ERROR when not in a git repo', async () => {
+    mockFailure('fatal: not a git repository');
+    const result = await getWorkingDiff();
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('GIT_ERROR');
+    }
   });
 });
 

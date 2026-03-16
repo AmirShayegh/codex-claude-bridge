@@ -20,7 +20,8 @@ WORKFLOW: Use these tools in order during a feature lifecycle:
 1. review_plan — Call AFTER drafting an implementation plan, BEFORE writing code.
    Returns a verdict (approve/revise/reject) with findings. Save the session_id.
 
-2. review_code — Call AFTER writing or modifying code. Pass a git diff as input.
+2. review_code — Call AFTER writing or modifying code. Auto-captures working changes,
+   or pass a git diff explicitly for PR/branch reviews.
    Pass the session_id from review_plan so the reviewer checks code against the plan.
    Returns a verdict (approve/request_changes/reject) with file and line references.
 
@@ -41,7 +42,7 @@ ACTING ON RESULTS:
 - reject → Rethink the approach. Consider a new plan and start a fresh session.
 
 TIPS:
-- For review_code, capture the diff with git diff and pass it as the diff parameter.
+- review_code auto-captures working changes (git diff HEAD) — pass diff explicitly only for PR or branch diffs.
 - review_precommit auto-captures staged changes — no need to pass a diff manually.
 - You do not need to review every change. Use your judgement on when a review adds value.`;
 

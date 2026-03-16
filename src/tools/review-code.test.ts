@@ -16,8 +16,17 @@ vi.mock('../storage/sessions.js', () => ({
   activateSession: vi.fn(),
 }));
 
+vi.mock('../utils/resolve-diff.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../utils/resolve-diff.js')>();
+  return {
+    ...actual,
+    resolveCodeDiff: vi.fn(),
+  };
+});
+
 import { saveReview } from '../storage/reviews.js';
 import { getOrCreateSession, markSessionCompleted, markSessionFailed, activateSession } from '../storage/sessions.js';
+import { resolveCodeDiff } from '../utils/resolve-diff.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type HandlerFn = (args: Record<string, unknown>, extra: unknown) => Promise<any>;
@@ -50,6 +59,10 @@ beforeEach(() => {
     reviewPrecommit: vi.fn(),
   };
   mockServer = { registerTool: vi.fn() };
+  // Default: resolveCodeDiff passes through whatever diff is provided
+  vi.mocked(resolveCodeDiff).mockImplementation(async (args) => {
+    return ok(args.diff ?? 'auto-captured diff');
+  });
 });
 
 function setupHandler(db?: unknown) {
@@ -274,5 +287,68 @@ describe('registerReviewCodeTool with db', () => {
     await handler({ diff: 'some diff', session_id: 'thread_xyz' }, {});
 
     expect(markSessionCompleted).toHaveBeenCalledWith(mockDb, 'thread_xyz');
+  });
+});
+
+describe('review_code auto_diff', () => {
+  beforeEach(() => setupHandler());
+
+  it('auto-captures changes when diff is omitted', async () => {
+    vi.mocked(resolveCodeDiff).mockResolvedValue(ok('auto-captured diff'));
+    vi.mocked(mockClient.reviewCode).mockResolvedValue(ok(validResult));
+
+    await handler({}, {});
+
+    expect(resolveCodeDiff).toHaveBeenCalledWith({ diff: undefined, auto_diff: undefined });
+    expect(mockClient.reviewCode).toHaveBeenCalledWith(
+      expect.objectContaining({ diff: 'auto-captured diff' }),
+    );
+  });
+
+  it('passes explicit diff through resolveCodeDiff', async () => {
+    vi.mocked(resolveCodeDiff).mockResolvedValue(ok('explicit diff'));
+    vi.mocked(mockClient.reviewCode).mockResolvedValue(ok(validResult));
+
+    await handler({ diff: 'explicit diff' }, {});
+
+    expect(resolveCodeDiff).toHaveBeenCalledWith(
+      expect.objectContaining({ diff: 'explicit diff' }),
+    );
+  });
+
+  it('returns approve-shaped response when no working changes', async () => {
+    vi.mocked(resolveCodeDiff).mockResolvedValue(
+      err('NO_WORKING_CHANGES: No changes found vs HEAD.'),
+    );
+
+    const result = await handler({}, {});
+
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.verdict).toBe('approve');
+    expect(parsed.summary).toBe('No changes found to review.');
+    expect(parsed.findings).toEqual([]);
+    expect(parsed.session_id).toBe('');
+  });
+
+  it('returns MCP error when git fails', async () => {
+    vi.mocked(resolveCodeDiff).mockResolvedValue(
+      err('GIT_ERROR: fatal: not a git repository'),
+    );
+
+    const result = await handler({}, {});
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('GIT_ERROR');
+  });
+
+  it('does not call client.reviewCode when no working changes', async () => {
+    vi.mocked(resolveCodeDiff).mockResolvedValue(
+      err('NO_WORKING_CHANGES: No changes found vs HEAD.'),
+    );
+
+    await handler({}, {});
+
+    expect(mockClient.reviewCode).not.toHaveBeenCalled();
   });
 });

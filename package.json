@@ -1,6 +1,6 @@
 {
   "name": "codex-claude-bridge",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "MCP server that automates code review workflows between Claude Code and OpenAI Codex",
   "type": "module",
   "main": "./dist/index.js",

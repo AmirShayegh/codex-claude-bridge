@@ -1,0 +1,19 @@
+{
+  "content": "`resumeThread(id, options)` in @openai/codex-sdk does NOT strip `model` from the options it forwards to the Codex binary. Internally, `Thread.run()` calls `_exec.run({ ...options, threadId })`, and `_exec.run` unconditionally appends `--model <value>` whenever the field is present (see `node_modules/@openai/codex-sdk/dist/index.js:170`). So passing `{ model: 'X' }` to `resumeThread` will reassert model X over the thread's original model for that turn — breaking any flow that assumed resumed threads inherit silently. Always omit `model` when calling `resumeThread`. The codex-claude-bridge codebase uses a dedicated `resumeThreadOpts(config)` helper that destructures model out.",
+  "context": "Discovered during T-011 (per-call model override) review cycle on 2026-04-23. The initial implementation passed `threadOpts(config)` — which includes config.model — to both startThread and resumeThread. For a multi-chunk review where chunk 1 used an override model and chunk 2 resumed, the SDK would forward `--model config.model` to the CLI on resume, overriding the chunk-1 thread's actual model. Copilot caught this during PR review and the SDK implementation confirmed the root cause. Fixed in commit `424b808` by introducing `resumeThreadOpts(config)` that omits model entirely. Future work involving thread resumption in this codebase must use `resumeThreadOpts`, never `threadOpts`.",
+  "createdDate": "2026-04-23",
+  "id": "L-005",
+  "lastValidated": "2026-04-23",
+  "reinforcements": 0,
+  "source": "review",
+  "status": "active",
+  "supersedes": null,
+  "tags": [
+    "codex-sdk",
+    "thread-resumption",
+    "gotcha",
+    "architecture"
+  ],
+  "title": "@openai/codex-sdk forwards --model to CLI on resume too",
+  "updatedDate": "2026-04-23"
+}

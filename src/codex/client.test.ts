@@ -471,6 +471,38 @@ describe('error classification', () => {
     }
   });
 
+  it('surfaces ChatGPT-account fallback tip for rolling-out models', async () => {
+    mockRun.mockRejectedValue(
+      new Error(`The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account.`),
+    );
+
+    const client = createCodexClient(config);
+    const result = await client.reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('MODEL_ERROR');
+      expect(result.error).toContain('gpt-5.5');
+      expect(result.error).toContain('Fall back to gpt-5.4');
+      expect(result.error).toContain('.reviewbridge.json');
+      expect(result.error).not.toContain('Try gpt-5.5 or gpt-5.4,');
+    }
+  });
+
+  it('uses generic MODEL_ERROR tip when ChatGPT account is not mentioned', async () => {
+    mockRun.mockRejectedValue(new Error('The model "phantom-99" is not supported'));
+
+    const client = createCodexClient(config);
+    const result = await client.reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('MODEL_ERROR');
+      expect(result.error).toContain('Try gpt-5.5 or gpt-5.4');
+      expect(result.error).not.toContain('ChatGPT-tier Codex');
+    }
+  });
+
   it('does NOT match when "model" and "not supported" are in different sentences', async () => {
     mockRun.mockRejectedValue(new Error('The current model works fine. However, the operation is not supported.'));
 

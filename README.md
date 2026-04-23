@@ -241,6 +241,7 @@ Defaults to `reviews.db` in the current directory. Set to `:memory:` for ephemer
 |-------|-----|
 | `AUTH_ERROR: No OpenAI API key found` | Run `codex login` to authenticate, or set `OPENAI_API_KEY`. Check that `~/.codex/auth.json` exists. |
 | `MODEL_ERROR: Model "X" is not supported` | Try `gpt-5.5` or `gpt-5.4`. Set `"model"` in `.reviewbridge.json`. |
+| `MODEL_ERROR: ... when using Codex with a ChatGPT account` | The model is still rolling out to ChatGPT-tier Codex. Set `"model": "gpt-5.4"` in `.reviewbridge.json`, or switch to API-key auth via `OPENAI_API_KEY`. |
 | `NETWORK_ERROR: Could not reach OpenAI API` | Check your internet connection. |
 | `RATE_LIMITED: Rate limited by OpenAI` | Wait a moment and retry. |
 | `CODEX_TIMEOUT: review timed out` | Increase `"timeout_seconds"` in `.reviewbridge.json` (default: 300). |

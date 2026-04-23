@@ -93,12 +93,20 @@ export function classifyError(
   );
   if (modelErrorMatch) {
     const modelName = modelErrorMatch[1] ?? context?.model ?? 'your configured model';
+    // ChatGPT-subscription Codex auth lags API availability by a few days after
+    // OpenAI announces a new flagship model. When that happens the raw error
+    // explicitly mentions the ChatGPT account — surface a targeted fallback tip
+    // so Claude Code can auto-set "model": "gpt-5.4" in .reviewbridge.json
+    // instead of leaving the user stuck.
+    const isChatGptAccountLimitation = /chatgpt\s+account/i.test(raw);
+    const tip = isChatGptAccountLimitation
+      ? `This model may still be rolling out to ChatGPT-tier Codex. ` +
+        `Fall back to gpt-5.4 by setting "model": "gpt-5.4" in .reviewbridge.json, ` +
+        `or use an API key (OPENAI_API_KEY) instead of the ChatGPT subscription auth.`
+      : `Try gpt-5.5 or gpt-5.4, or configure a different model in .reviewbridge.json.`;
     return {
       code: ErrorCode.MODEL_ERROR,
-      message:
-        `Model "${modelName}" is not supported. ` +
-        `Try gpt-5.5 or gpt-5.4, or configure a different model in .reviewbridge.json. ` +
-        `Original error: ${raw}`,
+      message: `Model "${modelName}" is not supported. ${tip} Original error: ${raw}`,
     };
   }
 

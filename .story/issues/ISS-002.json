@@ -1,0 +1,19 @@
+{
+  "components": [
+    "repo-hygiene"
+  ],
+  "discoveredDate": "2026-04-23",
+  "id": "ISS-002",
+  "impact": "temp/ was used ad-hoc for scratch files (most recently the GPT-5.5 announcement PDF referenced during the v0.3.0 release). Now gitignored as of commit 98eedf5. Confirmation issue only — nothing sensitive has been committed, but worth noting as a convention so future contributors use temp/ for throwaway reference material rather than the project root.",
+  "location": [
+    "temp/",
+    ".gitignore"
+  ],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": null,
+  "resolvedDate": null,
+  "severity": "low",
+  "status": "open",
+  "title": "temp/ working folder housekeeping"
+}

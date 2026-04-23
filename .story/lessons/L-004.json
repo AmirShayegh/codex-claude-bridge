@@ -1,0 +1,18 @@
+{
+  "content": "src/config/ must NOT import from src/codex/. The dependency direction is codex → config, never the reverse. Shared types that both layers need (e.g. severity enums) are duplicated at the config boundary rather than imported from codex/, specifically to prevent circular imports that bit the project during Phase 1A. When adding a new config field that references a codex concept, duplicate the enum/type at the config boundary and add a test that validates the two copies stay in sync.",
+  "context": "Established during Phase 1A core types + config — 2026-02-18 handover. The severity enum in src/config/types.ts (BlockOnSeveritySchema) is a deliberate duplicate of the one in src/codex/types.ts. A future \"just consolidate the enum\" refactor would re-introduce the circular import this pattern was set up to avoid.",
+  "createdDate": "2026-04-23",
+  "id": "L-004",
+  "lastValidated": "2026-04-23",
+  "reinforcements": 0,
+  "source": "postmortem",
+  "status": "active",
+  "supersedes": null,
+  "tags": [
+    "architecture",
+    "dependencies",
+    "anti-pattern"
+  ],
+  "title": "Config layer must not import from codex layer",
+  "updatedDate": "2026-04-23"
+}

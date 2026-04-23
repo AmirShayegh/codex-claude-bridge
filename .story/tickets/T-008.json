@@ -1,0 +1,14 @@
+{
+  "blockedBy": [
+    "T-005"
+  ],
+  "completedDate": null,
+  "createdDate": "2026-04-23",
+  "description": "New module src/config/presets.ts defining 5 built-in presets: security-audit (thorough, OWASP + injection + auth + secrets + crypto checklist), quick-scan (quick, crash/security/API-contract only), performance (thorough, N+1 + unbounded + blocking + memory checklist), pre-commit (quick, debug/secrets/imports/conflict-markers), api-review (standard, REST conventions + schema + errors + auth + breaking changes). Each preset: { focus, depth, checklist, description }. Wire optional `preset` field into review_plan, review_code, review_precommit, and review_pr input schemas. Explicit params override preset values. Unknown preset name → error listing available. Acceptance: preset resolves to the documented bundle; explicit params win; custom presets from config take precedence over built-ins with the same name (covered by T-009). Source: docs/phase_1.2.md:363-496.",
+  "id": "T-008",
+  "order": 20,
+  "phase": "polish",
+  "status": "open",
+  "title": "Built-in review presets",
+  "type": "feature"
+}

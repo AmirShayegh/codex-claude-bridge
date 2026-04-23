@@ -1,0 +1,15 @@
+{
+  "blockedBy": [
+    "T-003",
+    "T-004"
+  ],
+  "completedDate": null,
+  "createdDate": "2026-04-23",
+  "description": "New handler src/tools/review-pr.ts. Input schema: { pr_number: number (required), focus?: string[], depth?: 'quick' | 'thorough', session_id?: string }. Calls github.ts to fetch diff + metadata, then the Codex client with buildPrReviewPrompt. Returns PrReviewResult extending CodeReviewResult with { pr_number: number, pr_title: string }. Register in src/server.ts alongside the existing 5 tools. Reuses the chunking path from Phase 4 for large PRs. Acceptance: full tool handler test with mocked github + Codex client; integration test verifies registration in the tool list.",
+  "id": "T-005",
+  "order": 30,
+  "phase": "team-integration",
+  "status": "open",
+  "title": "review_pr MCP tool handler",
+  "type": "feature"
+}

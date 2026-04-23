@@ -1,0 +1,19 @@
+{
+  "content": "The @openai/codex-sdk is a thin TypeScript wrapper around the `codex exec --experimental-json` subprocess. When no OPENAI_API_KEY is set, `new Codex()` automatically reads OAuth tokens from ~/.codex/auth.json created by `codex login`. Structured output via outputSchema works on the ChatGPT subscription tier. Do NOT propose building a separate CLI adapter, provider_mode config, or subprocess management — the SDK already handles all of it.",
+  "context": "Original roadmap_1.1.md Phase 3 planned a CLI adapter with provider_mode: 'sdk' | 'cli'. A 2026-02-20 spike proved the SDK already spawns the CLI internally, so Phase 3 became documentation-only (README rewrite for the free-tier path). This lesson exists specifically to stop future contributors re-proposing the cut work. See docs/roadmap_1.1.md:105-119 and handover 2026-02-20-readme-and-doc-cleanup.",
+  "createdDate": "2026-04-23",
+  "id": "L-002",
+  "lastValidated": "2026-04-23",
+  "reinforcements": 0,
+  "source": "postmortem",
+  "status": "active",
+  "supersedes": null,
+  "tags": [
+    "codex-sdk",
+    "architecture",
+    "anti-pattern",
+    "auth"
+  ],
+  "title": "@openai/codex-sdk spawns the CLI — do not build a separate adapter",
+  "updatedDate": "2026-04-23"
+}

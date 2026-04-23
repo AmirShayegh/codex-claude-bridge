@@ -1,0 +1,56 @@
+{
+  "blockers": [],
+  "date": "2026-04-23",
+  "phases": [
+    {
+      "description": "MCP server over stdio, five tool handlers (review_plan, review_code, review_precommit, review_status, review_history), Codex SDK wrapper with thread/session management, Zod config loader, SQLite storage for reviews and sessions, git diff utilities, and chunking module. Shipped v0.1.0 (tagged d67f742). Documented across handovers 2026-02-18 project-scaffold through 2026-02-19 phase4-publish-prep.",
+      "id": "foundation",
+      "label": "PHASE 1",
+      "name": "Foundation",
+      "summary": "Core MCP server + 5 tools + SDK + SQLite (v0.1.0)"
+    },
+    {
+      "description": "Rewrite prompt builders with severity rubrics (critical/major/minor/suggestion/nitpick), config injection (project_context, review_standards), output discipline (JSON-only, no markdown), and checklists per review type. Map Codex SDK errors to actionable messages (AUTH_ERROR, MODEL_ERROR, RATE_LIMITED, NETWORK_ERROR, CODEX_TIMEOUT). Shipped v0.2.0. Documented in handover 2026-02-20-prompt-quality-and-error-messages.",
+      "id": "quality",
+      "label": "PHASE 2",
+      "name": "Quality",
+      "summary": "Prompt rewrite + severity rubrics + actionable errors (v0.2.0)"
+    },
+    {
+      "description": "README overhaul leading with the $0 ChatGPT-subscription auth path. Standalone CLI via Commander (review-plan, review-code, review-precommit subcommands) sharing prompt builders, Codex client, and config loader with the MCP server. Free-tier SDK spike proved no code adapter needed (SDK reads OAuth from ~/.codex/auth.json). Shipped v0.1.2. Documented in handovers 2026-02-20-readme-and-doc-cleanup and 2026-02-20-standalone-cli.",
+      "id": "adoption",
+      "label": "PHASE 3",
+      "name": "Adoption",
+      "summary": "README $0 pitch + standalone Commander CLI + free-tier docs (v0.1.2)"
+    },
+    {
+      "description": "Wire chunking module into review pipeline for large diffs (ce058b3). Add auto_diff parameter to review_code to match review_precommit ergonomics (37987dc). Validate diff input, provide actionable timeouts, auto-discover GitHub Copilot instruction files as project context (55e8692). Two known defects remain: multi-chunk session orphaning on partial failure, and non-atomic saveReview + markSessionCompleted. Shipped piecewise across v0.1.2 and v0.2.0.",
+      "id": "reliability",
+      "label": "PHASE 4",
+      "name": "Reliability",
+      "summary": "Chunking wired + auto_diff + validation + defects to fix"
+    },
+    {
+      "description": "Keep default model current with OpenAI releases. Make install instructions cache-safe so npx re-resolves on every launch. v0.3.0 shipped gpt-5.5 as the default (commit 5ea2f56), pinned @latest in all README install/usage examples, updated the model table to include gpt-5.5 (400K context in Codex) while keeping gpt-5.4 as a documented fallback, and normalized the bin path + gitignored the temp/ working folder (commit 98eedf5). Recurring phase: bumps on future OpenAI releases land here.",
+      "id": "model-currency",
+      "label": "PHASE 5",
+      "name": "Model Currency",
+      "summary": "Default model + install pin currency (v0.3.0 = gpt-5.5)"
+    },
+    {
+      "description": "Make the review loop useful for teams reviewing GitHub PRs. Adds a sixth MCP tool (review_pr) and a fourth CLI subcommand (review-pr). Fetches PR diff and metadata via `gh pr diff` and `gh pr view --json`, feeds PR title + description + diff to a PR-specific prompt, and returns scope-match and description-match as regular findings (not top-level fields, to keep the result type consistent with review_code). No storage changes needed.",
+      "id": "team-integration",
+      "label": "PHASE 6",
+      "name": "Team Integration",
+      "summary": "review_pr tool + CLI, PR diff + metadata via gh"
+    },
+    {
+      "description": "Named review presets (security-audit, quick-scan, performance, pre-commit, api-review) as sugar over focus + depth + checklist parameters. Custom presets definable in .reviewbridge.json. MCP progress notifications for long-running reviews, gated on a research spike that confirms Claude Code actually renders them — if not, that work is cut.",
+      "id": "polish",
+      "label": "PHASE 7",
+      "name": "Polish",
+      "summary": "Review presets + MCP progress notifications (gated)"
+    }
+  ],
+  "title": "codex-claude-bridge"
+}

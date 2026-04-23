@@ -1,0 +1,14 @@
+{
+  "blockedBy": [
+    "T-008"
+  ],
+  "completedDate": null,
+  "createdDate": "2026-04-23",
+  "description": "Extend the Zod config schema with `presets: Record<string, Preset>` where Preset matches the built-in shape ({ focus, depth, checklist, description }). Custom presets override built-ins with the same name. Add `codex-claude-bridge presets` list subcommand and include custom presets in --help and \"unknown preset\" error output. Acceptance: custom preset defined in .reviewbridge.json resolves and overrides any built-in with the same key; list subcommand prints built-ins and custom together.",
+  "id": "T-009",
+  "order": 30,
+  "phase": "polish",
+  "status": "open",
+  "title": "Custom presets via .reviewbridge.json",
+  "type": "feature"
+}

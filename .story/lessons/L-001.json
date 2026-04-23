@@ -1,0 +1,19 @@
+{
+  "content": "In Zod v4, `.default({})` on a nested object schema does NOT cascade inner field defaults — the `{}` is used literally, so inner fields remain undefined. Use `.default(() => Schema.parse({}))` (function form) so each parse gets a fresh defaulted object. The static form `.default(Schema.parse({}))` shares array/object references across parses, causing mutation leaks between consumers.",
+  "context": "Discovered during Phase 1A (core types + config) — 2026-02-18 handover. Still load-bearing: src/config/types.ts relies on the function-form default for ReviewStandardsSchema, PlanReviewStandardsSchema, CodeReviewStandardsSchema, PrecommitStandardsSchema. Any future nested-default addition must follow the same pattern. Regression test lives in src/config/loader.test.ts around the mutation-isolation case.",
+  "createdDate": "2026-04-23",
+  "id": "L-001",
+  "lastValidated": "2026-04-23",
+  "reinforcements": 0,
+  "source": "postmortem",
+  "status": "active",
+  "supersedes": null,
+  "tags": [
+    "zod",
+    "config",
+    "gotcha",
+    "typescript"
+  ],
+  "title": "Zod v4: nested defaults don't cascade",
+  "updatedDate": "2026-04-23"
+}

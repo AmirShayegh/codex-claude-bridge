@@ -1,0 +1,14 @@
+{
+  "blockedBy": [
+    "T-007"
+  ],
+  "completedDate": null,
+  "createdDate": "2026-04-23",
+  "description": "Only build if T-007 confirms Claude Code actually renders MCP progress notifications. Tool handlers accept an MCP progress callback and pass it to the Codex client. src/codex/client.ts emits \"Reviewing chunk N of M...\" heartbeats during chunked reviews and a simple \"Reviewing...\" heartbeat for single-chunk reviews. Falls back silently when the MCP client doesn't support progress. Acceptance: progress notifications emitted at the expected boundaries; no regression when client ignores them. If T-007 negative: close this ticket as \"won't do\" and reference the lesson.",
+  "id": "T-010",
+  "order": 40,
+  "phase": "polish",
+  "status": "open",
+  "title": "MCP progress notifications (gated on T-007)",
+  "type": "feature"
+}

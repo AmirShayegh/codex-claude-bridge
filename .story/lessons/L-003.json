@@ -1,0 +1,18 @@
+{
+  "content": "For a brand-new review, the Codex thread/session ID does not exist until after the first SDK call returns. Any session-tracking logic that needs to activate state pre-flight only works for RESUMED sessions where the ID is passed in. New-review code must defer session activation until after the client call completes, then record the returned session_id.",
+  "context": "Discovered building the storage layer — 2026-02-19 handover. Shaped the session lifecycle in src/storage/session-tracker.ts: sessions transition in_progress → completed/failed, but the in_progress row is only inserted after the SDK returns a thread ID. Relevant when fixing T-001 (multi-chunk orphaning) because the partial-failure path needs to use the real thread ID, not a placeholder.",
+  "createdDate": "2026-04-23",
+  "id": "L-003",
+  "lastValidated": "2026-04-23",
+  "reinforcements": 0,
+  "source": "postmortem",
+  "status": "active",
+  "supersedes": null,
+  "tags": [
+    "storage",
+    "session-lifecycle",
+    "codex-sdk"
+  ],
+  "title": "Codex session ID is unknowable before the first API call",
+  "updatedDate": "2026-04-23"
+}

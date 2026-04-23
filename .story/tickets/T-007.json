@@ -1,0 +1,12 @@
+{
+  "blockedBy": [],
+  "completedDate": null,
+  "createdDate": "2026-04-23",
+  "description": "Before investing in progress/streaming support for long-running reviews, confirm Claude Code actually renders MCP progress notifications. Write a trivial test MCP server that emits progress notifications during a long-running tool call. Connect it to Claude Code. Observe. If progress is visible: document the notification shape (params, payload constraints, rate limits) so T-010 can implement correctly. If not visible: file a lesson capturing the negative result and close T-010. Acceptance: a lesson or doc note capturing the conclusion. Source: docs/roadmap_1.1.md:122-144, phases_1.1.md:110.",
+  "id": "T-007",
+  "order": 10,
+  "phase": "polish",
+  "status": "open",
+  "title": "Research spike: does Claude Code render MCP progress notifications?",
+  "type": "task"
+}

@@ -1,0 +1,12 @@
+{
+  "blockedBy": [],
+  "completedDate": null,
+  "createdDate": "2026-04-23",
+  "description": "src/storage/session-tracker.ts recordSuccess() calls saveReview() then markSessionCompleted() as separate statements. If saveReview fails the session is still marked complete — producing inconsistent state where review_history returns no row but review_status reports completed. Wrap both in a single transaction via db.transaction(() => { ... })(). Acceptance: test with a mock saveReview that throws asserts the session is NOT marked complete. Source: docs/roadmap_1.1.md:158.",
+  "id": "T-002",
+  "order": 20,
+  "phase": "reliability",
+  "status": "open",
+  "title": "Atomicity for saveReview and markSessionCompleted",
+  "type": "task"
+}

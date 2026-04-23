@@ -1,0 +1,14 @@
+{
+  "blockedBy": [
+    "T-005"
+  ],
+  "completedDate": null,
+  "createdDate": "2026-04-23",
+  "description": "Add `codex-claude-bridge review-pr --pr <number>` via src/cli/commands.ts using the existing createHandler factory in src/cli/handlers.ts. Same optional flags as review-code (--focus, --depth, --session, --config, --json). Formatter prints `PR #N: \"<title>\" by @<author>` as a header before the findings list; scope-match and description-match findings render inline like any other finding. Acceptance: CLI integration test with mocked Codex client verifies stdout includes PR header and formatted findings; --json output is valid JSON.",
+  "id": "T-006",
+  "order": 40,
+  "phase": "team-integration",
+  "status": "open",
+  "title": "review-pr CLI subcommand",
+  "type": "feature"
+}

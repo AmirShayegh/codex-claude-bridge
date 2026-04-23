@@ -1,0 +1,14 @@
+{
+  "blockedBy": [
+    "T-003"
+  ],
+  "completedDate": null,
+  "createdDate": "2026-04-23",
+  "description": "Add buildPrReviewPrompt() to src/codex/prompts.ts. Reuses the code-review severity rubric, checklist, and output discipline from buildCodeReviewPrompt. Adds PR-specific checks: does the diff match what the PR description claims, are there files changed that seem unrelated to the stated purpose, is the PR oversized (>500 lines → suggest splitting). Scope-mismatch and description-mismatch surface as regular findings with category `pr-scope` / `pr-description` — NOT top-level result fields, to keep PrReviewResult a simple extension of CodeReviewResult. Config injection matches buildCodeReviewPrompt (user params override config defaults). Truncate PR body to 2000 chars in the prompt.",
+  "id": "T-004",
+  "order": 20,
+  "phase": "team-integration",
+  "status": "open",
+  "title": "buildPrReviewPrompt builder with PR-specific checks",
+  "type": "task"
+}

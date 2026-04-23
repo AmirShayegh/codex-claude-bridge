@@ -1,0 +1,22 @@
+{
+  "features": {
+    "handovers": true,
+    "issues": true,
+    "reviews": true,
+    "roadmap": true,
+    "tickets": true
+  },
+  "language": "typescript",
+  "project": "codex-claude-bridge",
+  "schemaVersion": 1,
+  "type": "npm",
+  "version": 2,
+  "recipeOverrides": {
+    "stages": {
+      "TEST": {
+        "enabled": true,
+        "command": "npm test"
+      }
+    }
+  }
+}

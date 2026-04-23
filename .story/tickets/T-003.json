@@ -1,0 +1,12 @@
+{
+  "blockedBy": [],
+  "completedDate": null,
+  "createdDate": "2026-04-23",
+  "description": "New module src/utils/github.ts. Uses `gh pr diff <number>` for the diff and `gh pr view <number> --json title,body,baseRefName,headRefName,author` for metadata. Returns { title, body, baseBranch, headBranch, author, diff }. Strip markdown from body before returning; truncate to 2000 chars. Distinct Result errors for each failure: gh not installed, gh not authenticated, PR not found, not a git repo. No thrown exceptions — match the project's Result<T> convention. Acceptance: each error path has a dedicated test via mocked child_process.",
+  "id": "T-003",
+  "order": 10,
+  "phase": "team-integration",
+  "status": "open",
+  "title": "Fetch PR diff + metadata via gh CLI (src/utils/github.ts)",
+  "type": "task"
+}

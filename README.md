@@ -120,6 +120,7 @@ Send an implementation plan to Codex for architectural/feasibility review.
 | `focus` | string[] | no | Review focus areas (e.g. `["architecture", "security"]`) |
 | `depth` | `"quick"` \| `"thorough"` | no | Review depth |
 | `session_id` | string | no | Continue from a previous review session |
+| `model` | string | no | Override the configured default model for this call (e.g. `"gpt-5.4"`). Incompatible with `session_id`. |
 
 Returns: `{ verdict, summary, findings[], session_id }`
 
@@ -133,6 +134,7 @@ Send a code diff to Codex for code review.
 | `context` | string | no | Intent of the changes |
 | `session_id` | string | no | Continue from previous review (e.g. plan review session) |
 | `criteria` | string[] | no | Review criteria (e.g. `["bugs", "security", "performance"]`) |
+| `model` | string | no | Override the configured default model for this call (e.g. `"gpt-5.4"`). Incompatible with `session_id`. |
 
 Returns: `{ verdict, summary, findings[], session_id }`
 
@@ -148,6 +150,7 @@ Quick pre-commit sanity check. Auto-captures staged git changes by default.
 | `diff` | string | no | Explicit diff instead of auto-capture |
 | `session_id` | string | no | Continue from previous review |
 | `checklist` | string[] | no | Custom pre-commit checks |
+| `model` | string | no | Override the configured default model for this call (e.g. `"gpt-5.4"`). Incompatible with `session_id`. |
 
 Returns: `{ ready_to_commit, blockers[], warnings[], session_id }`
 

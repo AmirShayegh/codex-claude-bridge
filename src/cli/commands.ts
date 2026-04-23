@@ -110,6 +110,7 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
     .option('--focus <items>', 'Comma-separated focus areas')
     .addOption(new Option('--depth <level>', 'Review depth').choices(['quick', 'thorough']))
     .option('--session <id>', 'Resume session')
+    .option('--model <name>', 'Override the configured default model (e.g., gpt-5.4)')
     .option('--config <path>', 'Path to .reviewbridge.json directory')
     .option('--json', 'Raw JSON output')
     .action(async (opts) => {
@@ -134,6 +135,9 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
             focus: opts.focus ? opts.focus.split(',').map((s: string) => s.trim()).filter(Boolean) : undefined,
             depth: opts.depth,
             session_id: opts.session,
+            // Normalize empty string to undefined so the client picks config
+            // default (matches MCP's z.string().min(1) behavior).
+            model: opts.model?.trim() || undefined,
           }),
         format: formatPlanResult,
         exitCode: () => 0,
@@ -148,6 +152,7 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
     .requiredOption('--diff <path>', 'File path or "-" for stdin')
     .option('--focus <items>', 'Comma-separated review criteria')
     .option('--session <id>', 'Resume session')
+    .option('--model <name>', 'Override the configured default model (e.g., gpt-5.4)')
     .option('--config <path>', 'Path to .reviewbridge.json directory')
     .option('--json', 'Raw JSON output')
     .action(async (opts) => {
@@ -171,6 +176,7 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
             diff: inputResult.data,
             criteria: opts.focus ? opts.focus.split(',').map((s: string) => s.trim()).filter(Boolean) : undefined,
             session_id: opts.session,
+            model: opts.model?.trim() || undefined,
           }),
         format: formatCodeResult,
         exitCode: () => 0,
@@ -184,6 +190,7 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
     .description('Quick pre-commit sanity check on staged changes')
     .option('--diff <path>', 'Override auto-capture (path or "-" for stdin)')
     .option('--session <id>', 'Resume session')
+    .option('--model <name>', 'Override the configured default model (e.g., gpt-5.4)')
     .option('--config <path>', 'Path to .reviewbridge.json directory')
     .option('--json', 'Raw JSON output')
     .action(async (opts) => {
@@ -218,6 +225,7 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
           return client.reviewPrecommit({
             diff: diffResult.data,
             session_id: opts.session,
+            model: opts.model?.trim() || undefined,
           });
         },
         format: formatPrecommitResult,

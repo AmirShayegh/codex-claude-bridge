@@ -32,6 +32,7 @@ interface PlanReviewInput {
   focus?: string[];
   depth?: 'quick' | 'thorough';
   session_id?: string;
+  model?: string;
 }
 
 interface CodeReviewInput {
@@ -39,12 +40,14 @@ interface CodeReviewInput {
   context?: string;
   criteria?: string[];
   session_id?: string;
+  model?: string;
 }
 
 interface PrecommitReviewInput {
   diff: string;
   checklist?: string[];
   session_id?: string;
+  model?: string;
 }
 
 export interface CodexClient {
@@ -129,13 +132,32 @@ export function classifyError(
   return { code: ErrorCode.UNKNOWN_ERROR, message: raw };
 }
 
-function threadOpts(config: ReviewBridgeConfig) {
+export function sessionModelConflictMessage(): string {
+  return (
+    `${ErrorCode.INVALID_INPUT}: Cannot change model on a resumed session. ` +
+    `Omit session_id to start a new thread with a different model.`
+  );
+}
+
+function threadOpts(config: ReviewBridgeConfig, modelOverride?: string) {
   return {
-    model: config.model,
+    model: modelOverride ?? config.model,
     sandboxMode: 'read-only' as const,
     skipGitRepoCheck: true,
     modelReasoningEffort: config.reasoning_effort,
   };
+}
+
+// Resume-path options deliberately omit `model`. The SDK forwards `--model`
+// to `codex exec` unconditionally whenever the field is present (see
+// @openai/codex-sdk/dist/index.js:170), which would reassert a model on
+// resume and either break a thread that was created with an override or
+// fail auth on ChatGPT-tier Codex if the new model isn't available there.
+// The resumed thread keeps whatever model it was started with.
+// ESLint config permits `_`-prefixed unused vars (eslint.config.js).
+function resumeThreadOpts(config: ReviewBridgeConfig) {
+  const { model: _model, ...rest } = threadOpts(config);
+  return rest;
 }
 
 async function runReview<T extends Record<string, unknown>>(params: {
@@ -144,20 +166,26 @@ async function runReview<T extends Record<string, unknown>>(params: {
   prompt: string;
   responseSchema: z.ZodType;
   sessionId?: string;
+  // Sent to startThread on fresh threads. Omitted on resume.
+  model?: string;
+  // The model the active thread is actually running on. Always set; used
+  // for error-context so messages report the correct model even when
+  // `model` is intentionally undefined on resumed chunks of a chunked review.
+  resolvedModel: string;
 }): Promise<Result<T & { session_id: string }>> {
-  const { codex, config, prompt, responseSchema, sessionId } = params;
+  const { codex, config, prompt, responseSchema, sessionId, model, resolvedModel } = params;
 
   let thread;
   try {
     thread = sessionId
-      ? codex.resumeThread(sessionId, threadOpts(config))
-      : codex.startThread(threadOpts(config));
+      ? codex.resumeThread(sessionId, resumeThreadOpts(config))
+      : codex.startThread(threadOpts(config, model));
   } catch (e: unknown) {
     if (sessionId) {
       const msg = e instanceof Error ? e.message : String(e);
       return err(`${ErrorCode.SESSION_NOT_FOUND}: ${msg}`);
     }
-    const classified = classifyError(e, { model: config.model });
+    const classified = classifyError(e, { model: resolvedModel });
     return err(`${classified.code}: ${classified.message}`);
   }
 
@@ -179,7 +207,7 @@ async function runReview<T extends Record<string, unknown>>(params: {
           `Try: increase timeout_seconds in .reviewbridge.json, reduce diff size, or check input format.`,
         );
       }
-      const classified = classifyError(e, { model: config.model });
+      const classified = classifyError(e, { model: resolvedModel });
       return err(`${classified.code}: ${classified.message}`);
     }
 
@@ -297,7 +325,10 @@ export function createCodexClient(
   }
 
   return {
-    reviewPlan(input) {
+    async reviewPlan(input) {
+      if (input.session_id && input.model) {
+        return err<PlanReviewResult>(sessionModelConflictMessage());
+      }
       const prompt = buildPlanReviewPrompt(input, {
         project_context: config.project_context,
         copilot_instructions: formatForPrompt(copilotInstructions),
@@ -310,10 +341,15 @@ export function createCodexClient(
         prompt,
         responseSchema: PlanReviewResponseSchema,
         sessionId: input.session_id,
+        model: input.model,
+        resolvedModel: input.model ?? config.model,
       });
     },
 
     async reviewCode(input) {
+      if (input.session_id && input.model) {
+        return err<CodeReviewResult>(sessionModelConflictMessage());
+      }
       if (input.diff.length > 20 && !looksLikeDiff(input.diff)) {
         return err<CodeReviewResult>(
           `${ErrorCode.INVALID_INPUT}: Input doesn't look like a git diff. ` +
@@ -363,6 +399,8 @@ export function createCodexClient(
           prompt,
           responseSchema: CodeReviewResponseSchema,
           sessionId: input.session_id,
+          model: input.model,
+          resolvedModel: input.model ?? config.model,
         });
       }
 
@@ -375,6 +413,7 @@ export function createCodexClient(
       };
       const chunkResults: Omit<CodeReviewResult, 'chunks_reviewed'>[] = [];
       let sessionId = input.session_id;
+      const codeResolvedModel = input.model ?? config.model;
 
       for (let i = 0; i < chunks.length; i++) {
         const chunkHeader = `Chunk ${i + 1} of ${chunks.length}: reviewing the following files only.`;
@@ -385,6 +424,15 @@ export function createCodexClient(
           prompt,
           responseSchema: CodeReviewResponseSchema,
           sessionId,
+          // Model override applies only to the fresh thread on chunk 1.
+          // Chunks 2..N always resume chunk 1's thread, which is already
+          // bound to the resolved model.
+          model: sessionId ? undefined : input.model,
+          // resolvedModel is constant across chunks — the thread is bound to
+          // it after chunk 1. Used for error-context so failures on chunks 2..N
+          // report the actually-running model instead of falling back to
+          // config.model when `model` is intentionally undefined above.
+          resolvedModel: codeResolvedModel,
         });
 
         if (!result.ok) return result;
@@ -396,6 +444,9 @@ export function createCodexClient(
     },
 
     async reviewPrecommit(input) {
+      if (input.session_id && input.model) {
+        return err<PrecommitResult>(sessionModelConflictMessage());
+      }
       if (input.diff.length > 20 && !looksLikeDiff(input.diff)) {
         return err<PrecommitResult>(
           `${ErrorCode.INVALID_INPUT}: Input doesn't look like a git diff. ` +
@@ -440,6 +491,8 @@ export function createCodexClient(
           prompt,
           responseSchema: PrecommitResponseSchema,
           sessionId: input.session_id,
+          model: input.model,
+          resolvedModel: input.model ?? config.model,
         });
       }
 
@@ -451,6 +504,7 @@ export function createCodexClient(
       };
       const chunkResults: Omit<PrecommitResult, 'chunks_reviewed'>[] = [];
       let sessionId = input.session_id;
+      const precommitResolvedModel = input.model ?? config.model;
 
       for (let i = 0; i < chunks.length; i++) {
         const chunkHeader = `Chunk ${i + 1} of ${chunks.length}: checking the following files only.`;
@@ -461,6 +515,9 @@ export function createCodexClient(
           prompt,
           responseSchema: PrecommitResponseSchema,
           sessionId,
+          // Chunk 1 may carry the model override; chunks 2..N inherit via resumeThread.
+          model: sessionId ? undefined : input.model,
+          resolvedModel: precommitResolvedModel,
         });
 
         if (!result.ok) return result;

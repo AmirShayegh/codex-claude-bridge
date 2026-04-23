@@ -126,6 +126,16 @@ describe('registerReviewPrecommitTool', () => {
     );
   });
 
+  it('forwards model override to client (T-011)', async () => {
+    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(validResult));
+
+    await handler({ diff: 'explicit diff', auto_diff: false, model: 'gpt-5.4' }, {});
+
+    expect(mockClient.reviewPrecommit).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'gpt-5.4' }),
+    );
+  });
+
   it('auto_diff false + no diff returns error', async () => {
     const result = await handler({ auto_diff: false }, {});
 

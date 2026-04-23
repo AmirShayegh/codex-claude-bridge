@@ -1,0 +1,20 @@
+{
+  "components": [
+    "codex",
+    "client",
+    "error-classification"
+  ],
+  "discoveredDate": "2026-04-23",
+  "id": "ISS-003",
+  "impact": "When a review fails because a Codex CLI internal subsystem (e.g., codex_core::memories::phase1, which hardcodes gpt-5.1-codex-mini) hits a model-unsupported error, our classifier extracts the offending model name correctly from the raw error, but the \"Fall back to gpt-5.4\" tip is hardcoded and doesn't consider whether the user is ALREADY on gpt-5.4 (or on a completely different model than the extracted failing one). Users see \"Fall back to gpt-5.4 by setting \\\"model\\\": \\\"gpt-5.4\\\" in .reviewbridge.json\" when they've already configured gpt-5.4 and the actual failure is from a Codex internal model they cannot reach. The extracted model name in the error message is also confusing — it names a model the user never configured. Reproduced via real debug session on 2026-04-23: review configured for gpt-5.4 failed because Codex CLI's memory-writing agent fired a separate call using gpt-5.1-codex-mini (hardcoded in the Rust binary) and that specific model is unavailable on ChatGPT-subscription tier. Related to ISS-001 in shape — classifier surfacing an unhelpful hint because it lacks context about which layer the model name came from.",
+  "location": [
+    "src/codex/client.ts:97-113"
+  ],
+  "phase": "reliability",
+  "relatedTickets": [],
+  "resolution": null,
+  "resolvedDate": null,
+  "severity": "medium",
+  "status": "open",
+  "title": "MODEL_ERROR tip misleads when failure is from Codex internal subsystem (not caller's model)"
+}

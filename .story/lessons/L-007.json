@@ -1,0 +1,19 @@
+{
+  "content": "Codex CLI has an internal \"memory writing agent\" in the Rust binary at `codex_core::memories::phase1` and `phase2` that fires BACKGROUND model calls separate from the user's primary thread call. Its model is hardcoded to `gpt-5.1-codex-mini`. On ChatGPT-subscription tier auth, that specific model is not supported, so the memory-agent call returns `{\"detail\":\"The 'gpt-5.1-codex-mini' model is not supported when using Codex with a ChatGPT account.\"}` — and this error propagates up through the SDK as if it came from the primary review call, even though the primary call asked for a different model. Surface symptoms: error message quotes a model name the caller never configured, and generic fallback tips (e.g., \"set model to gpt-5.4\") are useless because the caller is already on their configured model. To diagnose, preserve and inspect the raw error (we already do, via the `Original error:` suffix added in commit 2f17aa2 for ISS-001). Mitigations: disable Codex memories if the CLI exposes a flag, use API-key auth (bypasses the ChatGPT-tier model restrictions), or surface a distinct tip when the extracted model differs from the caller's configured model.",
+  "context": "Debugged 2026-04-23 via `strings` on `~/.nvm/versions/node/v22.18.0/lib/node_modules/@openai/codex/bin/codex` — found `gpt-5.1-codex-mini` and `codex_core::memories::phase1::job` / `phase2::agent` in the binary. Reproduced live: review configured for gpt-5.4 failed with MODEL_ERROR quoting gpt-5.1-codex-mini. Filed as ISS-003. Supersedes any prior assumption that errors with a quoted model name always refer to the user-configured model for the review thread.",
+  "createdDate": "2026-04-23",
+  "id": "L-007",
+  "lastValidated": "2026-04-23",
+  "reinforcements": 0,
+  "source": "postmortem",
+  "status": "active",
+  "supersedes": null,
+  "tags": [
+    "codex-sdk",
+    "codex-cli",
+    "gotcha",
+    "error-handling"
+  ],
+  "title": "Codex CLI memory-writing agent uses hardcoded gpt-5.1-codex-mini",
+  "updatedDate": "2026-04-23"
+}

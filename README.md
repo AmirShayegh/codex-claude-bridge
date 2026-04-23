@@ -18,7 +18,7 @@ codex login
 Then add the MCP server to Claude Code:
 
 ```bash
-claude mcp add codex-bridge -- npx -y codex-claude-bridge
+claude mcp add codex-bridge -- npx -y codex-claude-bridge@latest
 ```
 
 ### API key (pay per token)
@@ -32,7 +32,7 @@ export OPENAI_API_KEY=sk-...
 Then add the MCP server to Claude Code:
 
 ```bash
-claude mcp add codex-bridge -- npx -y codex-claude-bridge
+claude mcp add codex-bridge -- npx -y codex-claude-bridge@latest
 ```
 
 Restart Claude Code after setup. The review tools are now available.
@@ -84,25 +84,25 @@ Run reviews directly from the terminal — no MCP setup required.
 **Pre-commit check (auto-captures staged changes):**
 
 ```bash
-npx codex-claude-bridge review-precommit
+npx codex-claude-bridge@latest review-precommit
 ```
 
 **Block commits on issues (CI-friendly, exits 2 on blockers):**
 
 ```bash
-npx codex-claude-bridge review-precommit && git commit
+npx codex-claude-bridge@latest review-precommit && git commit
 ```
 
 **Review a plan:**
 
 ```bash
-npx codex-claude-bridge review-plan --plan plan.md
+npx codex-claude-bridge@latest review-plan --plan plan.md
 ```
 
 **Review a diff:**
 
 ```bash
-git diff main | npx codex-claude-bridge review-code --diff -
+git diff main | npx codex-claude-bridge@latest review-code --diff -
 ```
 
 Add `--json` to any command for raw JSON output. Use `--help` to see all options.
@@ -178,7 +178,7 @@ Create `.reviewbridge.json` in your project root to customize review behavior:
 
 ```json
 {
-  "model": "gpt-5.4",
+  "model": "gpt-5.5",
   "reasoning_effort": "medium",
   "timeout_seconds": 300,
   "max_chunk_tokens": 8000,
@@ -205,7 +205,7 @@ All fields are optional. Missing fields use the defaults shown above. Large diff
 
 ### Model selection
 
-The default model is `gpt-5.4`. Set the `"model"` field in `.reviewbridge.json` to use a different model:
+The default model is `gpt-5.5`. Set the `"model"` field in `.reviewbridge.json` to use a different model:
 
 ```json
 {
@@ -217,7 +217,8 @@ Any model supported by the Codex CLI works. Some common options:
 
 | Model | Description |
 |-------|-------------|
-| `gpt-5.4` | Flagship frontier model (default) |
+| `gpt-5.5` | Flagship frontier model (default) — 400K context in Codex |
+| `gpt-5.4` | Previous flagship, still widely available |
 | `gpt-5.3-codex` | Optimized for complex software engineering |
 | `gpt-5.2-codex` | Stable, cost-effective option |
 | `gpt-5.1-codex-mini` | Smaller, faster variant |
@@ -239,7 +240,7 @@ Defaults to `reviews.db` in the current directory. Set to `:memory:` for ephemer
 | Error | Fix |
 |-------|-----|
 | `AUTH_ERROR: No OpenAI API key found` | Run `codex login` to authenticate, or set `OPENAI_API_KEY`. Check that `~/.codex/auth.json` exists. |
-| `MODEL_ERROR: Model "X" is not supported` | Try `gpt-5.4` or `gpt-5.3-codex`. Set `"model"` in `.reviewbridge.json`. |
+| `MODEL_ERROR: Model "X" is not supported` | Try `gpt-5.5` or `gpt-5.4`. Set `"model"` in `.reviewbridge.json`. |
 | `NETWORK_ERROR: Could not reach OpenAI API` | Check your internet connection. |
 | `RATE_LIMITED: Rate limited by OpenAI` | Wait a moment and retry. |
 | `CODEX_TIMEOUT: review timed out` | Increase `"timeout_seconds"` in `.reviewbridge.json` (default: 300). |

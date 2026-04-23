@@ -165,7 +165,7 @@ describe('loadConfig', () => {
       result1.data.review_standards.precommit.block_on.push('minor');
 
       // Second result must be unaffected
-      expect(result2.data.model).toBe('gpt-5.4');
+      expect(result2.data.model).toBe('gpt-5.5');
       expect(result2.data.review_standards.precommit.block_on).toEqual([
         'critical',
         'major',

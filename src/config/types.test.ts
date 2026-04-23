@@ -8,7 +8,7 @@ describe('ReviewBridgeConfigSchema', () => {
     expect(result.success).toBe(true);
     if (result.success) {
       const config: ReviewBridgeConfig = result.data;
-      expect(config.model).toBe('gpt-5.4');
+      expect(config.model).toBe('gpt-5.5');
       expect(config.reasoning_effort).toBe('medium');
       expect(config.timeout_seconds).toBe(300);
       expect(config.max_chunk_tokens).toBe(8000);
@@ -168,7 +168,7 @@ describe('ReviewBridgeConfigSchema', () => {
 
 describe('DEFAULT_CONFIG', () => {
   it('has all expected default values', () => {
-    expect(DEFAULT_CONFIG.model).toBe('gpt-5.4');
+    expect(DEFAULT_CONFIG.model).toBe('gpt-5.5');
     expect(DEFAULT_CONFIG.reasoning_effort).toBe('medium');
     expect(DEFAULT_CONFIG.timeout_seconds).toBe(300);
     expect(DEFAULT_CONFIG.max_chunk_tokens).toBe(8000);

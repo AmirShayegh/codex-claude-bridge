@@ -18,6 +18,14 @@ export function registerReviewPrecommitTool(server: McpServer, client: CodexClie
         diff: z.string().optional().describe('Explicit diff to review instead of auto-capture'),
         session_id: z.string().optional().describe('Continue from previous review'),
         checklist: z.array(z.string()).optional().describe('Custom pre-commit checks'),
+        model: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'Override the configured default model for this call (e.g., "gpt-5.4"). ' +
+              'Incompatible with session_id — resumed threads cannot change model.',
+          ),
       },
     },
     async (args) => {
@@ -52,6 +60,7 @@ export function registerReviewPrecommitTool(server: McpServer, client: CodexClie
           diff,
           checklist: args.checklist,
           session_id: args.session_id,
+          model: args.model,
         });
         if (!result.ok) {
           tracker.recordFailure();

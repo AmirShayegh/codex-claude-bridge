@@ -28,6 +28,14 @@ export function registerReviewCodeTool(server: McpServer, client: CodexClient, d
         context: z.string().optional().describe('Intent of the changes'),
         session_id: z.string().optional().describe('Continue from previous review'),
         criteria: z.array(z.string()).optional().describe('Review criteria to focus on'),
+        model: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'Override the configured default model for this call (e.g., "gpt-5.4"). ' +
+              'Incompatible with session_id — resumed threads cannot change model.',
+          ),
       },
     },
     async (args) => {

@@ -580,6 +580,106 @@ describe('error classification', () => {
   });
 });
 
+describe('per-call model override (T-011)', () => {
+  it('reviewPlan forwards override to startThread, not config.model', async () => {
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
+
+    const client = createCodexClient(config);
+    await client.reviewPlan({ plan: 'plan', model: 'gpt-5.4' });
+
+    expect(mockStartThread).toHaveBeenCalledOnce();
+    expect(mockStartThread).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'gpt-5.4' }),
+    );
+  });
+
+  it('reviewCode forwards override to startThread on single-chunk path', async () => {
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validCodeResponse) });
+
+    const client = createCodexClient(config);
+    await client.reviewCode({
+      diff: 'diff --git a/f b/f\n@@ -1 +1 @@\n-old\n+new',
+      model: 'gpt-5.4',
+    });
+
+    expect(mockStartThread).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'gpt-5.4' }),
+    );
+  });
+
+  it('reviewPrecommit forwards override to startThread on single-chunk path', async () => {
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPrecommitResponse) });
+
+    const client = createCodexClient(config);
+    await client.reviewPrecommit({
+      diff: 'diff --git a/f b/f\n@@ -1 +1 @@\n-old\n+new',
+      model: 'gpt-5.4',
+    });
+
+    expect(mockStartThread).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'gpt-5.4' }),
+    );
+  });
+
+  it('falls back to config.model when override omitted', async () => {
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
+
+    const client = createCodexClient(config);
+    await client.reviewPlan({ plan: 'plan' });
+
+    expect(mockStartThread).toHaveBeenCalledWith(
+      expect.objectContaining({ model: config.model }),
+    );
+  });
+
+  it('rejects session_id + model combination with INVALID_INPUT', async () => {
+    const client = createCodexClient(config);
+    const result = await client.reviewPlan({
+      plan: 'plan',
+      session_id: 'existing_session',
+      model: 'gpt-5.4',
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('INVALID_INPUT');
+      expect(result.error).toContain('Cannot change model on a resumed session');
+    }
+    // Must reject before any SDK call
+    expect(mockStartThread).not.toHaveBeenCalled();
+    expect(mockResumeThread).not.toHaveBeenCalled();
+  });
+
+  it('multi-chunk: override applies on chunk 1 via startThread; chunks 2..N resume without override', async () => {
+    // Force 2 chunks by mocking chunkDiff
+    mockChunkDiff.mockReturnValue([
+      'diff --git a/a b/a\n@@ -1 +1 @@\n-a\n+A',
+      'diff --git a/b b/b\n@@ -1 +1 @@\n-b\n+B',
+    ]);
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validCodeResponse) });
+
+    const client = createCodexClient(config);
+    await client.reviewCode({
+      diff: 'large diff',
+      model: 'gpt-5.4',
+    });
+
+    // Chunk 1: startThread with the override
+    expect(mockStartThread).toHaveBeenCalledOnce();
+    expect(mockStartThread).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'gpt-5.4' }),
+    );
+    // Chunk 2: resumeThread; opts pass config.model (not the override), since
+    // a resumed thread is bound to its original model and we deliberately
+    // do not reassert the override.
+    expect(mockResumeThread).toHaveBeenCalledOnce();
+    expect(mockResumeThread).toHaveBeenCalledWith(
+      'thread_abc123',
+      expect.objectContaining({ model: config.model }),
+    );
+  });
+});
+
 describe('constructor error classification', () => {
   it('classifies auth errors during SDK init', async () => {
     mockConstructorThrow = new Error('api_key not set');

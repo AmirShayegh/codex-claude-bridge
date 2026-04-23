@@ -32,6 +32,7 @@ interface PlanReviewInput {
   focus?: string[];
   depth?: 'quick' | 'thorough';
   session_id?: string;
+  model?: string;
 }
 
 interface CodeReviewInput {
@@ -39,12 +40,14 @@ interface CodeReviewInput {
   context?: string;
   criteria?: string[];
   session_id?: string;
+  model?: string;
 }
 
 interface PrecommitReviewInput {
   diff: string;
   checklist?: string[];
   session_id?: string;
+  model?: string;
 }
 
 export interface CodexClient {
@@ -129,9 +132,16 @@ export function classifyError(
   return { code: ErrorCode.UNKNOWN_ERROR, message: raw };
 }
 
-function threadOpts(config: ReviewBridgeConfig) {
+function sessionModelConflictMessage(): string {
+  return (
+    `${ErrorCode.INVALID_INPUT}: Cannot change model on a resumed session. ` +
+    `Omit session_id to start a new thread with a different model.`
+  );
+}
+
+function threadOpts(config: ReviewBridgeConfig, modelOverride?: string) {
   return {
-    model: config.model,
+    model: modelOverride ?? config.model,
     sandboxMode: 'read-only' as const,
     skipGitRepoCheck: true,
     modelReasoningEffort: config.reasoning_effort,
@@ -144,20 +154,24 @@ async function runReview<T extends Record<string, unknown>>(params: {
   prompt: string;
   responseSchema: z.ZodType;
   sessionId?: string;
+  model?: string;
 }): Promise<Result<T & { session_id: string }>> {
-  const { codex, config, prompt, responseSchema, sessionId } = params;
+  const { codex, config, prompt, responseSchema, sessionId, model } = params;
 
+  // Model override applies only to fresh threads. Resumed threads are bound
+  // to the model they were created with — we intentionally ignore `model`
+  // on the resume path rather than silently changing threads mid-session.
   let thread;
   try {
     thread = sessionId
       ? codex.resumeThread(sessionId, threadOpts(config))
-      : codex.startThread(threadOpts(config));
+      : codex.startThread(threadOpts(config, model));
   } catch (e: unknown) {
     if (sessionId) {
       const msg = e instanceof Error ? e.message : String(e);
       return err(`${ErrorCode.SESSION_NOT_FOUND}: ${msg}`);
     }
-    const classified = classifyError(e, { model: config.model });
+    const classified = classifyError(e, { model: model ?? config.model });
     return err(`${classified.code}: ${classified.message}`);
   }
 
@@ -298,6 +312,9 @@ export function createCodexClient(
 
   return {
     reviewPlan(input) {
+      if (input.session_id && input.model) {
+        return Promise.resolve(err<PlanReviewResult>(sessionModelConflictMessage()));
+      }
       const prompt = buildPlanReviewPrompt(input, {
         project_context: config.project_context,
         copilot_instructions: formatForPrompt(copilotInstructions),
@@ -310,10 +327,14 @@ export function createCodexClient(
         prompt,
         responseSchema: PlanReviewResponseSchema,
         sessionId: input.session_id,
+        model: input.model,
       });
     },
 
     async reviewCode(input) {
+      if (input.session_id && input.model) {
+        return err<CodeReviewResult>(sessionModelConflictMessage());
+      }
       if (input.diff.length > 20 && !looksLikeDiff(input.diff)) {
         return err<CodeReviewResult>(
           `${ErrorCode.INVALID_INPUT}: Input doesn't look like a git diff. ` +
@@ -363,6 +384,7 @@ export function createCodexClient(
           prompt,
           responseSchema: CodeReviewResponseSchema,
           sessionId: input.session_id,
+          model: input.model,
         });
       }
 
@@ -385,6 +407,10 @@ export function createCodexClient(
           prompt,
           responseSchema: CodeReviewResponseSchema,
           sessionId,
+          // Model override applies only to the fresh thread on chunk 1.
+          // Chunks 2..N always resume chunk 1's thread, which is already
+          // bound to the resolved model.
+          model: sessionId ? undefined : input.model,
         });
 
         if (!result.ok) return result;
@@ -396,6 +422,9 @@ export function createCodexClient(
     },
 
     async reviewPrecommit(input) {
+      if (input.session_id && input.model) {
+        return err<PrecommitResult>(sessionModelConflictMessage());
+      }
       if (input.diff.length > 20 && !looksLikeDiff(input.diff)) {
         return err<PrecommitResult>(
           `${ErrorCode.INVALID_INPUT}: Input doesn't look like a git diff. ` +
@@ -440,6 +469,7 @@ export function createCodexClient(
           prompt,
           responseSchema: PrecommitResponseSchema,
           sessionId: input.session_id,
+          model: input.model,
         });
       }
 
@@ -461,6 +491,8 @@ export function createCodexClient(
           prompt,
           responseSchema: PrecommitResponseSchema,
           sessionId,
+          // Chunk 1 may carry the model override; chunks 2..N inherit via resumeThread.
+          model: sessionId ? undefined : input.model,
         });
 
         if (!result.ok) return result;

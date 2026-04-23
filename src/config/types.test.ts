@@ -33,13 +33,13 @@ describe('ReviewBridgeConfigSchema', () => {
 
   it('merges partial config with defaults', () => {
     const partial = {
-      model: 'o3',
+      model: 'gpt-5.4',
       timeout_seconds: 120,
     };
     const result = ReviewBridgeConfigSchema.safeParse(partial);
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.model).toBe('o3');
+      expect(result.data.model).toBe('gpt-5.4');
       expect(result.data.timeout_seconds).toBe(120);
       // Defaults for unspecified fields
       expect(result.data.reasoning_effort).toBe('medium');
@@ -63,6 +63,28 @@ describe('ReviewBridgeConfigSchema', () => {
       expect(result.data.review_standards.code_review.max_file_size).toBe(500);
       // Other review_standards defaults preserved
       expect(result.data.review_standards.plan_review.depth).toBe('thorough');
+    }
+  });
+
+  it('rejects unsupported model in config with a descriptive message', () => {
+    const result = ReviewBridgeConfigSchema.safeParse({ model: 'gpt-5.1-codex-mini' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const msg = result.error.issues.map((i) => i.message).join(' ');
+      expect(msg).toContain('Unsupported model');
+      expect(msg).toContain('gpt-5.1-codex-mini');
+      expect(msg).toContain('gpt-5.5');
+      expect(msg).toContain('gpt-5.4');
+    }
+  });
+
+  it('accepts both documented supported models', () => {
+    for (const model of ['gpt-5.5', 'gpt-5.4'] as const) {
+      const result = ReviewBridgeConfigSchema.safeParse({ model });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.model).toBe(model);
+      }
     }
   });
 
@@ -93,7 +115,7 @@ describe('ReviewBridgeConfigSchema', () => {
 
   it('parses a full valid config', () => {
     const full = {
-      model: 'o3',
+      model: 'gpt-5.4',
       reasoning_effort: 'high',
       timeout_seconds: 600,
       max_chunk_tokens: 12000,

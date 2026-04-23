@@ -67,13 +67,13 @@ describe('loadConfig', () => {
 
   it('merges partial config with defaults', () => {
     mockReadFileSync.mockReturnValue(
-      JSON.stringify({ model: 'o3', timeout_seconds: 120 }),
+      JSON.stringify({ model: 'gpt-5.4', timeout_seconds: 120 }),
     );
 
     const result = loadConfig('/some/project');
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.data.model).toBe('o3');
+      expect(result.data.model).toBe('gpt-5.4');
       expect(result.data.timeout_seconds).toBe(120);
       expect(result.data.reasoning_effort).toBe('medium');
       expect(result.data.review_standards.plan_review.depth).toBe('thorough');
@@ -82,7 +82,7 @@ describe('loadConfig', () => {
 
   it('parses a full valid config file', () => {
     const full = {
-      model: 'o3',
+      model: 'gpt-5.4',
       reasoning_effort: 'high',
       timeout_seconds: 600,
       max_chunk_tokens: 12000,

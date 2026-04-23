@@ -208,25 +208,20 @@ All fields are optional. Missing fields use the defaults shown above. Large diff
 
 ### Model selection
 
-The default model is `gpt-5.5`. Set the `"model"` field in `.reviewbridge.json` to use a different model:
+The default model is `gpt-5.5`. When the ChatGPT-subscription tier of Codex doesn't yet have a newly-announced flagship, fall back to `gpt-5.4` via `.reviewbridge.json`:
 
 ```json
 {
-  "model": "gpt-5.3-codex"
+  "model": "gpt-5.4"
 }
 ```
-
-Any model supported by the Codex CLI works. Some common options:
 
 | Model | Description |
 |-------|-------------|
 | `gpt-5.5` | Flagship frontier model (default) — 400K context in Codex |
-| `gpt-5.4` | Previous flagship, still widely available |
-| `gpt-5.3-codex` | Optimized for complex software engineering |
-| `gpt-5.2-codex` | Stable, cost-effective option |
-| `gpt-5.1-codex-mini` | Smaller, faster variant |
+| `gpt-5.4` | Previous flagship. Use when `gpt-5.5` isn't yet available on your account tier. |
 
-The model is passed to the Codex SDK at the thread level (`startThread({ model })`), so each review session uses whatever model is configured at the time.
+The model is passed to the Codex SDK at the thread level (`startThread({ model })`), so each review session uses whatever model is configured. You can also override per-call via the `model` tool parameter or `--model` CLI flag — see the tool reference above.
 
 ## Storage
 

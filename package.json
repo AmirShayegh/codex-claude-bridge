@@ -6,7 +6,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "codex-claude-bridge": "./dist/index.js"
+    "codex-claude-bridge": "dist/index.js"
   },
   "files": [
     "dist"

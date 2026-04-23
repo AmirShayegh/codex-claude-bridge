@@ -25,5 +25,8 @@ reviews.db
 # Coverage
 coverage/
 
+# Scratch / local working files
+temp/
+
 # OS
 .DS_Store

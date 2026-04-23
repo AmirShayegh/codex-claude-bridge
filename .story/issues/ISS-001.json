@@ -1,0 +1,20 @@
+{
+  "components": [
+    "codex",
+    "client",
+    "error-classification"
+  ],
+  "discoveredDate": "2026-04-23",
+  "id": "ISS-001",
+  "impact": "Users see misleading error messages like `MODEL_ERROR: Model \"detail\" is not supported` when the real failure is schema validation, rate limiting, or some other Codex API error. The real error message is swallowed, so users cannot diagnose or work around the underlying issue. Actively blocks review_plan/review_code from working through the MCP bridge in some cases. Independently reproduced across two Claude Code sessions today (2026-04-23).",
+  "location": [
+    "src/codex/client.ts:87-93"
+  ],
+  "phase": "reliability",
+  "relatedTickets": [],
+  "resolution": "Tightened the MODEL_ERROR predicate in `src/codex/client.ts` from a loose substring check (`lower.includes('model') && lower.includes('not supported')` plus an unanchored `/[\"']([^\"']+)[\"']/` extraction) to a single anchored regex: `/\\bmodel\\b(?:\\s+[\"'`]([^\"'`]+)[\"'`])?\\s+(?:is\\s+|does\\s+)?not\\s+(?:supported|found|exist)/i`. Now the \"not supported/found/exist\" phrase must follow `model` directly, optionally with a quoted name in between — so JSON envelopes like `{\"detail\": \"...not supported...\"}` no longer match. The captured group is taken from within the matched span only, never from arbitrary quoted JSON keys elsewhere. As defense-in-depth, the raw error text is now appended to the MODEL_ERROR message (`Original error: ${raw}`) so even a borderline match never fully swallows the underlying cause. Added 4 regression tests in `src/codex/client.test.ts`: backtick-quoted name with \"does not exist\", the exact ISS-001 reproduction (JSON body with `\"detail\"` + unrelated \"model\" + \"not supported\"), raw-text preservation, and rejection of \"model\" + \"not supported\" appearing in different sentences. All 477 tests pass.",
+  "resolvedDate": "2026-04-23",
+  "severity": "high",
+  "status": "resolved",
+  "title": "Error classifier misidentifies non-MODEL errors as MODEL_ERROR"
+}

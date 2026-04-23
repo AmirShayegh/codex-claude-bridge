@@ -83,13 +83,22 @@ export function classifyError(
     };
   }
 
-  // Model: unsupported or not found
-  if (lower.includes('model') && (lower.includes('not supported') || lower.includes('not found'))) {
-    const quoted = raw.match(/["']([^"']+)["']/);
-    const modelName = quoted?.[1] ?? context?.model ?? 'your configured model';
+  // Model: unsupported or not found.
+  // The "not (supported|found|exist)" phrase must follow "model" directly (optionally
+  // with a quoted name in between). A loose substring check matched unrelated error
+  // bodies that happened to contain both words, and grabbed the first quoted token
+  // anywhere in the raw text as the "model name" — see ISS-001.
+  const modelErrorMatch = raw.match(
+    /\bmodel\b(?:\s+["'`]([^"'`]+)["'`])?\s+(?:is\s+|does\s+)?not\s+(?:supported|found|exist)/i,
+  );
+  if (modelErrorMatch) {
+    const modelName = modelErrorMatch[1] ?? context?.model ?? 'your configured model';
     return {
       code: ErrorCode.MODEL_ERROR,
-      message: `Model "${modelName}" is not supported. Try gpt-5.5 or gpt-5.4, or configure a different model in .reviewbridge.json.`,
+      message:
+        `Model "${modelName}" is not supported. ` +
+        `Try gpt-5.5 or gpt-5.4, or configure a different model in .reviewbridge.json. ` +
+        `Original error: ${raw}`,
     };
   }
 

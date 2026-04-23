@@ -424,6 +424,66 @@ describe('error classification', () => {
     }
   });
 
+  it('returns MODEL_ERROR for backtick-quoted name with "does not exist" phrasing', async () => {
+    mockRun.mockRejectedValue(new Error('The model `gpt-9` does not exist'));
+
+    const client = createCodexClient(config);
+    const result = await client.reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('MODEL_ERROR');
+      expect(result.error).toContain('gpt-9');
+    }
+  });
+
+  // ISS-001: error bodies containing "detail" + "model" + "not supported" in unrelated
+  // contexts were misclassified as MODEL_ERROR with the first quoted token ("detail")
+  // used as the model name, swallowing the real error.
+  it('does NOT misclassify JSON error bodies as MODEL_ERROR with bogus model name (ISS-001)', async () => {
+    mockRun.mockRejectedValue(
+      new Error(
+        'OpenAI API error: {"detail": "Schema validation failed: model field invalid; reasoning_effort value not supported"}',
+      ),
+    );
+
+    const client = createCodexClient(config);
+    const result = await client.reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).not.toContain('Model "detail"');
+      expect(result.error).toContain('Schema validation failed');
+    }
+  });
+
+  it('preserves raw error text in MODEL_ERROR message (ISS-001 defense-in-depth)', async () => {
+    mockRun.mockRejectedValue(new Error('The model "o9-turbo" is not supported'));
+
+    const client = createCodexClient(config);
+    const result = await client.reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('MODEL_ERROR');
+      expect(result.error).toContain('o9-turbo');
+      expect(result.error).toContain('The model "o9-turbo" is not supported');
+    }
+  });
+
+  it('does NOT match when "model" and "not supported" are in different sentences', async () => {
+    mockRun.mockRejectedValue(new Error('The current model works fine. However, the operation is not supported.'));
+
+    const client = createCodexClient(config);
+    const result = await client.reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).not.toContain('MODEL_ERROR');
+      expect(result.error).toContain('UNKNOWN_ERROR');
+    }
+  });
+
   it('returns RATE_LIMITED when error contains "rate_limit"', async () => {
     mockRun.mockRejectedValue(new Error('rate_limit exceeded'));
 

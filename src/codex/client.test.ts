@@ -669,13 +669,14 @@ describe('per-call model override (T-011)', () => {
     expect(mockStartThread).toHaveBeenCalledWith(
       expect.objectContaining({ model: 'gpt-5.4' }),
     );
-    // Chunk 2: resumeThread; opts pass config.model (not the override), since
-    // a resumed thread is bound to its original model and we deliberately
-    // do not reassert the override.
+    // Chunk 2: resumeThread is called WITHOUT any `model` field. The SDK
+    // would otherwise forward `--model` to the CLI and reassert a model
+    // on a resumed thread — breaking the "inherit" guarantee. The resumed
+    // thread keeps whatever model it was started with.
     expect(mockResumeThread).toHaveBeenCalledOnce();
     expect(mockResumeThread).toHaveBeenCalledWith(
       'thread_abc123',
-      expect.objectContaining({ model: config.model }),
+      expect.not.objectContaining({ model: expect.anything() }),
     );
   });
 });

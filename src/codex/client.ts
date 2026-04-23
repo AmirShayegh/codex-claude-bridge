@@ -148,6 +148,18 @@ function threadOpts(config: ReviewBridgeConfig, modelOverride?: string) {
   };
 }
 
+// Resume-path options deliberately omit `model`. The SDK forwards `--model`
+// to `codex exec` unconditionally whenever the field is present (see
+// @openai/codex-sdk/dist/index.js:170), which would reassert a model on
+// resume and either break a thread that was created with an override or
+// fail auth on ChatGPT-tier Codex if the new model isn't available there.
+// The resumed thread keeps whatever model it was started with.
+function resumeThreadOpts(config: ReviewBridgeConfig) {
+  const { model: _model, ...rest } = threadOpts(config);
+  void _model;
+  return rest;
+}
+
 async function runReview<T extends Record<string, unknown>>(params: {
   codex: Codex;
   config: ReviewBridgeConfig;
@@ -158,13 +170,10 @@ async function runReview<T extends Record<string, unknown>>(params: {
 }): Promise<Result<T & { session_id: string }>> {
   const { codex, config, prompt, responseSchema, sessionId, model } = params;
 
-  // Model override applies only to fresh threads. Resumed threads are bound
-  // to the model they were created with — we intentionally ignore `model`
-  // on the resume path rather than silently changing threads mid-session.
   let thread;
   try {
     thread = sessionId
-      ? codex.resumeThread(sessionId, threadOpts(config))
+      ? codex.resumeThread(sessionId, resumeThreadOpts(config))
       : codex.startThread(threadOpts(config, model));
   } catch (e: unknown) {
     if (sessionId) {
@@ -311,9 +320,9 @@ export function createCodexClient(
   }
 
   return {
-    reviewPlan(input) {
+    async reviewPlan(input) {
       if (input.session_id && input.model) {
-        return Promise.resolve(err<PlanReviewResult>(sessionModelConflictMessage()));
+        return err<PlanReviewResult>(sessionModelConflictMessage());
       }
       const prompt = buildPlanReviewPrompt(input, {
         project_context: config.project_context,

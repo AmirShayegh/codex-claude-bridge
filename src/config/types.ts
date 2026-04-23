@@ -3,13 +3,13 @@ import { z } from 'zod';
 // Config-local severity enum — avoids cross-layer import from codex/types.ts
 const BlockOnSeveritySchema = z.enum(['critical', 'major', 'minor', 'suggestion', 'nitpick']);
 
-// Models we officially support in .reviewbridge.json. The MCP input schemas
-// and CLI --model flag stay permissive so Claude Code can experiment per
-// call, but a persisted config that silently used an older Codex variant
-// (e.g. gpt-5.1-codex-mini, which Codex CLI's memory-writing subsystem
-// hits on ChatGPT-tier accounts) caused real confusion — see L-006, L-007.
-export const SUPPORTED_MODELS = ['gpt-5.5', 'gpt-5.4'] as const;
-export type SupportedModel = (typeof SUPPORTED_MODELS)[number];
+// Models we officially document and recommend. Used for error-message tips
+// and README copy — NOT a blocking allowlist. Users who pass a different
+// model via .reviewbridge.json, the MCP `model` param, or the CLI --model
+// flag are forwarded to Codex as-is; we just don't advertise or recommend
+// anything outside this set. See L-006 for the policy.
+export const RECOMMENDED_MODELS = ['gpt-5.5', 'gpt-5.4'] as const;
+export type RecommendedModel = (typeof RECOMMENDED_MODELS)[number];
 
 const PlanReviewStandardsSchema = z.object({
   focus: z.array(z.string()).default(['architecture', 'feasibility']),
@@ -34,17 +34,7 @@ const ReviewStandardsSchema = z.object({
 });
 
 export const ReviewBridgeConfigSchema = z.object({
-  model: z
-    .string()
-    .superRefine((v, ctx) => {
-      if (!(SUPPORTED_MODELS as readonly string[]).includes(v)) {
-        ctx.addIssue({
-          code: 'custom',
-          message: `Unsupported model "${v}". Supported values: ${SUPPORTED_MODELS.join(', ')}.`,
-        });
-      }
-    })
-    .default('gpt-5.5'),
+  model: z.string().default('gpt-5.5'),
   reasoning_effort: z.enum(['low', 'medium', 'high']).default('medium'),
   timeout_seconds: z.number().int().positive().default(300),
   max_chunk_tokens: z.number().int().positive().default(8000),

@@ -1,6 +1,6 @@
 {
-  "content": "codex-claude-bridge documents and supports exactly two models: `gpt-5.5` as the default (current flagship) and `gpt-5.4` as the documented fallback for when the ChatGPT-subscription tier of Codex doesn't yet have the current flagship. Older Codex variants (`gpt-5.3-codex`, `gpt-5.2-codex`, `gpt-5.1-codex-mini`) are NOT listed in the README model table and should not be recommended in error messages, tips, or docs. Do not re-propose mini models as smaller/faster options — the project position is flagship-only with a one-generation fallback.",
-  "context": "User directive on 2026-04-23 after the v0.3.3 release cycle: 'we do 5.5 if not 5.4' and 'we dont need mini models'. The README previously listed five variants (gpt-5.5, gpt-5.4, gpt-5.3-codex, gpt-5.2-codex, gpt-5.1-codex-mini). Pruned in commit d9da0c2 to just 5.5 and 5.4. Error-message tips and classifier hints already only mention those two, so no code change was needed beyond the README. When future flagships ship, the pattern continues: new flagship becomes default, old flagship becomes documented fallback, the previous fallback drops from the table.",
+  "content": "codex-claude-bridge documents and recommends exactly two models: `gpt-5.5` as the default (current flagship) and `gpt-5.4` as the documented fallback. This is a RECOMMENDATION boundary — it scopes the README model table, error-message tips, CLI help text, and any new default choices. It is NOT an enforcement gate. If a user explicitly sets a different model via `.reviewbridge.json`, the MCP `model` parameter, or the `--model` CLI flag, we forward it to Codex as-is. We don't advertise older Codex variants (`gpt-5.3-codex`, `gpt-5.2-codex`, `gpt-5.1-codex-mini`) or mini models, but we also don't block users from running them. Tension to respect: curate our recommendations; don't gate user autonomy.",
+  "context": "Initial policy captured 2026-04-23 after README cleanup (commit d9da0c2). A stricter enforcement pass landed in 0.3.4 (commit ef803d4) that rejected non-allowlisted models at config parse time. User pushback on that release: \"we shouldnt offer it ourselves (5.1) but if user chooses it we shouldnt block them.\" Reverted in 0.3.5 — `config.model` is `z.string().default('gpt-5.5')` again, `RECOMMENDED_MODELS` retained as a documentation constant for tip/help-text sourcing but not used as a schema refine. Use this distinction when adding new config fields: curate defaults + docs, but keep inputs permissive unless a value is categorically unsafe (e.g. would crash the process or leak secrets). Supported set grows by editing this lesson + README + constant, not by shipping new enum values.",
   "createdDate": "2026-04-23",
   "id": "L-006",
   "lastValidated": "2026-04-23",
@@ -11,8 +11,9 @@
   "tags": [
     "models",
     "documentation",
-    "user-preference"
+    "user-preference",
+    "policy"
   ],
-  "title": "Supported models: gpt-5.5 default, gpt-5.4 fallback. No mini variants.",
+  "title": "Recommend gpt-5.5 + gpt-5.4 only; never block the user's model choice",
   "updatedDate": "2026-04-23"
 }

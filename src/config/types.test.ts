@@ -66,20 +66,10 @@ describe('ReviewBridgeConfigSchema', () => {
     }
   });
 
-  it('rejects unsupported model in config with a descriptive message', () => {
-    const result = ReviewBridgeConfigSchema.safeParse({ model: 'gpt-5.1-codex-mini' });
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      const msg = result.error.issues.map((i) => i.message).join(' ');
-      expect(msg).toContain('Unsupported model');
-      expect(msg).toContain('gpt-5.1-codex-mini');
-      expect(msg).toContain('gpt-5.5');
-      expect(msg).toContain('gpt-5.4');
-    }
-  });
-
-  it('accepts both documented supported models', () => {
-    for (const model of ['gpt-5.5', 'gpt-5.4'] as const) {
+  it('accepts any non-empty model string (allowlist is documentation, not enforcement)', () => {
+    // The RECOMMENDED_MODELS constant scopes what we document and recommend,
+    // but users are free to set any model string — no blocking gate.
+    for (const model of ['gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'experimental-model-x']) {
       const result = ReviewBridgeConfigSchema.safeParse({ model });
       expect(result.success).toBe(true);
       if (result.success) {

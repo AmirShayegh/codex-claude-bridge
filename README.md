@@ -221,7 +221,7 @@ The default model is `gpt-5.5`. When the ChatGPT-subscription tier of Codex does
 | `gpt-5.5` | Flagship frontier model (default) — 400K context in Codex |
 | `gpt-5.4` | Previous flagship. Use when `gpt-5.5` isn't yet available on your account tier. |
 
-`.reviewbridge.json` accepts only `gpt-5.5` or `gpt-5.4` for `"model"` — anything else is rejected at load time with a clear error. Per-call overrides via the `model` tool parameter or `--model` CLI flag remain permissive so Claude Code can experiment per request.
+These are the models we document and recommend — the flagship plus one fallback. The `model` field in `.reviewbridge.json`, the `model` tool parameter, and the `--model` CLI flag all accept any string and forward it to Codex as-is, so if you want to run a different model you can. We just don't advertise anything outside the table above.
 
 ## Storage
 

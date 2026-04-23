@@ -135,7 +135,9 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
             focus: opts.focus ? opts.focus.split(',').map((s: string) => s.trim()).filter(Boolean) : undefined,
             depth: opts.depth,
             session_id: opts.session,
-            model: opts.model,
+            // Normalize empty string to undefined so the client picks config
+            // default (matches MCP's z.string().min(1) behavior).
+            model: opts.model?.trim() || undefined,
           }),
         format: formatPlanResult,
         exitCode: () => 0,
@@ -174,7 +176,7 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
             diff: inputResult.data,
             criteria: opts.focus ? opts.focus.split(',').map((s: string) => s.trim()).filter(Boolean) : undefined,
             session_id: opts.session,
-            model: opts.model,
+            model: opts.model?.trim() || undefined,
           }),
         format: formatCodeResult,
         exitCode: () => 0,
@@ -223,7 +225,7 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
           return client.reviewPrecommit({
             diff: diffResult.data,
             session_id: opts.session,
-            model: opts.model,
+            model: opts.model?.trim() || undefined,
           });
         },
         format: formatPrecommitResult,

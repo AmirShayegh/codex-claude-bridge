@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import type { CodexClient } from '../codex/client.js';
+import { sessionModelConflictMessage } from '../codex/client.js';
 import { resolvePrecommitDiff, NO_STAGED_CHANGES } from '../utils/resolve-diff.js';
 import { createSessionTracker } from '../storage/session-tracker.js';
 
@@ -29,6 +30,14 @@ export function registerReviewPrecommitTool(server: McpServer, client: CodexClie
       },
     },
     async (args) => {
+      // Reject session_id + model before activating any session state.
+      // See review-plan.ts for the rationale.
+      if (args.session_id && args.model) {
+        return {
+          content: [{ type: 'text' as const, text: sessionModelConflictMessage() }],
+          isError: true,
+        };
+      }
       const tracker = createSessionTracker(db);
       try {
         const diffResult = await resolvePrecommitDiff({ diff: args.diff, auto_diff: args.auto_diff });

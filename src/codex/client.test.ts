@@ -679,6 +679,33 @@ describe('per-call model override (T-011)', () => {
       expect.not.objectContaining({ model: expect.anything() }),
     );
   });
+
+  it('reviewPrecommit multi-chunk: override on chunk 1; chunks 2..N resume without override', async () => {
+    // Mirror of the reviewCode multi-chunk test above. The precommit loop
+    // shares the same `sessionId ? undefined : input.model` guard, and a
+    // copy-paste error in its version would only be caught here.
+    mockChunkDiff.mockReturnValue([
+      'diff --git a/a b/a\n@@ -1 +1 @@\n-a\n+A',
+      'diff --git a/b b/b\n@@ -1 +1 @@\n-b\n+B',
+    ]);
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPrecommitResponse) });
+
+    const client = createCodexClient(config);
+    await client.reviewPrecommit({
+      diff: 'large staged diff',
+      model: 'gpt-5.4',
+    });
+
+    expect(mockStartThread).toHaveBeenCalledOnce();
+    expect(mockStartThread).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'gpt-5.4' }),
+    );
+    expect(mockResumeThread).toHaveBeenCalledOnce();
+    expect(mockResumeThread).toHaveBeenCalledWith(
+      'thread_abc123',
+      expect.not.objectContaining({ model: expect.anything() }),
+    );
+  });
 });
 
 describe('constructor error classification', () => {

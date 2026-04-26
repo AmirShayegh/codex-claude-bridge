@@ -206,6 +206,21 @@ Create `.reviewbridge.json` in your project root to customize review behavior:
 
 All fields are optional. Missing fields use the defaults shown above. Large diffs are automatically split into chunks of approximately `max_chunk_tokens` tokens and reviewed sequentially.
 
+### Where the config is discovered
+
+When the MCP server or CLI starts, it looks for `.reviewbridge.json` in this order. The first match wins; nothing is merged.
+
+1. **`RB_CONFIG_PATH` env var** — if set, load exactly that file. Useful when the bridge is launched from a directory that isn't your project (e.g. an MCP host launches it from your home dir). Missing or unreadable file is a hard startup error so typos are surfaced immediately, not silently ignored.
+2. **Walk-up from the working directory** — looks for `.reviewbridge.json` in the current directory, then each parent. The walk stops at the first `.git` boundary so a project nested inside an unrelated git repo doesn't accidentally inherit a parent project's config.
+3. **`$HOME/.reviewbridge.json`** — a per-machine default. Drop one here to pin a model (e.g. `{"model": "gpt-5.4"}`) for every project on the box without having to touch each one.
+4. **Built-in defaults** — what you get if nothing is found anywhere.
+
+A startup log line on stderr names the source (`[codex-bridge] config source: project (/repo/.reviewbridge.json)`) so you can confirm which file is in effect.
+
+The CLI's `--config <dir>` flag is an explicit override: it looks only at `<dir>/.reviewbridge.json` and skips the cascade entirely (env vars and `$HOME` are not consulted in that mode).
+
+> **Selected files must parse cleanly.** Once a `.reviewbridge.json` is found, malformed JSON or schema-invalid values abort startup. The walk-up does **not** silently skip past a broken file to the next candidate — that would hide your typo and leave you running on defaults.
+
 ### Model selection
 
 The default model is `gpt-5.5`. When the ChatGPT-subscription tier of Codex doesn't yet have a newly-announced flagship, fall back to `gpt-5.4` via `.reviewbridge.json`:

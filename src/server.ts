@@ -1,7 +1,7 @@
+import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { loadConfig } from './config/loader.js';
-import { DEFAULT_CONFIG } from './config/types.js';
+import { loadConfig, formatConfigSource } from './config/loader.js';
 import { createCodexClient } from './codex/client.js';
 import { loadCopilotInstructions } from './config/copilot-instructions.js';
 import type { CopilotInstructions } from './config/copilot-instructions.js';
@@ -49,13 +49,16 @@ TIPS:
 export function createServer(): McpServer {
   const configResult = loadConfig();
   if (!configResult.ok) {
-    console.error(`Config load failed, using defaults: ${configResult.error}`);
+    console.error(`[codex-bridge] ${configResult.error}`);
+    throw new Error(configResult.error);
   }
-  const config = configResult.ok ? configResult.data : DEFAULT_CONFIG;
+  const { config, source } = configResult.data;
+  console.error(`[codex-bridge] config source: ${formatConfigSource(source)}`);
 
   let copilotInstr: CopilotInstructions | undefined;
   if (config.copilot_instructions) {
-    const instrResult = loadCopilotInstructions();
+    const instrCwd = source.kind === 'project' ? dirname(source.path) : undefined;
+    const instrResult = loadCopilotInstructions(instrCwd);
     if (instrResult.ok) {
       copilotInstr = instrResult.data;
     } else {

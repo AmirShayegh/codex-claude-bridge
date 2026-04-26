@@ -13,7 +13,19 @@ vi.mock('../codex/client.js', () => ({
 
 // Mock config loader
 vi.mock('../config/loader.js', () => ({
-  loadConfig: vi.fn().mockReturnValue({ ok: true, data: {} }),
+  loadConfig: vi.fn().mockReturnValue({
+    ok: true,
+    data: { config: {}, source: { kind: 'default' } },
+  }),
+  formatConfigSource: vi.fn(() => 'default'),
+}));
+
+// Mock copilot-instructions so it doesn't hit the real filesystem
+vi.mock('../config/copilot-instructions.js', () => ({
+  loadCopilotInstructions: vi.fn(() => ({
+    ok: true,
+    data: { repoWide: null, scoped: [] },
+  })),
 }));
 
 // Mock stdin reader
@@ -230,6 +242,24 @@ describe('review-precommit command', () => {
 
     expect(deps.exitCode).toBe(1);
     expect(deps.stderrBuf).toContain('GIT_ERROR');
+  });
+});
+
+describe('config errors', () => {
+  it('exits 1 with stderr message when loadConfig returns err', async () => {
+    const { loadConfig } = await import('../config/loader.js');
+    vi.mocked(loadConfig).mockReturnValueOnce({
+      ok: false,
+      error: 'CONFIG_ERROR: RB_CONFIG_PATH=/missing.json not found',
+    });
+    mockReadInput.mockResolvedValue({ ok: true, data: 'plan' });
+
+    const deps = createDeps();
+    await runCli(['node', 'bridge', 'review-plan', '--plan', '/tmp/p.md'], deps);
+
+    expect(deps.exitCode).toBe(1);
+    expect(deps.stderrBuf).toContain('CONFIG_ERROR');
+    expect(deps.stderrBuf).toContain('RB_CONFIG_PATH');
   });
 });
 

@@ -2,8 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Command, Option } from 'commander';
-import { loadConfig } from '../config/loader.js';
-import { DEFAULT_CONFIG } from '../config/types.js';
+import { loadConfig, formatConfigSource } from '../config/loader.js';
 import { createCodexClient } from '../codex/client.js';
 import type { CodexClient } from '../codex/client.js';
 import { loadCopilotInstructions } from '../config/copilot-instructions.js';
@@ -49,13 +48,21 @@ function buildIO(deps: CliDeps, json: boolean): HandlerIO {
 function initClient(configDir: string | undefined, deps: CliDeps): CodexClient | null {
   const configResult = loadConfig(configDir);
   if (!configResult.ok) {
-    deps.stderr.write(`Config error: ${configResult.error}\n`);
+    deps.stderr.write(`Error: ${configResult.error}\n`);
+    deps.exit(1);
+    return null;
   }
-  const config = configResult.ok ? configResult.data : DEFAULT_CONFIG;
+  const { config, source } = configResult.data;
+  deps.stderr.write(`[codex-bridge] config source: ${formatConfigSource(source)}\n`);
 
   let copilotInstr: CopilotInstructions | undefined;
   if (config.copilot_instructions) {
-    const instrResult = loadCopilotInstructions(configDir);
+    // When walk-up discovered a project config, anchor copilot-instructions
+    // at that project root rather than process.cwd(). For env/user/default,
+    // copilot stays tied to the caller-passed dir or process.cwd().
+    const instrCwd =
+      source.kind === 'project' ? dirname(source.path) : configDir;
+    const instrResult = loadCopilotInstructions(instrCwd);
     if (instrResult.ok) {
       copilotInstr = instrResult.data;
     } else {

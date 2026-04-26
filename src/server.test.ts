@@ -27,6 +27,16 @@ vi.mock('./codex/client.js', () => ({
 
 vi.mock('./config/loader.js', () => ({
   loadConfig: vi.fn(),
+  formatConfigSource: vi.fn((s: { kind: string; path?: string }) =>
+    s.kind === 'default' ? 'default' : `${s.kind} (${s.path ?? ''})`,
+  ),
+}));
+
+vi.mock('./config/copilot-instructions.js', () => ({
+  loadCopilotInstructions: vi.fn(() => ({
+    ok: true,
+    data: { repoWide: null, scoped: [] },
+  })),
 }));
 
 vi.mock('better-sqlite3', () => {
@@ -57,6 +67,7 @@ vi.mock('./storage/sessions.js', () => ({
 
 import { loadConfig } from './config/loader.js';
 import { DEFAULT_CONFIG } from './config/types.js';
+import { loadCopilotInstructions } from './config/copilot-instructions.js';
 import { initDb } from './storage/reviews.js';
 import { initSessionsDb } from './storage/sessions.js';
 import Database from 'better-sqlite3';
@@ -65,7 +76,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   shouldThrow = false;
   lastConstructorArgs = [];
-  vi.mocked(loadConfig).mockReturnValue({ ok: true, data: DEFAULT_CONFIG });
+  vi.mocked(loadConfig).mockReturnValue({
+    ok: true,
+    data: { config: DEFAULT_CONFIG, source: { kind: 'default' } },
+  });
 });
 
 describe('createServer', () => {
@@ -90,11 +104,13 @@ describe('createServer', () => {
     expect(toolNames).toContain('review_history');
   });
 
-  it('config error falls back to defaults', () => {
-    vi.mocked(loadConfig).mockReturnValue(err('CONFIG_ERROR: file not found'));
+  it('config error aborts startup', () => {
+    vi.mocked(loadConfig).mockReturnValue(err('CONFIG_ERROR: invalid JSON in /repo/.reviewbridge.json'));
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    const server = createServer();
-    expect(typeof server.connect).toBe('function');
+    expect(() => createServer()).toThrow(/CONFIG_ERROR/);
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('CONFIG_ERROR'));
+    consoleSpy.mockRestore();
   });
 
   it('initializes both database tables', () => {
@@ -124,6 +140,29 @@ describe('createServer', () => {
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('SQLITE_CANTOPEN'));
     expect(Database).toHaveBeenCalledTimes(2);
     consoleSpy.mockRestore();
+  });
+
+  it('derives copilot instructions root from project source path', () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      ok: true,
+      data: {
+        config: DEFAULT_CONFIG,
+        source: { kind: 'project', path: '/some/repo/.reviewbridge.json' },
+      },
+    });
+
+    createServer();
+    expect(loadCopilotInstructions).toHaveBeenCalledWith('/some/repo');
+  });
+
+  it('uses process.cwd() for copilot instructions when source is default/env/user', () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      ok: true,
+      data: { config: DEFAULT_CONFIG, source: { kind: 'default' } },
+    });
+
+    createServer();
+    expect(loadCopilotInstructions).toHaveBeenCalledWith(undefined);
   });
 
   it('passes server instructions to McpServer', () => {

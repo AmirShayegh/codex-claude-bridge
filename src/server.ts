@@ -49,7 +49,9 @@ TIPS:
 export function createServer(): McpServer {
   const configResult = loadConfig();
   if (!configResult.ok) {
-    console.error(`[codex-bridge] ${configResult.error}`);
+    // Throw without pre-logging — the MCP entry point (mcp.ts) prints the
+    // message once and exits. Avoids the double-print that happened when
+    // index.ts also console.error'd the bubbled Error.
     throw new Error(configResult.error);
   }
   const { config, source } = configResult.data;

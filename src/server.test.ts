@@ -106,11 +106,8 @@ describe('createServer', () => {
 
   it('config error aborts startup', () => {
     vi.mocked(loadConfig).mockReturnValue(err('CONFIG_ERROR: invalid JSON in /repo/.reviewbridge.json'));
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     expect(() => createServer()).toThrow(/CONFIG_ERROR/);
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('CONFIG_ERROR'));
-    consoleSpy.mockRestore();
   });
 
   it('initializes both database tables', () => {

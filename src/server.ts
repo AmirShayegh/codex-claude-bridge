@@ -1,4 +1,5 @@
 import { dirname } from 'node:path';
+import { readFileSync } from 'node:fs';
 import Database from 'better-sqlite3';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { loadConfig, formatConfigSource } from './config/loader.js';
@@ -46,6 +47,15 @@ TIPS:
 - review_precommit auto-captures staged changes — no need to pass a diff manually.
 - You do not need to review every change. Use your judgement on when a review adds value.`;
 
+// Read the package version once at module load so the MCP server advertises
+// the same version as the published package, instead of drifting from a
+// hardcoded literal. The URL resolves correctly across vitest (source),
+// tsup-bundled dist, and npm-installed consumers — package.json is always
+// adjacent to the running file's parent dir.
+const PACKAGE_VERSION = (
+  JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf-8')) as { version: string }
+).version;
+
 export function createServer(): McpServer {
   const configResult = loadConfig();
   if (!configResult.ok) {
@@ -89,7 +99,7 @@ export function createServer(): McpServer {
 
   try {
     const server = new McpServer(
-      { name: 'codex-claude-bridge', version: '0.1.4' },
+      { name: 'codex-claude-bridge', version: PACKAGE_VERSION },
       { instructions: SERVER_INSTRUCTIONS },
     );
 

@@ -175,4 +175,19 @@ describe('createServer', () => {
     expect(options.instructions).toContain('review_precommit');
     expect(options.instructions).toContain('session_id');
   });
+
+  it('advertises the package.json version (no hardcoded drift)', async () => {
+    const { readFileSync } = await import('node:fs');
+    const expectedVersion = (
+      JSON.parse(
+        readFileSync(new URL('../package.json', import.meta.url), 'utf-8'),
+      ) as { version: string }
+    ).version;
+
+    createServer();
+    const [serverInfo] = lastConstructorArgs as [{ name: string; version: string }];
+    expect(serverInfo.version).toBe(expectedVersion);
+    // Sanity: ensure no future contributor reverts to the historical literal.
+    expect(serverInfo.version).not.toBe('0.1.4');
+  });
 });

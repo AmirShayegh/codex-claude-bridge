@@ -1,0 +1,19 @@
+{
+  "content": "The Codex SDK (`@openai/codex-sdk`) bundles its own CLI binary via a transitive dep on `@openai/codex` (with platform-specific binaries via optionalDependencies). At runtime the SDK's `findCodexPath()` always uses that bundled binary — it never consults `$PATH` or the user's globally-installed CLI. The SDK pins its CLI dep with an exact `=` version, so `codex-sdk@X.Y.Z` always pulls `@openai/codex@X.Y.Z`.\n\nImplication: the bridge's effective Codex version = whatever version the SDK pins, not whatever the user has on PATH. New flagship-model availability requires an SDK bump in this repo, not just a user CLI upgrade. Without the bump, the bridge silently runs the old bundled CLI and may reject newer models with errors like \"requires a newer version of Codex\" even though `codex --version` on PATH reports a current release.\n\nKeep the SDK dep exact-pinned (no caret) so published consumers land on the matrix that's been verified end-to-end. Update `EXPECTED_SDK_VERSION` in `src/codex/sdk-version.test.ts` together with the dep bump — the regression test fails until the constant matches, forcing a deliberate decision on every bump.",
+  "context": "Discovered 2026-05-02 while diagnosing why `gpt-5.5` reviews failed through the bridge despite the user having Codex CLI v0.128.0 installed globally. Direct SDK probe confirmed: bundled v0.104.0 binary outright rejects gpt-5.5 ('requires a newer version of Codex'), while pointing the SDK at the user's v0.128.0 via `codexPathOverride` made gpt-5.5 work in 5s. SDK source at node_modules/@openai/codex-sdk/dist/index.js:365-431 (findCodexPath) confirmed the bundled-binary-only resolution. Fix shipped in 1.0.0 (commit 306b4c1) as `@openai/codex-sdk: 0.128.0` exact pin + new sdk-version.test.ts regression guard.",
+  "createdDate": "2026-05-02",
+  "id": "L-008",
+  "lastValidated": "2026-05-02",
+  "reinforcements": 0,
+  "source": "postmortem",
+  "status": "active",
+  "supersedes": null,
+  "tags": [
+    "codex-sdk",
+    "deps",
+    "release-engineering",
+    "model-currency"
+  ],
+  "title": "Codex SDK bundles its own CLI binary; bridge's effective version = SDK pin, not user PATH",
+  "updatedDate": "2026-05-02"
+}

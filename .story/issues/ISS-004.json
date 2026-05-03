@@ -1,0 +1,19 @@
+{
+  "components": [
+    "config"
+  ],
+  "discoveredDate": "2026-05-02",
+  "id": "ISS-004",
+  "impact": "Some `.reviewbridge.json` config fields are accepted by the schema but not actually consumed downstream — silently no-op rather than rejected at load time. Surfaced during a pre-1.0.0 implementation review as a deferred medium issue. Specific fields not yet enumerated; an audit pass should grep config field references against actual usages and either wire them up or reject them in the loader. Not blocking 1.0.0 because no current user has reported a behavioral surprise; flagged so the audit can land in 1.0.x as a separate ticket.",
+  "location": [
+    "src/config/types.ts",
+    "src/config/loader.ts"
+  ],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": null,
+  "resolvedDate": null,
+  "severity": "medium",
+  "status": "open",
+  "title": "Config no-op fields: schema accepts settings that nothing reads"
+}

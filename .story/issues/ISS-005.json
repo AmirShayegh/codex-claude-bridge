@@ -1,0 +1,20 @@
+{
+  "components": [
+    "tools",
+    "diff-handling"
+  ],
+  "discoveredDate": "2026-05-02",
+  "id": "ISS-005",
+  "impact": "review_code and review_precommit currently reject diffs that don't include unified-diff hunks via looksLikeDiff (src/codex/client.ts) — which means binary-only diffs and rename-only diffs (which carry `diff --git` headers but no `@@` markers) are misclassified as 'not a diff' and refused. The user gets an INVALID_INPUT error even though git produced a valid diff. Surfaced during a pre-1.0.0 implementation review as a deferred medium issue. Fix shape: relax looksLikeDiff to accept `diff --git` + `Binary files` or `rename from/to` lines as valid, OR allow these through as a no-op chunk that doesn't need review. Not blocking 1.0.0; tracked for 1.0.x.",
+  "location": [
+    "src/codex/client.ts:59-65",
+    "src/utils/chunking.ts:32-33"
+  ],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": null,
+  "resolvedDate": null,
+  "severity": "medium",
+  "status": "open",
+  "title": "Binary and rename-only diffs rejected as 'not a diff'"
+}

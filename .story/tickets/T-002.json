@@ -1,12 +1,13 @@
 {
   "blockedBy": [],
-  "completedDate": null,
+  "completedDate": "2026-05-02",
+  "completedBy": "06ca8ce",
   "createdDate": "2026-04-23",
-  "description": "src/storage/session-tracker.ts recordSuccess() calls saveReview() then markSessionCompleted() as separate statements. If saveReview fails the session is still marked complete — producing inconsistent state where review_history returns no row but review_status reports completed. Wrap both in a single transaction via db.transaction(() => { ... })(). Acceptance: test with a mock saveReview that throws asserts the session is NOT marked complete. Source: docs/roadmap_1.1.md:158.",
+  "description": "src/storage/session-tracker.ts recordSuccess() calls saveReview() then markSessionCompleted() as separate statements. If saveReview fails the session is still marked complete — producing inconsistent state where review_history returns no row but review_status reports completed. Wrap both in a single transaction via db.transaction(() => { ... })(). Acceptance: test with a mock saveReview that throws asserts the session is NOT marked complete. Source: docs/roadmap_1.1.md:158.\n\nResolution (2026-05-02, commit 06ca8ce): Both calls now run inside `db.transaction(() => { ... })()`. On any failure inside the body the transaction throws and rolls back, so the session is never marked complete unless the review row was also persisted. The shipped test exceeds the original acceptance criteria — instead of mocking saveReview to throw, src/storage/session-tracker.integration.test.ts uses a real :memory: SQLite with the reviews table deliberately omitted, reproducing the real storage failure path end-to-end.",
   "id": "T-002",
   "order": 20,
   "phase": "reliability",
-  "status": "open",
+  "status": "complete",
   "title": "Atomicity for saveReview and markSessionCompleted",
   "type": "task"
 }

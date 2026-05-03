@@ -12,7 +12,7 @@
   ],
   "phase": "reliability",
   "relatedTickets": [],
-  "resolution": null,
+  "resolution": "Mitigated by SDK bump in commit 306b4c1 (1.0.0 release): the bundled CLI moved from 0.104.0 to 0.128.0, which no longer exhibits the memory-agent gpt-5.1-codex-mini failure path against ChatGPT-tier auth — the misleading tip stops appearing in the most common scenario. Status remains open because (a) we have not directly probed the memory-agent path under the new binary across all auth/config combinations, and (b) the classifier text is still imprecise if any future Codex subsystem surfaces a model name that differs from the configured one. Future work would tighten the classifier to detect extracted-model ≠ configured-model and emit a distinct tip; tracked separately and not blocking 1.0.0.",
   "resolvedDate": null,
   "severity": "medium",
   "status": "open",

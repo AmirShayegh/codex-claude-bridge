@@ -1,12 +1,13 @@
 {
   "blockedBy": [],
-  "completedDate": null,
+  "completedDate": "2026-05-02",
+  "completedBy": "a3b4bc1",
   "createdDate": "2026-04-23",
-  "description": "When reviewing a chunked diff, if chunk 1 succeeds but chunk 2 times out or errors, the session remains in status `in_progress` forever. Add failure handling in the multi-chunk loop in src/codex/client.ts (or wherever the chunk iteration lives after the wiring commit ce058b3) to mark the session `failed` on partial failure and propagate a useful error. Acceptance: test that simulates a mid-chunk timeout asserts session ends in `failed` state and review_status reflects that. Source: docs/roadmap_1.1.md:156.",
+  "description": "When reviewing a chunked diff, if chunk 1 succeeds but chunk 2 times out or errors, the session remains in status `in_progress` forever. Add failure handling in the multi-chunk loop in src/codex/client.ts (or wherever the chunk iteration lives after the wiring commit ce058b3) to mark the session `failed` on partial failure and propagate a useful error. Acceptance: test that simulates a mid-chunk timeout asserts session ends in `failed` state and review_status reflects that. Source: docs/roadmap_1.1.md:156.\n\nResolution (2026-05-02, commit a3b4bc1): Result<T>'s error variant now carries an optional session_id. The chunk loops in src/codex/client.ts surface the partial thread id when a mid-loop failure occurs; tool handlers pass it to tracker.recordFailure(sessionId), which opens a transaction to create-then-fail the session row atomically when no preflight row existed. Two tests cover it: a client-level test asserting Result.session_id is set on partial failure, and an integration test in src/server.integration.test.ts that exercises real chunking via RB_CONFIG_PATH + small max_chunk_tokens, real :memory: SQLite, and review_status — mocking only at the SDK boundary so the actual product path is verified.",
   "id": "T-001",
   "order": 10,
   "phase": "reliability",
-  "status": "open",
+  "status": "complete",
   "title": "Fix multi-chunk session orphaning on partial failure",
   "type": "task"
 }

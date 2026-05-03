@@ -44,7 +44,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",
-    "@openai/codex-sdk": "^0.104.0",
+    "@openai/codex-sdk": "0.128.0",
     "better-sqlite3": "^12.6.2",
     "commander": "^13.1.0",
     "picocolors": "^1.1.1",

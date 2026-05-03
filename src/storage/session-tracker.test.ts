@@ -16,7 +16,11 @@ vi.mock('./sessions.js', () => ({
 import { saveReview } from './reviews.js';
 import { activateSession, getOrCreateSession, markSessionCompleted, markSessionFailed } from './sessions.js';
 
-const mockDb = {} as never;
+// Minimal db stub: transaction(fn) returns a callable that invokes fn — matches
+// better-sqlite3's API surface that recordSuccess relies on for atomicity.
+const mockDb = {
+  transaction: <T>(fn: () => T) => () => fn(),
+} as never;
 
 beforeEach(() => {
   vi.clearAllMocks();

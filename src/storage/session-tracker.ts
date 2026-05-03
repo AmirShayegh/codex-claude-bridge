@@ -40,14 +40,20 @@ export function createSessionTracker(db: Database.Database | undefined): Session
           console.error(`Failed to track session: ${sessionResult.error}`);
         }
       }
-      const saveResult = saveReview(db, review);
-      if (!saveResult.ok) {
-        console.error(`Failed to save review: ${saveResult.error}`);
-      }
       const completeId = preflightId ?? resultSessionId;
-      const completeResult = markSessionCompleted(db, completeId);
-      if (!completeResult.ok) {
-        console.error(`Failed to complete session: ${completeResult.error}`);
+      // saveReview and markSessionCompleted must succeed or fail together —
+      // otherwise a save failure would leave the session marked complete with
+      // no review row, producing inconsistent state across review_history /
+      // review_status.
+      try {
+        db.transaction(() => {
+          const saveResult = saveReview(db, review);
+          if (!saveResult.ok) throw new Error(saveResult.error);
+          const completeResult = markSessionCompleted(db, completeId);
+          if (!completeResult.ok) throw new Error(completeResult.error);
+        })();
+      } catch (e) {
+        console.error(`recordSuccess transaction failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     },
 

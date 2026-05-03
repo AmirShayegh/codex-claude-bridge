@@ -119,7 +119,9 @@ describe('registerReviewPlanTool', () => {
 });
 
 describe('registerReviewPlanTool with db', () => {
-  const mockDb = {};
+  // transaction(fn)() invokes fn synchronously — matches better-sqlite3's
+  // shape that recordSuccess uses for atomicity (T-002).
+  const mockDb = { transaction: <T>(fn: () => T) => () => fn() };
 
   beforeEach(() => {
     vi.mocked(getOrCreateSession).mockReturnValue(ok({ session_id: 'thread_abc', status: 'in_progress' as const, created_at: '2026-01-01', completed_at: null }));
@@ -189,7 +191,7 @@ describe('registerReviewPlanTool with db', () => {
 
     const result = await handler({ plan: 'My plan' }, {});
 
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to complete session'));
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('readonly'));
     expect(result.isError).toBeUndefined();
     consoleSpy.mockRestore();
   });

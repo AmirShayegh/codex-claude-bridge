@@ -47,7 +47,7 @@ export function registerReviewPlanTool(server: McpServer, client: CodexClient, d
 
         const result = await client.reviewPlan(args);
         if (!result.ok) {
-          tracker.recordFailure();
+          tracker.recordFailure(result.session_id);
           return { content: [{ type: 'text' as const, text: result.error }], isError: true };
         }
 

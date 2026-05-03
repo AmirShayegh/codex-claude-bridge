@@ -72,7 +72,7 @@ export function registerReviewPrecommitTool(server: McpServer, client: CodexClie
           model: args.model,
         });
         if (!result.ok) {
-          tracker.recordFailure();
+          tracker.recordFailure(result.session_id);
           return { content: [{ type: 'text' as const, text: result.error }], isError: true };
         }
 

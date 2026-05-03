@@ -13,12 +13,16 @@ export enum ErrorCode {
   UNKNOWN_ERROR = 'UNKNOWN_ERROR',
 }
 
-export type Result<T> = { ok: true; data: T } | { ok: false; error: string };
+export type Result<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: string; session_id?: string };
 
 export function ok<T>(data: T): Result<T> {
   return { ok: true, data };
 }
 
-export function err<T>(error: string): Result<T> {
-  return { ok: false, error };
+// session_id flows back on partial-chunk failures so the tool layer can
+// mark the orphaned Codex thread's session as failed (T-001).
+export function err<T>(error: string, session_id?: string): Result<T> {
+  return session_id ? { ok: false, error, session_id } : { ok: false, error };
 }

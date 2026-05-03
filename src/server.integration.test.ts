@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 // --- Codex SDK mock (same pattern as codex/client.test.ts) ---
 let mockRun: ReturnType<typeof vi.fn>;
@@ -326,5 +329,82 @@ describe('MCP integration — session lifecycle', () => {
     const okResult = await client.callTool({ name: 'review_plan', arguments: { plan: 'Plan B' } });
     const parsed = parseToolResult(okResult) as Record<string, unknown>;
     expect(parsed.verdict).toBe('approve');
+  });
+});
+
+// T-001: end-to-end test that a chunked review failing on chunk 2 marks the
+// chunk-1 session as failed, exercised through real chunking + real SQLite
+// (not mocked) so the actual product path is verified, not a stand-in.
+describe('MCP integration — review_code multi-chunk session failure (T-001)', () => {
+  let configDir: string | undefined;
+
+  // Two files, each ~1000 tokens (~4000 chars), so under a forced
+  // diffBudget=500 the chunker emits 2 pieces (one per file).
+  function makeMultiChunkDiff(): string {
+    const padLines = (prefix: string, count: number): string[] =>
+      Array.from({ length: count }, (_, i) => `${prefix}${i} padding-text-here-extra-words-for-volume`);
+    const fileOne = [
+      'diff --git a/a.ts b/a.ts',
+      '--- a/a.ts',
+      '+++ b/a.ts',
+      '@@ -1,80 +1,80 @@',
+      ...padLines('-old line ', 80),
+      ...padLines('+new line ', 80),
+    ];
+    const fileTwo = [
+      'diff --git a/b.ts b/b.ts',
+      '--- a/b.ts',
+      '+++ b/b.ts',
+      '@@ -1,80 +1,80 @@',
+      ...padLines('-old second ', 80),
+      ...padLines('+new second ', 80),
+    ];
+    return [...fileOne, ...fileTwo].join('\n');
+  }
+
+  beforeEach(async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rb-int-'));
+    configDir = dir;
+    await fs.writeFile(path.join(dir, '.reviewbridge.json'), JSON.stringify({ max_chunk_tokens: 2200 }));
+    savedEnv.RB_CONFIG_PATH = process.env.RB_CONFIG_PATH;
+    process.env.RB_CONFIG_PATH = path.join(dir, '.reviewbridge.json');
+  });
+
+  afterEach(async () => {
+    if (savedEnv.RB_CONFIG_PATH === undefined) delete process.env.RB_CONFIG_PATH;
+    else process.env.RB_CONFIG_PATH = savedEnv.RB_CONFIG_PATH;
+    if (configDir) {
+      await fs.rm(configDir, { recursive: true, force: true });
+      configDir = undefined;
+    }
+  });
+
+  it('marks session failed when chunk 2 errors after chunk 1 succeeded', async () => {
+    const thread1Id = 'thread_partial_T001';
+    mockThreadId = thread1Id;
+
+    mockRun
+      .mockResolvedValueOnce({ finalResponse: JSON.stringify(validCodeResponse) })
+      .mockRejectedValueOnce(new DOMException('aborted', 'AbortError'));
+
+    client = await startServer();
+
+    const reviewResult = await client.callTool({
+      name: 'review_code',
+      arguments: { diff: makeMultiChunkDiff() },
+    });
+    const errorText = getErrorText(reviewResult);
+    expect(errorText).toContain('CODEX_TIMEOUT');
+
+    // Real chunking must have produced ≥2 chunks for this scenario to be valid.
+    expect(mockRun).toHaveBeenCalledTimes(2);
+
+    const statusResult = await client.callTool({
+      name: 'review_status',
+      arguments: { session_id: thread1Id },
+    });
+    const statusParsed = parseToolResult(statusResult) as Record<string, unknown>;
+    expect(statusParsed.status).toBe('failed');
+    expect(statusParsed.session_id).toBe(thread1Id);
   });
 });

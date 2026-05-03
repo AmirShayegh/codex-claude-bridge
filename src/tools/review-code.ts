@@ -76,7 +76,7 @@ export function registerReviewCodeTool(server: McpServer, client: CodexClient, d
 
         const result = await client.reviewCode({ ...args, diff });
         if (!result.ok) {
-          tracker.recordFailure();
+          tracker.recordFailure(result.session_id);
           return { content: [{ type: 'text' as const, text: result.error }], isError: true };
         }
 

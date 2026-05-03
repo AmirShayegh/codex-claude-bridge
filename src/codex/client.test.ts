@@ -1156,4 +1156,49 @@ describe('chunking', () => {
 
     expect(budgetWithEmptyCriteria).toBe(budgetWithoutCriteria);
   });
+
+  // T-001: when a mid-chunk failure happens after chunk 1 has already
+  // established a Codex thread, the partial session id must travel back on
+  // the error so the tool layer can mark that session failed instead of
+  // leaving it orphaned in_progress.
+  it('multi-chunk reviewCode: chunk 2 timeout returns the chunk-1 thread id on the error', async () => {
+    mockChunkDiff.mockReturnValue(['chunk1', 'chunk2']);
+    const thread1Id = 'thread_partial_failure';
+    mockStartThread.mockImplementation(() => ({ run: mockRun, get id() { return thread1Id; } }));
+    mockResumeThread.mockImplementation(() => ({ run: mockRun, get id() { return thread1Id; } }));
+
+    mockRun
+      .mockResolvedValueOnce({ finalResponse: makeCodeResponse('approve') })
+      .mockRejectedValueOnce(new DOMException('aborted', 'AbortError'));
+
+    const client = createCodexClient(config);
+    const result = await client.reviewCode({ diff: 'big diff' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('CODEX_TIMEOUT');
+      expect(result.session_id).toBe(thread1Id);
+    }
+  });
+
+  it('multi-chunk reviewPrecommit: chunk 2 timeout returns the chunk-1 thread id on the error', async () => {
+    mockChunkDiff.mockReturnValue(['chunk1', 'chunk2']);
+    const thread1Id = 'thread_pre_partial_failure';
+    mockStartThread.mockImplementation(() => ({ run: mockRun, get id() { return thread1Id; } }));
+    mockResumeThread.mockImplementation(() => ({ run: mockRun, get id() { return thread1Id; } }));
+
+    const validPrecommit = { ready_to_commit: true, blockers: [], warnings: [] };
+    mockRun
+      .mockResolvedValueOnce({ finalResponse: JSON.stringify(validPrecommit) })
+      .mockRejectedValueOnce(new DOMException('aborted', 'AbortError'));
+
+    const client = createCodexClient(config);
+    const result = await client.reviewPrecommit({ diff: 'diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('CODEX_TIMEOUT');
+      expect(result.session_id).toBe(thread1Id);
+    }
+  });
 });

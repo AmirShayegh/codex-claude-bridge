@@ -6,7 +6,10 @@ import { activateSession, getOrCreateSession, markSessionCompleted, markSessionF
 export interface SessionTracker {
   preflight(sessionId: string | undefined): void;
   recordSuccess(resultSessionId: string, review: SaveReviewInput): void;
-  recordFailure(): void;
+  // sessionId surfaces partial-chunk failures where chunk 1 created a
+  // Codex thread but a later chunk errored — the tool layer must mark
+  // that thread's session failed rather than orphaning it (T-001).
+  recordFailure(sessionId?: string): void;
   recordFailureBestEffort(): void;
 }
 
@@ -57,11 +60,29 @@ export function createSessionTracker(db: Database.Database | undefined): Session
       }
     },
 
-    recordFailure() {
-      if (!preflightId) return;
-      const failResult = markSessionFailed(db, preflightId);
-      if (!failResult.ok) {
-        console.error(`Failed to mark session failed: ${failResult.error}`);
+    recordFailure(sessionId) {
+      const id = preflightId ?? sessionId;
+      if (!id) return;
+      // Preflight path: row already exists from activateSession — single UPDATE.
+      if (preflightId) {
+        const failResult = markSessionFailed(db, preflightId);
+        if (!failResult.ok) {
+          console.error(`Failed to mark session failed: ${failResult.error}`);
+        }
+        return;
+      }
+      // Fresh-session path (T-001): chunk 1 created a Codex thread but no DB
+      // row exists. Create-then-fail must be atomic so we never persist a row
+      // that's missing the failed status.
+      try {
+        db.transaction(() => {
+          const sessionResult = getOrCreateSession(db, id);
+          if (!sessionResult.ok) throw new Error(sessionResult.error);
+          const failResult = markSessionFailed(db, id);
+          if (!failResult.ok) throw new Error(failResult.error);
+        })();
+      } catch (e) {
+        console.error(`recordFailure transaction failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     },
 

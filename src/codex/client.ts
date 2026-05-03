@@ -435,7 +435,12 @@ export function createCodexClient(
           resolvedModel: codeResolvedModel,
         });
 
-        if (!result.ok) return result;
+        if (!result.ok) {
+          // Surface the partial thread id so the tool layer can mark this
+          // session failed (T-001). Falls through to the original result if
+          // chunk 1 failed before any thread was established.
+          return sessionId ? err<CodeReviewResult>(result.error, sessionId) : result;
+        }
         chunkResults.push(result.data);
         sessionId = result.data.session_id;
       }
@@ -520,7 +525,10 @@ export function createCodexClient(
           resolvedModel: precommitResolvedModel,
         });
 
-        if (!result.ok) return result;
+        if (!result.ok) {
+          // T-001: see reviewCode chunk loop for rationale.
+          return sessionId ? err<PrecommitResult>(result.error, sessionId) : result;
+        }
         chunkResults.push(result.data);
         sessionId = result.data.session_id;
       }

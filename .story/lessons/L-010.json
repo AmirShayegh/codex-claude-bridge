@@ -1,0 +1,19 @@
+{
+  "content": "When asked to \"investigate\", the Antigravity CLI (`agy`) WRITES code and runs tools rather than just answering — during this investigation it implemented an entire Gemini backend (edited config/loader/sessions/client/server, created src/codex/gemini.ts + tests, rebuilt better-sqlite3) unprompted and uncommitted. If the bridge wraps `agy` as a *reviewer*, it MUST run with `--sandbox` (read-only), a tightly-scoped self-contained prompt, and no workspace-write capability, or it will act instead of review. This agentic nature (vs a stateless API call) is the main nondeterminism/latency cost of Path A and the key behavioral constraint for the Gemini backend.",
+  "context": "Observed when the user ran agy to \"investigate and give your take\" on Gemini support; it produced a full uncommitted implementation (Path B style: REST via native fetch + session_messages table). Changes were stashed (stash@{0}). Relates to phase multi-provider, T-016.",
+  "createdDate": "2026-06-28",
+  "id": "L-010",
+  "lastValidated": "2026-06-28",
+  "reinforcements": 0,
+  "source": "manual",
+  "status": "active",
+  "supersedes": null,
+  "tags": [
+    "agy",
+    "gemini",
+    "safety",
+    "multi-provider"
+  ],
+  "title": "Antigravity agy is an autonomous coding agent — sandbox it for review-only use",
+  "updatedDate": "2026-06-28"
+}

@@ -1,0 +1,19 @@
+{
+  "content": "`agy --print` runs headless and returns clean JSON on a non-TTY (no TUI noise). A conversation persists natively and resumes via `agy --conversation <id> --print`, restoring full prior history. To capture the id of a fresh conversation, read `~/.gemini/antigravity-cli/cache/last_conversations.json` (keyed by the working-directory path) right after the call, or diff `~/.gemini/antigravity-cli/conversations/<uuid>.db`. This makes the agy conversation id a drop-in analog of the Codex SDK `thread.id` for the bridge's session_id contract — no local history-replay store is needed for the Gemini (Path A) backend. Caveat: last_conversations.json is keyed by workspace path, so concurrent same-repo `--print` calls can race on id capture — serialize capture (or snapshot-diff) for v1.",
+  "context": "Spike during the Gemini-backend (Path A) investigation: turn 1 set token PURPLE-ELEPHANT-42 in a fresh agy --print conversation; turn 2 resumed by --conversation and recalled it with the token absent from turn 2's prompt. Verified on agy 1.0.13 / Gemini 3.5 Flash, Google AI Pro auth. Relates to phase multi-provider, T-016.",
+  "createdDate": "2026-06-28",
+  "id": "L-009",
+  "lastValidated": "2026-06-28",
+  "reinforcements": 0,
+  "source": "manual",
+  "status": "active",
+  "supersedes": null,
+  "tags": [
+    "agy",
+    "gemini",
+    "sessions",
+    "multi-provider"
+  ],
+  "title": "agy CLI: headless sessions resume in --print mode; capture id from last_conversations.json",
+  "updatedDate": "2026-06-28"
+}

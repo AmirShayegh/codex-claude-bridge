@@ -1,0 +1,12 @@
+{
+  "blockedBy": [],
+  "completedDate": null,
+  "createdDate": "2026-06-28",
+  "description": "Make error codes and user-facing strings provider-neutral — both to satisfy the no-AI-tool-names-in-user-errors rule and to avoid emitting a \"Codex\" code on a Gemini failure.\n\n- Rename `ErrorCode.CODEX_TIMEOUT` → `REVIEW_TIMEOUT` and `CODEX_PARSE_ERROR` → `RESPONSE_PARSE_ERROR` (src/utils/errors.ts); update ALL references (client.ts:205-210, 230, 237 + every test/snapshot that asserts them).\n- Neutralize `SERVER_INSTRUCTIONS` (server.ts:17) and the CLI program description (cli/commands.ts:102): drop \"OpenAI Codex\" → \"automated code review\". (Setup/install docs MAY still name the concrete backend.)\n\nLand as an ISOLATED mechanical commit so it doesn't add noise to the Gemini diff. Note (adversarial): these error codes are embedded in user-facing message strings consumed by Claude Code, so this is a deliberate contract change — update assertions intentionally, don't paper over them.\nAcceptance: green suite; no `CODEX_*` codes remain; no AI tool name in generic error/instruction strings.",
+  "id": "T-014",
+  "order": 20,
+  "phase": "multi-provider",
+  "status": "open",
+  "title": "Generic-ize error codes + neutralize backend-named user strings",
+  "type": "chore"
+}

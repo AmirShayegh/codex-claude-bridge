@@ -1,0 +1,16 @@
+{
+  "blockedBy": [
+    "T-013",
+    "T-015",
+    "T-016"
+  ],
+  "completedDate": null,
+  "createdDate": "2026-06-28",
+  "description": "Dispatch to the chosen backend and wire it through the server + CLI.\n\n- `src/backends/index.ts`: `createBackend(config, copilotInstr, deps)` reads `config.provider` → `createCodexBackend | createGeminiBackend` (both return `ReviewBackend`). This file MAY import both backends; the config layer still must not.\n- server.ts:81 and cli/commands.ts:74 call `createBackend` instead of `createCodexClient`.\n- Lazy/dynamic-load each backend's heavy bits so the unused provider never initializes (today `new Codex()` runs eagerly in the factory — wasteful and can fail if that provider's env is absent). \n- Adversarial caveat: if making the factory async ripples sync→async into server.ts:81 and the CLI call sites (commands.ts:128/170/208), either await it at the already-async entry points OR do the dynamic import once at module init keyed by config.provider and keep the factory sync. Pick one deliberately.\n\nAcceptance: provider:'codex' and provider:'gemini' both work end-to-end via MCP and CLI; only the selected provider's SDK/binary initializes.",
+  "id": "T-018",
+  "order": 60,
+  "phase": "multi-provider",
+  "status": "open",
+  "title": "Backend selection layer + wire entry points",
+  "type": "feature"
+}

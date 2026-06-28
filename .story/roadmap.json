@@ -38,6 +38,13 @@
       "summary": "Default model + install pin currency (v0.3.0 = gpt-5.5)"
     },
     {
+      "description": "Make the bridge provider-pluggable: route reviews to Google Gemini (via the Antigravity `agy` CLI on a Google AI Pro subscription) as a first-class alternative to OpenAI Codex — with the MCP tool contract, structured-output schemas, session-continuity model, and zero-config install all unchanged. Path A (wrap `agy --print`) was chosen over the raw `@google/genai` API for $0-on-existing-subscription + native resumable sessions. Work = a path-independent ReviewBackend refactor (~75% of effort) + the agy-backed Gemini backend. Designed to not preclude dual/cross-review (run Codex + Gemini, merge with per-finding provenance) as a later step.",
+      "id": "multi-provider",
+      "label": "Multi-Provider",
+      "name": "Multi-Provider",
+      "summary": "Pluggable review backends; Gemini via agy CLI alongside Codex"
+    },
+    {
       "description": "Make the review loop useful for teams reviewing GitHub PRs. Adds a sixth MCP tool (review_pr) and a fourth CLI subcommand (review-pr). Fetches PR diff and metadata via `gh pr diff` and `gh pr view --json`, feeds PR title + description + diff to a PR-specific prompt, and returns scope-match and description-match as regular findings (not top-level fields, to keep the result type consistent with review_code). No storage changes needed.",
       "id": "team-integration",
       "label": "PHASE 6",

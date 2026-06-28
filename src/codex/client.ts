@@ -7,9 +7,8 @@ import {
   PlanReviewResultSchema,
   CodeReviewResultSchema,
   PrecommitResultSchema,
-  CodeFindingSeveritySchema,
 } from './types.js';
-import type { PlanReviewResult, CodeReviewResult, PrecommitResult, CodeFinding, CodeFindingSeverity } from './types.js';
+import type { PlanReviewResult, CodeReviewResult, PrecommitResult } from './types.js';
 import {
   buildPlanReviewPrompt,
   buildCodeReviewPrompt,
@@ -21,6 +20,13 @@ import { filterByFiles, formatForPrompt } from '../config/copilot-instructions.j
 import type { CopilotInstructions } from '../config/copilot-instructions.js';
 import { extractFilesFromDiff } from '../utils/diff-files.js';
 import type { ReviewBackend } from '../backends/backend.js';
+import {
+  looksLikeDiff,
+  PROMPT_OVERHEAD_TOKENS,
+  computeVariableOverhead,
+  mergeCodeResults,
+  mergePrecommitResults,
+} from '../backends/orchestrator.js';
 
 // Response schemas omit fields the reviewer doesn't produce
 const PlanReviewResponseSchema = PlanReviewResultSchema.omit({ session_id: true });
@@ -33,13 +39,9 @@ const PrecommitResponseSchema = PrecommitResultSchema.omit({ session_id: true, c
 // live alongside the interface in backend.ts.
 export type CodexClient = ReviewBackend;
 
-export function looksLikeDiff(text: string): boolean {
-  const hasDiffGit = /^diff --git /m.test(text);
-  const hasHunks = /^@@ /m.test(text);
-  const hasFileHeaders = /^--- [ab]\//m.test(text) && /^\+\+\+ [ab]\//m.test(text);
-  // Require at least two structural markers to reduce false positives
-  return (hasDiffGit && (hasHunks || hasFileHeaders)) || (hasFileHeaders && hasHunks);
-}
+// `looksLikeDiff` now lives in the shared orchestrator; re-exported here so
+// existing importers (e.g. tests) keep resolving it from this module.
+export { looksLikeDiff };
 
 function isAbortError(e: unknown): boolean {
   if (e instanceof Error) {
@@ -212,76 +214,6 @@ async function runReview<T extends Record<string, unknown>>(params: {
   }
 
   return err(`${ErrorCode.CODEX_PARSE_ERROR}: ${lastError}`);
-}
-
-// Fixed overhead for prompt framing (role, rubric, schema, chunk header)
-const PROMPT_OVERHEAD_TOKENS = 2000;
-
-function computeVariableOverhead(parts: string[]): number {
-  let total = 0;
-  for (const part of parts) {
-    if (part) total += estimateTokens(part);
-  }
-  return total;
-}
-
-// Higher rank = more severe. Options are ['critical','major','minor','nitpick'] so reverse index.
-const severityRank: Record<CodeFindingSeverity, number> = Object.fromEntries(
-  CodeFindingSeveritySchema.options.map((s, i, arr) => [s, arr.length - 1 - i]),
-) as Record<CodeFindingSeverity, number>;
-
-function deduplicateFindings(findings: CodeFinding[]): CodeFinding[] {
-  const map = new Map<string, CodeFinding>();
-  const keyless: CodeFinding[] = [];
-
-  for (const f of findings) {
-    if (f.file === null || f.line === null) {
-      keyless.push(f);
-      continue;
-    }
-    const key = `${f.file}:${f.line}:${f.category}`;
-    const existing = map.get(key);
-    if (!existing || severityRank[f.severity] > severityRank[existing.severity]) {
-      map.set(key, f);
-    }
-  }
-
-  return [...map.values(), ...keyless];
-}
-
-const codeVerdictRank: Record<string, number> = { approve: 0, request_changes: 1, reject: 2 };
-
-function mergeCodeResults(
-  results: Omit<CodeReviewResult, 'chunks_reviewed'>[],
-  sessionId: string,
-): CodeReviewResult {
-  let worstVerdict = results[0].verdict;
-  for (const r of results) {
-    if (codeVerdictRank[r.verdict] > codeVerdictRank[worstVerdict]) {
-      worstVerdict = r.verdict;
-    }
-  }
-
-  return {
-    verdict: worstVerdict,
-    summary: results.map((r) => r.summary).join(' '),
-    findings: deduplicateFindings(results.flatMap((r) => r.findings)),
-    session_id: sessionId,
-    chunks_reviewed: results.length,
-  };
-}
-
-function mergePrecommitResults(
-  results: Omit<PrecommitResult, 'chunks_reviewed'>[],
-  sessionId: string,
-): PrecommitResult {
-  return {
-    ready_to_commit: results.every((r) => r.ready_to_commit),
-    blockers: results.flatMap((r) => r.blockers),
-    warnings: results.flatMap((r) => r.warnings),
-    session_id: sessionId,
-    chunks_reviewed: results.length,
-  };
 }
 
 export function createCodexClient(

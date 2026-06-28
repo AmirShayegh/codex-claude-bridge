@@ -20,41 +20,18 @@ import { chunkDiff, estimateTokens } from '../utils/chunking.js';
 import { filterByFiles, formatForPrompt } from '../config/copilot-instructions.js';
 import type { CopilotInstructions } from '../config/copilot-instructions.js';
 import { extractFilesFromDiff } from '../utils/diff-files.js';
+import type { ReviewBackend } from '../backends/backend.js';
 
 // Response schemas omit fields the reviewer doesn't produce
 const PlanReviewResponseSchema = PlanReviewResultSchema.omit({ session_id: true });
 const CodeReviewResponseSchema = CodeReviewResultSchema.omit({ session_id: true, chunks_reviewed: true });
 const PrecommitResponseSchema = PrecommitResultSchema.omit({ session_id: true, chunks_reviewed: true });
 
-interface PlanReviewInput {
-  plan: string;
-  context?: string;
-  focus?: string[];
-  depth?: 'quick' | 'thorough';
-  session_id?: string;
-  model?: string;
-}
-
-interface CodeReviewInput {
-  diff: string;
-  context?: string;
-  criteria?: string[];
-  session_id?: string;
-  model?: string;
-}
-
-interface PrecommitReviewInput {
-  diff: string;
-  checklist?: string[];
-  session_id?: string;
-  model?: string;
-}
-
-export interface CodexClient {
-  reviewPlan(input: PlanReviewInput): Promise<Result<PlanReviewResult>>;
-  reviewCode(input: CodeReviewInput): Promise<Result<CodeReviewResult>>;
-  reviewPrecommit(input: PrecommitReviewInput): Promise<Result<PrecommitResult>>;
-}
+// `CodexClient` is retained as an alias of the provider-neutral `ReviewBackend`
+// seam (src/backends/backend.ts) so existing tool/CLI imports keep working while
+// the multi-provider refactor lands incrementally (T-013). The input shapes now
+// live alongside the interface in backend.ts.
+export type CodexClient = ReviewBackend;
 
 export function looksLikeDiff(text: string): boolean {
   const hasDiffGit = /^diff --git /m.test(text);

@@ -1,47 +1,29 @@
 import { Codex } from '@openai/codex-sdk';
-import { toJSONSchema, type z } from 'zod';
-import { randomUUID } from 'node:crypto';
+import { toJSONSchema } from 'zod';
 import { ok, err, ErrorCode } from '../utils/errors.js';
 import type { Result } from '../utils/errors.js';
-import {
-  PlanReviewResultSchema,
-  CodeReviewResultSchema,
-  PrecommitResultSchema,
-} from './types.js';
 import type { PlanReviewResult, CodeReviewResult, PrecommitResult } from './types.js';
-import {
-  buildPlanReviewPrompt,
-  buildCodeReviewPrompt,
-  buildPrecommitPrompt,
-} from './prompts.js';
 import type { ReviewBridgeConfig } from '../config/types.js';
-import { chunkDiff, estimateTokens } from '../utils/chunking.js';
-import { filterByFiles, formatForPrompt } from '../config/copilot-instructions.js';
+import { estimateTokens } from '../utils/chunking.js';
 import type { CopilotInstructions } from '../config/copilot-instructions.js';
-import { extractFilesFromDiff } from '../utils/diff-files.js';
 import type { ReviewBackend } from '../backends/backend.js';
 import {
-  looksLikeDiff,
-  PROMPT_OVERHEAD_TOKENS,
-  computeVariableOverhead,
-  mergeCodeResults,
-  mergePrecommitResults,
+  runPlanReview,
+  runCodeReview,
+  runPrecommitReview,
+  type TurnParams,
+  type TurnRunner,
 } from '../backends/orchestrator.js';
-
-// Response schemas omit fields the reviewer doesn't produce
-const PlanReviewResponseSchema = PlanReviewResultSchema.omit({ session_id: true });
-const CodeReviewResponseSchema = CodeReviewResultSchema.omit({ session_id: true, chunks_reviewed: true });
-const PrecommitResponseSchema = PrecommitResultSchema.omit({ session_id: true, chunks_reviewed: true });
 
 // `CodexClient` is retained as an alias of the provider-neutral `ReviewBackend`
 // seam (src/backends/backend.ts) so existing tool/CLI imports keep working while
-// the multi-provider refactor lands incrementally (T-013). The input shapes now
-// live alongside the interface in backend.ts.
+// the multi-provider refactor lands incrementally (T-013).
 export type CodexClient = ReviewBackend;
 
-// `looksLikeDiff` now lives in the shared orchestrator; re-exported here so
-// existing importers (e.g. tests) keep resolving it from this module.
-export { looksLikeDiff };
+// `looksLikeDiff` and `sessionModelConflictMessage` now live in the shared
+// orchestrator; re-exported here so existing importers (tools, tests) keep
+// resolving them from this module during the incremental refactor.
+export { looksLikeDiff, sessionModelConflictMessage } from '../backends/orchestrator.js';
 
 function isAbortError(e: unknown): boolean {
   if (e instanceof Error) {
@@ -111,13 +93,6 @@ export function classifyError(
   return { code: ErrorCode.UNKNOWN_ERROR, message: raw };
 }
 
-export function sessionModelConflictMessage(): string {
-  return (
-    `${ErrorCode.INVALID_INPUT}: Cannot change model on a resumed session. ` +
-    `Omit session_id to start a new thread with a different model.`
-  );
-}
-
 function threadOpts(config: ReviewBridgeConfig, modelOverride?: string) {
   return {
     model: modelOverride ?? config.model,
@@ -139,19 +114,11 @@ function resumeThreadOpts(config: ReviewBridgeConfig) {
   return rest;
 }
 
-async function runReview<T extends Record<string, unknown>>(params: {
-  codex: Codex;
-  config: ReviewBridgeConfig;
-  prompt: string;
-  responseSchema: z.ZodType;
-  sessionId?: string;
-  // Sent to startThread on fresh threads. Omitted on resume.
-  model?: string;
-  // The model the active thread is actually running on. Always set; used
-  // for error-context so messages report the correct model even when
-  // `model` is intentionally undefined on resumed chunks of a chunked review.
-  resolvedModel: string;
-}): Promise<Result<T & { session_id: string }>> {
+// Codex implementation of the orchestrator's TurnRunner: create or resume a
+// Codex thread and run one prompt with schema-validated output and one retry.
+async function runReview<T extends Record<string, unknown>>(
+  params: TurnParams & { codex: Codex; config: ReviewBridgeConfig },
+): Promise<Result<T & { session_id: string }>> {
   const { codex, config, prompt, responseSchema, sessionId, model, resolvedModel } = params;
 
   let thread;
@@ -233,216 +200,13 @@ export function createCodexClient(
     };
   }
 
+  const turn: TurnRunner = <T extends Record<string, unknown>>(params: TurnParams) =>
+    runReview<T>({ ...params, codex, config });
+  const deps = { config, copilotInstructions };
+
   return {
-    async reviewPlan(input) {
-      if (input.session_id && input.model) {
-        return err<PlanReviewResult>(sessionModelConflictMessage());
-      }
-      const prompt = buildPlanReviewPrompt(input, {
-        project_context: config.project_context,
-        copilot_instructions: formatForPrompt(copilotInstructions),
-        focus: config.review_standards.plan_review.focus,
-        depth: config.review_standards.plan_review.depth,
-      });
-      return runReview<Omit<PlanReviewResult, 'session_id'>>({
-        codex,
-        config,
-        prompt,
-        responseSchema: PlanReviewResponseSchema,
-        sessionId: input.session_id,
-        model: input.model,
-        resolvedModel: input.model ?? config.model,
-      });
-    },
-
-    async reviewCode(input) {
-      if (input.session_id && input.model) {
-        return err<CodeReviewResult>(sessionModelConflictMessage());
-      }
-      if (input.diff.length > 20 && !looksLikeDiff(input.diff)) {
-        return err<CodeReviewResult>(
-          `${ErrorCode.INVALID_INPUT}: Input doesn't look like a git diff. ` +
-          `Expected unified diff format (with 'diff --git', '---/+++', or '@@' markers). ` +
-          `If reviewing a plan or description, use review_plan instead.`,
-        );
-      }
-      // Match prompt builder logic: empty array falls through to config criteria
-      const criteria = input.criteria && input.criteria.length > 0
-        ? input.criteria
-        : config.review_standards.code_review.criteria;
-      const files = extractFilesFromDiff(input.diff);
-      const instrText = formatForPrompt(filterByFiles(copilotInstructions, files));
-      const variableOverhead = computeVariableOverhead([
-        input.context ?? '',
-        config.project_context,
-        criteria.join(', '),
-        instrText,
-      ]);
-      // Floor of 500 prevents zero/negative budget when overhead exceeds max_chunk_tokens.
-      // In practice this means very small max_chunk_tokens values may produce chunks
-      // larger than configured — this is preferable to disabling chunking entirely.
-      const diffBudget = Math.max(config.max_chunk_tokens - PROMPT_OVERHEAD_TOKENS - variableOverhead, 500);
-      const chunks = chunkDiff(input.diff, diffBudget);
-
-      // Empty diff — synthetic approve
-      if (chunks.length === 0) {
-        return ok<CodeReviewResult>({
-          verdict: 'approve',
-          summary: 'No changes to review.',
-          findings: [],
-          session_id: input.session_id ?? randomUUID(),
-        });
-      }
-
-      // Single chunk — standard path (no chunks_reviewed)
-      if (chunks.length === 1) {
-        const prompt = buildCodeReviewPrompt(input, {
-          project_context: config.project_context,
-          copilot_instructions: instrText,
-          criteria: config.review_standards.code_review.criteria,
-          require_tests: config.review_standards.code_review.require_tests,
-        });
-        return runReview<Omit<CodeReviewResult, 'session_id' | 'chunks_reviewed'>>({
-          codex,
-          config,
-          prompt,
-          responseSchema: CodeReviewResponseSchema,
-          sessionId: input.session_id,
-          model: input.model,
-          resolvedModel: input.model ?? config.model,
-        });
-      }
-
-      // Multi-chunk — sequential review with per-chunk timeout
-      const codeConfig = {
-        project_context: config.project_context,
-        copilot_instructions: instrText,
-        criteria: config.review_standards.code_review.criteria,
-        require_tests: config.review_standards.code_review.require_tests,
-      };
-      const chunkResults: Omit<CodeReviewResult, 'chunks_reviewed'>[] = [];
-      let sessionId = input.session_id;
-      const codeResolvedModel = input.model ?? config.model;
-
-      for (let i = 0; i < chunks.length; i++) {
-        const chunkHeader = `Chunk ${i + 1} of ${chunks.length}: reviewing the following files only.`;
-        const prompt = buildCodeReviewPrompt({ ...input, diff: chunks[i], chunkHeader }, codeConfig);
-        const result = await runReview<Omit<CodeReviewResult, 'session_id' | 'chunks_reviewed'>>({
-          codex,
-          config,
-          prompt,
-          responseSchema: CodeReviewResponseSchema,
-          sessionId,
-          // Model override applies only to the fresh thread on chunk 1.
-          // Chunks 2..N always resume chunk 1's thread, which is already
-          // bound to the resolved model.
-          model: sessionId ? undefined : input.model,
-          // resolvedModel is constant across chunks — the thread is bound to
-          // it after chunk 1. Used for error-context so failures on chunks 2..N
-          // report the actually-running model instead of falling back to
-          // config.model when `model` is intentionally undefined above.
-          resolvedModel: codeResolvedModel,
-        });
-
-        if (!result.ok) {
-          // Surface the partial thread id so the tool layer can mark this
-          // session failed (T-001). Falls through to the original result if
-          // chunk 1 failed before any thread was established.
-          return sessionId ? err<CodeReviewResult>(result.error, sessionId) : result;
-        }
-        chunkResults.push(result.data);
-        sessionId = result.data.session_id;
-      }
-
-      return ok(mergeCodeResults(chunkResults, sessionId!));
-    },
-
-    async reviewPrecommit(input) {
-      if (input.session_id && input.model) {
-        return err<PrecommitResult>(sessionModelConflictMessage());
-      }
-      if (input.diff.length > 20 && !looksLikeDiff(input.diff)) {
-        return err<PrecommitResult>(
-          `${ErrorCode.INVALID_INPUT}: Input doesn't look like a git diff. ` +
-          `Expected unified diff format (with 'diff --git', '---/+++', or '@@' markers). ` +
-          `If reviewing a plan or description, use review_plan instead.`,
-        );
-      }
-      const checklist = input.checklist ?? [];
-      const precommitFiles = extractFilesFromDiff(input.diff);
-      const precommitInstrText = formatForPrompt(filterByFiles(copilotInstructions, precommitFiles));
-      const variableOverhead = computeVariableOverhead([
-        config.project_context,
-        checklist.join(', '),
-        precommitInstrText,
-      ]);
-      // Floor of 500 prevents zero/negative budget when overhead exceeds max_chunk_tokens.
-      // In practice this means very small max_chunk_tokens values may produce chunks
-      // larger than configured — this is preferable to disabling chunking entirely.
-      const diffBudget = Math.max(config.max_chunk_tokens - PROMPT_OVERHEAD_TOKENS - variableOverhead, 500);
-      const chunks = chunkDiff(input.diff, diffBudget);
-
-      // Empty diff — synthetic pass
-      if (chunks.length === 0) {
-        return ok<PrecommitResult>({
-          ready_to_commit: true,
-          blockers: [],
-          warnings: [],
-          session_id: input.session_id ?? randomUUID(),
-        });
-      }
-
-      // Single chunk — standard path (no chunks_reviewed)
-      if (chunks.length === 1) {
-        const prompt = buildPrecommitPrompt(input, {
-          project_context: config.project_context,
-          copilot_instructions: precommitInstrText,
-          block_on: config.review_standards.precommit.block_on,
-        });
-        return runReview<Omit<PrecommitResult, 'session_id' | 'chunks_reviewed'>>({
-          codex,
-          config,
-          prompt,
-          responseSchema: PrecommitResponseSchema,
-          sessionId: input.session_id,
-          model: input.model,
-          resolvedModel: input.model ?? config.model,
-        });
-      }
-
-      // Multi-chunk — sequential review
-      const precommitConfig = {
-        project_context: config.project_context,
-        copilot_instructions: precommitInstrText,
-        block_on: config.review_standards.precommit.block_on,
-      };
-      const chunkResults: Omit<PrecommitResult, 'chunks_reviewed'>[] = [];
-      let sessionId = input.session_id;
-      const precommitResolvedModel = input.model ?? config.model;
-
-      for (let i = 0; i < chunks.length; i++) {
-        const chunkHeader = `Chunk ${i + 1} of ${chunks.length}: checking the following files only.`;
-        const prompt = buildPrecommitPrompt({ ...input, diff: chunks[i], chunkHeader }, precommitConfig);
-        const result = await runReview<Omit<PrecommitResult, 'session_id' | 'chunks_reviewed'>>({
-          codex,
-          config,
-          prompt,
-          responseSchema: PrecommitResponseSchema,
-          sessionId,
-          // Chunk 1 may carry the model override; chunks 2..N inherit via resumeThread.
-          model: sessionId ? undefined : input.model,
-          resolvedModel: precommitResolvedModel,
-        });
-
-        if (!result.ok) {
-          // T-001: see reviewCode chunk loop for rationale.
-          return sessionId ? err<PrecommitResult>(result.error, sessionId) : result;
-        }
-        chunkResults.push(result.data);
-        sessionId = result.data.session_id;
-      }
-
-      return ok(mergePrecommitResults(chunkResults, sessionId!));
-    },
+    reviewPlan: (input) => runPlanReview(input, deps, turn),
+    reviewCode: (input) => runCodeReview(input, deps, turn),
+    reviewPrecommit: (input) => runPrecommitReview(input, deps, turn),
   };
 }

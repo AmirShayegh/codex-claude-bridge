@@ -1,0 +1,20 @@
+{
+  "content": "agy --print does not validate --model: a bogus/typo'd model exits 0 and runs on a fallback, so the bridge returns a successful review on an unintended model with no error. Never assume agy errors on a bad model; the only way to enforce/verify model selection is to check the requested model against `agy models` yourself. classifyAgyError's MODEL_ERROR branch is therefore unreachable for typo'd models via the real runtime, even though a mocked-stderr unit test asserts it.",
+  "context": "Found during a probe-loop run against real agy 1.0.13. `agy --print --sandbox --model FakeModel-9000` returned a full valid review (exit 0). gemini.test.ts:130 asserts MODEL_ERROR from a hand-invented stderr string real agy never emits in print mode — classic contract-test-passes / reality-diverges gap. See docs/hardening-probes.md F1 and the related storybloq issue.",
+  "createdDate": "2026-06-29",
+  "id": "L-012",
+  "lastValidated": "2026-06-29",
+  "reinforcements": 0,
+  "source": "review",
+  "status": "active",
+  "supersedes": null,
+  "tags": [
+    "agy",
+    "gemini",
+    "models",
+    "error-classification",
+    "probe-loop"
+  ],
+  "title": "agy silently ignores an invalid --model in --print mode",
+  "updatedDate": "2026-06-29"
+}

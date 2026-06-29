@@ -1,0 +1,23 @@
+{
+  "components": [
+    "src/backends/gemini.ts"
+  ],
+  "discoveredDate": "2026-06-29",
+  "displayId": "ISS-006",
+  "id": "ISS-006",
+  "impact": "Discovered via a live probe-loop run against real agy 1.0.13. `agy --print --sandbox --model <bogus>` does not validate the model: it exits 0 and runs on a fallback. The bridge's runAgyPrint trusts exit-0 stdout, so a review with a bogus/typo'd model returns a complete, successful review (e.g. verdict=reject with findings) with NO error and NO warning, on a model the user never selected.\n\nTwo consequences: (1) classifyAgyError's MODEL_ERROR branch is unreachable for the most common trigger (a typo'd model) — gemini.test.ts:130 asserts that branch with a hand-invented string ('model \"Gemini 9 Ultra\" is not available') that real agy never emits in --print mode, giving false confidence; (2) it undermines T-019's premise of guaranteeing the correct/latest model runs — the bridge cannot verify the requested model was actually used. ('latest' is safe since it resolves from `agy models`; blast radius is an explicit non-matching pin.)\n\nProposed mitigation (decision pending, policy/latency tradeoff): when an explicit model (not latest/unset) is absent from `agy models`, emit a non-blocking stderr warning — kills the silent part while respecting L-006 (recommend, don't enforce). Cost: an extra `agy models` call on the pinned-model path. Repro + full live probe checklist documented in docs/hardening-probes.md (F1).\n\nMinor: classifyAgyError checks includes('unsupported') which misses 'not supported' (no 'un') — tighten if validation is added.",
+  "location": [
+    "src/backends/gemini.ts",
+    "src/backends/gemini.test.ts:130",
+    "docs/hardening-probes.md"
+  ],
+  "phase": "multi-provider",
+  "relatedTickets": [
+    "T-019"
+  ],
+  "resolution": "Mitigated with a non-blocking stderr warning (chosen over hard-blocking to respect L-006). In src/backends/gemini.ts, resolveModel now validates an explicit pin that is outside RECOMMENDED_MODELS.gemini against `agy models` and emits `[codex-bridge] warning: model \"X\" is not in agy's model list ...` when it's absent, while still forwarding the model as-is. Recommended pins (incl. the default) are known-good and skip the extra `agy models` query, so the latency cost only applies to unusual pins. Covered by 8 new tests in gemini.test.ts (parseAgyModels, warnIfUnknownModel warn/silent/unavailable, and createGeminiBackend unknown-pin-warns / valid-nonrecommended-no-warn / recommended-skips-query) and live-verified against real agy 1.0.13 (bogus pin warns + still reviews; recommended pin silent). Full suite 633 green, typecheck + lint clean. Residual by design: agy still silently substitutes for an unknown model — we surface it, we don't block it. The classifyAgyError MODEL_ERROR branch remains as a safety net for backends/versions that do emit a model error.",
+  "resolvedDate": "2026-06-28",
+  "severity": "medium",
+  "status": "resolved",
+  "title": "Gemini backend: invalid --model is silently ignored by agy (model selection unverified; MODEL_ERROR branch unreachable)"
+}

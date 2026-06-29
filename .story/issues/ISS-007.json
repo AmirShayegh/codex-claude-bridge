@@ -1,0 +1,24 @@
+{
+  "components": [
+    "src/backends/gemini.ts"
+  ],
+  "discoveredDate": "2026-06-29",
+  "displayId": "ISS-007",
+  "id": "ISS-007",
+  "impact": "Three lower-tier hardening items from the multi-provider review, verified and fixed in one pass (TDD + live agy where applicable). (1) m3 reasoning_effort: gemini carries effort in the model name, so config.reasoning_effort (applied by codex) was silently dropped; createGeminiBackend now emits a one-time startup note when it is non-default (low/high), default medium stays quiet. (2) m4 cache-miss error code: a successful review whose conversation-id cache was unreadable returned RESPONSE_PARSE_ERROR (implying a malformed response to retry); now returns STORAGE_ERROR. (3) runSerialized had no integration coverage for the race it guards (concurrent fresh reviews racing on id capture); added a test that mutates the id-cache per run and asserts distinct correctly-paired ids — verified it fails deterministically (both capture race-id-B) when serialization is removed. All in src/backends/gemini.ts + gemini.test.ts. Suite 636 green, typecheck + lint clean. Documented in docs/hardening-probes.md (F2/F3/F4).",
+  "location": [
+    "src/backends/gemini.ts",
+    "src/backends/gemini.test.ts",
+    "docs/hardening-probes.md"
+  ],
+  "phase": "multi-provider",
+  "relatedTickets": [
+    "T-019",
+    "T-016"
+  ],
+  "resolution": "All three fixed in src/backends/gemini.ts with tests in gemini.test.ts. m3: startup stderr note for non-default reasoning_effort (live-verified — note fires for high, silent for medium). m4: cache-capture miss now returns STORAGE_ERROR not RESPONSE_PARSE_ERROR (unit-tested deterministically). runSerialized: added concurrent-capture integration test, verified it fails deterministically when serialization is bypassed then restored. Suite 636 green, typecheck + lint clean. See docs/hardening-probes.md F2/F3/F4.",
+  "resolvedDate": "2026-06-28",
+  "severity": "low",
+  "status": "resolved",
+  "title": "Gemini backend hardening: reasoning_effort notice (m3), cache-miss error code (m4), runSerialized race coverage"
+}

@@ -123,6 +123,10 @@ describe('createCodexBackend', () => {
     expect(typeof client.reviewCode).toBe('function');
     expect(typeof client.reviewPrecommit).toBe('function');
   });
+
+  it("exposes its provider identity as 'codex'", () => {
+    expect(createCodexBackend(config).provider).toBe('codex');
+  });
 });
 
 describe('reviewPlan', () => {

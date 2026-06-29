@@ -54,6 +54,7 @@ const validResult: CodeReviewResult = {
 beforeEach(() => {
   vi.clearAllMocks();
   mockClient = {
+    provider: 'codex',
     reviewPlan: vi.fn(),
     reviewCode: vi.fn(),
     reviewPrecommit: vi.fn(),

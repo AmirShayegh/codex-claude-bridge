@@ -306,6 +306,7 @@ export function createGeminiBackend(
   };
 
   return {
+    provider: 'gemini',
     reviewPlan: (input) => runPlanReview(input, deps, turn),
     reviewCode: (input) => runCodeReview(input, deps, turn),
     reviewPrecommit: (input) => runPrecommitReview(input, deps, turn),

@@ -238,6 +238,10 @@ const PLAN_OK = { verdict: 'approve', summary: 's', findings: [] };
 const CODE_OK = { verdict: 'approve', summary: 's', findings: [] };
 
 describe('createGeminiBackend', () => {
+  it("exposes its provider identity as 'gemini'", () => {
+    expect(createGeminiBackend(DEFAULT_CONFIG).provider).toBe('gemini');
+  });
+
   it('reviewPlan: fresh run uses the default model in sandbox, captures the conversation id', async () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-new' });
     script({ stdout: JSON.stringify(PLAN_OK) });

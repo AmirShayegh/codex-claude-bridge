@@ -32,7 +32,11 @@ let lastArgs: string[];
 let lastCwd: string | undefined;
 let spawnThrows: Error | undefined;
 let spawnCount = 0;
-let scriptedResponses: { stdout?: string; stderr?: string; code?: number }[] = [];
+// onEmit fires just before a scripted child emits — lets a test mutate the
+// id-cache per run, simulating how real agy updates last_conversations.json. Used
+// to prove runSerialized makes capture atomic under concurrency.
+type Scripted = { stdout?: string; stderr?: string; code?: number; onEmit?: () => void };
+let scriptedResponses: Scripted[] = [];
 
 vi.mock('node:child_process', () => ({
   spawn: (_cmd: string, args: string[], options: { cwd?: string; signal?: AbortSignal }) => {
@@ -48,6 +52,7 @@ vi.mock('node:child_process', () => ({
     const scripted = scriptedResponses.shift();
     if (scripted) {
       queueMicrotask(() => {
+        scripted.onEmit?.();
         if (scripted.stdout !== undefined) child.stdout.emit('data', Buffer.from(scripted.stdout));
         if (scripted.stderr !== undefined) child.stderr.emit('data', Buffer.from(scripted.stderr));
         child.emit('close', scripted.code ?? 0);
@@ -57,7 +62,7 @@ vi.mock('node:child_process', () => ({
   },
 }));
 
-function script(...responses: { stdout?: string; stderr?: string; code?: number }[]): void {
+function script(...responses: Scripted[]): void {
   scriptedResponses.push(...responses);
 }
 
@@ -82,6 +87,8 @@ import {
   pickLatestFlashModel,
   runAgyModels,
   resolveLatestGeminiModel,
+  parseAgyModels,
+  warnIfUnknownModel,
 } from './gemini.js';
 import { DEFAULT_CONFIG } from '../config/types.js';
 
@@ -324,6 +331,48 @@ describe('resolveLatestGeminiModel', () => {
   });
 });
 
+describe('parseAgyModels', () => {
+  it('extracts one trimmed model per non-empty line', () => {
+    const models = parseAgyModels(REAL_AGY_MODELS);
+    expect(models).toHaveLength(8);
+    expect(models).toContain('Gemini 3.1 Pro (Low)');
+  });
+
+  it('ignores blank lines and surrounding whitespace', () => {
+    expect(parseAgyModels('  Gemini 3.5 Flash (Medium) \n\n  Gemini 3.1 Pro (High)\n')).toEqual([
+      'Gemini 3.5 Flash (Medium)',
+      'Gemini 3.1 Pro (High)',
+    ]);
+  });
+});
+
+// ISS-006: agy silently runs a fallback for an unknown --model (exit 0, no error),
+// so a typo'd pin would review on the wrong model unnoticed. The backend validates
+// non-recommended pins against `agy models` and warns (non-blocking) on a miss.
+describe('warnIfUnknownModel (ISS-006)', () => {
+  it('warns when an explicit model is absent from `agy models`', async () => {
+    const warn = vi.spyOn(console, 'error').mockImplementation(() => {});
+    script({ stdout: REAL_AGY_MODELS, code: 0 });
+    await warnIfUnknownModel('FakeModel-9000');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('FakeModel-9000'));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('agy models'));
+  });
+
+  it("stays silent when the model is in agy's list", async () => {
+    const warn = vi.spyOn(console, 'error').mockImplementation(() => {});
+    script({ stdout: REAL_AGY_MODELS, code: 0 });
+    await warnIfUnknownModel('Gemini 3.1 Pro (Low)');
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('stays silent (no false alarm) when `agy models` is unavailable', async () => {
+    const warn = vi.spyOn(console, 'error').mockImplementation(() => {});
+    script({ stderr: 'boom', code: 1 });
+    await warnIfUnknownModel('Whatever Model');
+    expect(warn).not.toHaveBeenCalled();
+  });
+});
+
 describe('readConversationId', () => {
   it('returns the conversation id agy recorded for the given cwd', () => {
     fakeFiles[CACHE] = JSON.stringify({ '/repo': 'conv-abc', '/other': 'conv-xyz' });
@@ -401,6 +450,19 @@ describe('createGeminiBackend', () => {
     expect(createGeminiBackend(DEFAULT_CONFIG).allowsModelOverrideOnResume).toBe(true);
   });
 
+  it('notes on construction that a non-default reasoning_effort is ignored (m3)', () => {
+    const warn = vi.spyOn(console, 'error').mockImplementation(() => {});
+    createGeminiBackend({ ...DEFAULT_CONFIG, reasoning_effort: 'high' });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('reasoning_effort'));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('ignored'));
+  });
+
+  it('stays quiet about reasoning_effort when it is the default (medium)', () => {
+    const warn = vi.spyOn(console, 'error').mockImplementation(() => {});
+    createGeminiBackend(DEFAULT_CONFIG);
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('reasoning_effort'));
+  });
+
   it('reviewPlan: fresh run with no model resolves the latest Flash from agy, runs in sandbox, captures the id', async () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-new' });
     // First spawn: `agy models`. Second spawn: the review itself.
@@ -460,14 +522,18 @@ describe('createGeminiBackend', () => {
     if (!res.ok) expect(res.error).toContain(ErrorCode.AUTH_ERROR);
   });
 
-  it('errors clearly when a fresh run cannot capture a conversation id', async () => {
-    // cache has no entry for CWD → capture fails
+  it('reports a cache-capture miss as a STORAGE_ERROR, not a parse error (m4)', async () => {
+    // cache has no entry for CWD → the review parsed fine but the id can't be read.
     script({ stdout: JSON.stringify(PLAN_OK) });
 
     const res = await createGeminiBackend(PINNED_CONFIG).reviewPlan({ plan: 'x' });
 
     expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.error).toContain(ErrorCode.RESPONSE_PARSE_ERROR);
+    if (!res.ok) {
+      // The review JSON was valid — this is a storage read failure, not RESPONSE_PARSE_ERROR.
+      expect(res.error).toContain(ErrorCode.STORAGE_ERROR);
+      expect(res.error).not.toContain(ErrorCode.RESPONSE_PARSE_ERROR);
+    }
   });
 
   it('allows session_id + model together — model override on a resumed session', async () => {
@@ -548,6 +614,50 @@ describe('createGeminiBackend', () => {
     expect(lastArgs).not.toContain('--conversation');
   });
 
+  it('an unknown pinned model still runs, but emits a non-blocking warning (ISS-006)', async () => {
+    const warn = vi.spyOn(console, 'error').mockImplementation(() => {});
+    fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-bad' });
+    // First spawn validates against `agy models`; second is the review.
+    script({ stdout: REAL_AGY_MODELS, code: 0 }, { stdout: JSON.stringify(CODE_OK) });
+
+    const res = await createGeminiBackend({ ...DEFAULT_CONFIG, model: 'FakeModel-9000' }).reviewCode({
+      diff: SMALL_DIFF,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(spawnCount).toBe(2);
+    // Forwarded as-is — we warn, we don't block (L-006).
+    expect(lastArgs[lastArgs.indexOf('--model') + 1]).toBe('FakeModel-9000');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('FakeModel-9000'));
+  });
+
+  it('a valid but non-recommended pinned model runs with no warning (ISS-006)', async () => {
+    const warn = vi.spyOn(console, 'error').mockImplementation(() => {});
+    fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-low' });
+    script({ stdout: REAL_AGY_MODELS, code: 0 }, { stdout: JSON.stringify(CODE_OK) });
+
+    const res = await createGeminiBackend({ ...DEFAULT_CONFIG, model: 'Gemini 3.5 Flash (Low)' }).reviewCode({
+      diff: SMALL_DIFF,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(spawnCount).toBe(2);
+    expect(lastArgs[lastArgs.indexOf('--model') + 1]).toBe('Gemini 3.5 Flash (Low)');
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('a recommended pinned model skips the `agy models` validation query entirely (ISS-006)', async () => {
+    fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-rec' });
+    script({ stdout: JSON.stringify(CODE_OK) });
+
+    const res = await createGeminiBackend({ ...DEFAULT_CONFIG, model: 'Gemini 3.1 Pro (High)' }).reviewCode({
+      diff: SMALL_DIFF,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(spawnCount).toBe(1); // known-good model → no extra validation spawn
+  });
+
   it('multi-chunk: a later chunk failure surfaces chunk 1’s session id (T-001)', async () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-partial' });
     // Chunk 1 succeeds (captures conv-partial); chunk 2 fails at the agy boundary.
@@ -559,6 +669,30 @@ describe('createGeminiBackend', () => {
     if (!res.ok) {
       expect(res.error).toContain(ErrorCode.AUTH_ERROR);
       expect(res.session_id).toBe('conv-partial'); // T-001: partial session surfaced for cleanup
+    }
+  });
+
+  it('serializes capture so concurrent fresh reviews get distinct, correctly-paired ids (runSerialized)', async () => {
+    // Each run rewrites the id-cache as it emits, the way real agy would. Without
+    // runSerialized, review A reads the cache AFTER B has overwritten it, so both
+    // capture B's id. Serialization makes each run+capture atomic — this fails
+    // deterministically (both become 'race-id-B') if the serialization is removed.
+    script(
+      { stdout: JSON.stringify(PLAN_OK), onEmit: () => { fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'race-id-A' }); } },
+      { stdout: JSON.stringify(PLAN_OK), onEmit: () => { fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'race-id-B' }); } },
+    );
+    const backend = createGeminiBackend(PINNED_CONFIG);
+
+    const [a, b] = await Promise.all([
+      backend.reviewPlan({ plan: 'A' }),
+      backend.reviewPlan({ plan: 'B' }),
+    ]);
+
+    expect(a.ok && b.ok).toBe(true);
+    if (a.ok && b.ok) {
+      expect(a.data.session_id).toBe('race-id-A');
+      expect(b.data.session_id).toBe('race-id-B');
+      expect(a.data.session_id).not.toBe(b.data.session_id);
     }
   });
 });

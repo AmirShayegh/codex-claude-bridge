@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { ok, err, ErrorCode } from '../utils/errors.js';
 import type { Result } from '../utils/errors.js';
 import type { ReviewBridgeConfig } from '../config/types.js';
+import { RECOMMENDED_MODELS } from '../config/types.js';
 import type { CopilotInstructions } from '../config/copilot-instructions.js';
 import type { ReviewBackend } from './backend.js';
 import {
@@ -341,6 +342,42 @@ export async function resolveLatestGeminiModel(timeoutMs?: number): Promise<stri
   return pickLatestFlashModel(output) ?? GEMINI_DEFAULT_MODEL;
 }
 
+// agy lists one concrete model per line (e.g. "Gemini 3.5 Flash (Medium)").
+export function parseAgyModels(output: string): string[] {
+  return output
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+}
+
+// Compare model names tolerant of case/whitespace so a warning only fires on a
+// genuine mismatch, not a cosmetic one.
+function normalizeModelName(s: string): string {
+  return s.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function isRecommendedGeminiModel(model: string): boolean {
+  const norm = normalizeModelName(model);
+  return RECOMMENDED_MODELS.gemini.some((m) => normalizeModelName(m) === norm);
+}
+
+// agy silently runs a fallback for an unknown `--model` (exit 0, no error) — so a
+// typo'd pin would review on the wrong model unnoticed (ISS-006). For an explicit
+// pin outside our known-good set, validate it against `agy models` and warn on a
+// miss. Non-blocking: we still forward the user's model as-is (L-006). Stays silent
+// when the model list is unavailable (can't validate → no false alarm).
+export async function warnIfUnknownModel(requested: string): Promise<void> {
+  const output = await runAgyModels();
+  if (!output) return;
+  const known = parseAgyModels(output).map(normalizeModelName);
+  if (!known.includes(normalizeModelName(requested))) {
+    console.error(
+      `[codex-bridge] warning: model "${requested}" is not in agy's model list ` +
+        `(run \`agy models\` to see options). agy may silently run a different model.`,
+    );
+  }
+}
+
 // Gemini implementation of the orchestrator's TurnRunner: run one prompt through
 // agy and return the schema-validated result plus the session (conversation) id.
 // Mirrors the Codex runReview shape — parse-then-retry on malformed/empty output
@@ -380,8 +417,12 @@ async function runAgyReview<T extends Record<string, unknown>>(
       // agy just recorded for this cwd.
       const resolvedId = sessionId ?? readConversationId(cwd);
       if (!resolvedId) {
+        // The review itself parsed fine — this is a storage read failure (agy's
+        // conversation-id cache is missing/unreadable), not a parse error. A
+        // STORAGE_ERROR is accurate and actionable; RESPONSE_PARSE_ERROR would
+        // wrongly imply a malformed model response the caller should retry.
         return err<T & { session_id: string }>(
-          `${ErrorCode.RESPONSE_PARSE_ERROR}: agy review succeeded but no conversation id was captured for ${cwd}. ` +
+          `${ErrorCode.STORAGE_ERROR}: agy review succeeded but no conversation id was captured for ${cwd}. ` +
             `Check that ~/.gemini/antigravity-cli is readable.`,
         );
       }
@@ -396,6 +437,18 @@ export function createGeminiBackend(
   config: ReviewBridgeConfig,
   copilotInstructions?: CopilotInstructions,
 ): ReviewBackend {
+  // agy carries reasoning effort in the model name (e.g. "... (High)"), so the
+  // config's reasoning_effort has no effect here — codex applies it, gemini
+  // can't. Surface a one-time startup notice when it's set to a non-default
+  // value so the setting isn't silently dropped (m3). Default 'medium' stays
+  // quiet to avoid noise on every gemini startup.
+  if (config.reasoning_effort !== 'medium') {
+    console.error(
+      `[codex-bridge] note: reasoning_effort "${config.reasoning_effort}" is ignored by the Gemini backend — ` +
+        `effort is part of the agy model name (e.g. "Gemini 3.5 Flash (High)"). Pin a higher-effort model instead.`,
+    );
+  }
+
   const turn: TurnRunner = <T extends Record<string, unknown>>(params: TurnParams) =>
     runAgyReview<T>({ ...params, config, cwd: process.cwd() });
   const deps = {
@@ -407,9 +460,14 @@ export function createGeminiBackend(
     allowsModelOverrideOnResume: true,
     // 'latest' (and unset) → the newest Flash from `agy models`, with a safe
     // fallback to the known-good default. An explicit pin is forwarded unchanged
-    // (L-006).
-    resolveModel: async (requested: string | undefined) =>
-      requested && requested !== 'latest' ? requested : resolveLatestGeminiModel(),
+    // (L-006); if it's outside our known-good set we validate it against
+    // `agy models` and warn on a miss, since agy silently substitutes for an
+    // unknown model (ISS-006). Recommended pins are known-good → skip the query.
+    resolveModel: async (requested: string | undefined) => {
+      if (!requested || requested === 'latest') return resolveLatestGeminiModel();
+      if (!isRecommendedGeminiModel(requested)) await warnIfUnknownModel(requested);
+      return requested;
+    },
     resumesAcrossChunks: false,
   };
 

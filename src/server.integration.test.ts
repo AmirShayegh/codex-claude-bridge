@@ -394,7 +394,7 @@ describe('MCP integration — review_code multi-chunk session failure (T-001)', 
       arguments: { diff: makeMultiChunkDiff() },
     });
     const errorText = getErrorText(reviewResult);
-    expect(errorText).toContain('CODEX_TIMEOUT');
+    expect(errorText).toContain('REVIEW_TIMEOUT');
 
     // Real chunking must have produced ≥2 chunks for this scenario to be valid.
     expect(mockRun).toHaveBeenCalledTimes(2);

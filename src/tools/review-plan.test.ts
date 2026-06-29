@@ -81,13 +81,13 @@ describe('registerReviewPlanTool', () => {
 
   it('Codex client error propagates as MCP error', async () => {
     vi.mocked(mockClient.reviewPlan).mockResolvedValue(
-      err('CODEX_TIMEOUT: review timed out after 300s'),
+      err('REVIEW_TIMEOUT: review timed out after 300s'),
     );
 
     const result = await handler({ plan: 'My plan' }, {});
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('CODEX_TIMEOUT');
+    expect(result.content[0].text).toContain('REVIEW_TIMEOUT');
   });
 
   it('unexpected thrown error returns MCP error', async () => {
@@ -156,7 +156,7 @@ describe('registerReviewPlanTool with db', () => {
 
   it('does not save on client error', async () => {
     vi.mocked(mockClient.reviewPlan).mockResolvedValue(
-      err('CODEX_TIMEOUT: timed out'),
+      err('REVIEW_TIMEOUT: timed out'),
     );
 
     await handler({ plan: 'My plan' }, {});
@@ -230,7 +230,7 @@ describe('registerReviewPlanTool with db', () => {
   });
 
   it('marks session failed when client returns error and session_id provided', async () => {
-    vi.mocked(mockClient.reviewPlan).mockResolvedValue(err('CODEX_TIMEOUT: timed out'));
+    vi.mocked(mockClient.reviewPlan).mockResolvedValue(err('REVIEW_TIMEOUT: timed out'));
 
     const result = await handler({ plan: 'My plan', session_id: 'thread_abc' }, {});
 
@@ -249,7 +249,7 @@ describe('registerReviewPlanTool with db', () => {
 
   it('does not mark session failed when activateSession fails', async () => {
     vi.mocked(activateSession).mockReturnValue(err('STORAGE_ERROR: readonly'));
-    vi.mocked(mockClient.reviewPlan).mockResolvedValue(err('CODEX_TIMEOUT: timed out'));
+    vi.mocked(mockClient.reviewPlan).mockResolvedValue(err('REVIEW_TIMEOUT: timed out'));
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const result = await handler({ plan: 'My plan', session_id: 'thread_abc' }, {});

@@ -100,7 +100,7 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
 
   const program = new Command()
     .name('codex-claude-bridge')
-    .description('Code review powered by OpenAI Codex')
+    .description('Automated code review')
     .version(version);
 
   // Prevent Commander from calling process.exit on its own

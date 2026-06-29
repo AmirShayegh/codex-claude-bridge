@@ -14,7 +14,7 @@ import { registerReviewPrecommitTool } from './tools/review-precommit.js';
 import { registerReviewHistoryTool } from './tools/review-history.js';
 import { registerReviewStatusTool } from './tools/review-status.js';
 
-export const SERVER_INSTRUCTIONS = `codex-claude-bridge — automated code review via OpenAI Codex.
+export const SERVER_INSTRUCTIONS = `codex-claude-bridge — automated code review.
 
 WORKFLOW: Use these tools in order during a feature lifecycle:
 

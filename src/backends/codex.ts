@@ -138,7 +138,7 @@ async function runReview<T extends Record<string, unknown>>(
       if (isAbortError(e)) {
         const tokenEst = estimateTokens(prompt);
         return err(
-          `${ErrorCode.CODEX_TIMEOUT}: review timed out after ${config.timeout_seconds}s ` +
+          `${ErrorCode.REVIEW_TIMEOUT}: review timed out after ${config.timeout_seconds}s ` +
           `(prompt ~${tokenEst} tokens). ` +
           `Try: increase timeout_seconds in .reviewbridge.json, reduce diff size, or check input format.`,
         );
@@ -163,14 +163,14 @@ async function runReview<T extends Record<string, unknown>>(
 
     const resolvedId = thread.id ?? sessionId;
     if (!resolvedId) {
-      return err(`${ErrorCode.CODEX_PARSE_ERROR}: missing session ID after successful review`);
+      return err(`${ErrorCode.RESPONSE_PARSE_ERROR}: missing session ID after successful review`);
     }
     // Single cast justified: safeParse validated result.data matches the schema
     const validated = result.data as T;
     return ok({ ...validated, session_id: resolvedId });
   }
 
-  return err(`${ErrorCode.CODEX_PARSE_ERROR}: ${lastError}`);
+  return err(`${ErrorCode.RESPONSE_PARSE_ERROR}: ${lastError}`);
 }
 
 export function createCodexBackend(

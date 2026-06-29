@@ -104,13 +104,13 @@ describe('registerReviewCodeTool', () => {
 
   it('Codex client error propagates as MCP error', async () => {
     vi.mocked(mockClient.reviewCode).mockResolvedValue(
-      err('CODEX_PARSE_ERROR: malformed JSON in response'),
+      err('RESPONSE_PARSE_ERROR: malformed JSON in response'),
     );
 
     const result = await handler({ diff: 'some diff' }, {});
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('CODEX_PARSE_ERROR');
+    expect(result.content[0].text).toContain('RESPONSE_PARSE_ERROR');
   });
 
   it('unexpected thrown error returns MCP error', async () => {
@@ -179,7 +179,7 @@ describe('registerReviewCodeTool with db', () => {
 
   it('does not save on client error', async () => {
     vi.mocked(mockClient.reviewCode).mockResolvedValue(
-      err('CODEX_TIMEOUT: timed out'),
+      err('REVIEW_TIMEOUT: timed out'),
     );
 
     await handler({ diff: 'some diff' }, {});
@@ -252,7 +252,7 @@ describe('registerReviewCodeTool with db', () => {
   });
 
   it('marks session failed when client returns error and session_id provided', async () => {
-    vi.mocked(mockClient.reviewCode).mockResolvedValue(err('CODEX_TIMEOUT: timed out'));
+    vi.mocked(mockClient.reviewCode).mockResolvedValue(err('REVIEW_TIMEOUT: timed out'));
 
     const result = await handler({ diff: 'some diff', session_id: 'thread_xyz' }, {});
 
@@ -271,7 +271,7 @@ describe('registerReviewCodeTool with db', () => {
 
   it('does not mark session failed when activateSession fails', async () => {
     vi.mocked(activateSession).mockReturnValue(err('STORAGE_ERROR: readonly'));
-    vi.mocked(mockClient.reviewCode).mockResolvedValue(err('CODEX_TIMEOUT: timed out'));
+    vi.mocked(mockClient.reviewCode).mockResolvedValue(err('REVIEW_TIMEOUT: timed out'));
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const result = await handler({ diff: 'some diff', session_id: 'thread_xyz' }, {});

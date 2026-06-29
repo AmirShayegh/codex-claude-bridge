@@ -52,8 +52,8 @@ describe('Result type helpers', () => {
 
 describe('ErrorCode enum', () => {
   it('has all expected error codes', () => {
-    expect(ErrorCode.CODEX_TIMEOUT).toBe('CODEX_TIMEOUT');
-    expect(ErrorCode.CODEX_PARSE_ERROR).toBe('CODEX_PARSE_ERROR');
+    expect(ErrorCode.REVIEW_TIMEOUT).toBe('REVIEW_TIMEOUT');
+    expect(ErrorCode.RESPONSE_PARSE_ERROR).toBe('RESPONSE_PARSE_ERROR');
     expect(ErrorCode.GIT_ERROR).toBe('GIT_ERROR');
     expect(ErrorCode.CONFIG_ERROR).toBe('CONFIG_ERROR');
     expect(ErrorCode.STORAGE_ERROR).toBe('STORAGE_ERROR');
@@ -67,10 +67,10 @@ describe('ErrorCode enum', () => {
   });
 
   it('works with err() to create structured error messages', () => {
-    const result = err(`${ErrorCode.CODEX_TIMEOUT}: request timed out after 30s`);
+    const result = err(`${ErrorCode.REVIEW_TIMEOUT}: request timed out after 30s`);
     expect(result).toEqual({
       ok: false,
-      error: 'CODEX_TIMEOUT: request timed out after 30s',
+      error: 'REVIEW_TIMEOUT: request timed out after 30s',
     });
   });
 

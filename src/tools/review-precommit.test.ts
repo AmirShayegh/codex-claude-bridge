@@ -244,7 +244,7 @@ describe('registerReviewPrecommitTool with db', () => {
   it('does not save on client error', async () => {
     vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
     vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(
-      err('CODEX_TIMEOUT: timed out'),
+      err('REVIEW_TIMEOUT: timed out'),
     );
 
     await handler({}, {});
@@ -324,7 +324,7 @@ describe('registerReviewPrecommitTool with db', () => {
 
   it('marks session failed when client returns error and session_id provided', async () => {
     vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
-    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(err('CODEX_TIMEOUT: timed out'));
+    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(err('REVIEW_TIMEOUT: timed out'));
 
     const result = await handler({ session_id: 'thread_pre' }, {});
 
@@ -343,7 +343,7 @@ describe('registerReviewPrecommitTool with db', () => {
   it('does not mark session failed when activateSession fails', async () => {
     vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
     vi.mocked(activateSession).mockReturnValue(err('STORAGE_ERROR: readonly'));
-    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(err('CODEX_TIMEOUT: timed out'));
+    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(err('REVIEW_TIMEOUT: timed out'));
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const result = await handler({ session_id: 'thread_pre' }, {});

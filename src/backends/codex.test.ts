@@ -186,7 +186,7 @@ describe('retry on parse failure', () => {
     expect(mockRun).toHaveBeenCalledTimes(2);
   });
 
-  it('returns CODEX_PARSE_ERROR after two malformed JSON attempts', async () => {
+  it('returns RESPONSE_PARSE_ERROR after two malformed JSON attempts', async () => {
     mockRun.mockResolvedValue({ finalResponse: 'not json' });
 
     const client = createCodexBackend(config);
@@ -194,12 +194,12 @@ describe('retry on parse failure', () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error).toContain('CODEX_PARSE_ERROR');
+      expect(result.error).toContain('RESPONSE_PARSE_ERROR');
     }
     expect(mockRun).toHaveBeenCalledTimes(2);
   });
 
-  it('returns CODEX_PARSE_ERROR when valid JSON fails Zod validation after retry', async () => {
+  it('returns RESPONSE_PARSE_ERROR when valid JSON fails Zod validation after retry', async () => {
     const badShape = { verdict: 'invalid_verdict', summary: 123 };
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(badShape) });
 
@@ -208,13 +208,13 @@ describe('retry on parse failure', () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error).toContain('CODEX_PARSE_ERROR');
+      expect(result.error).toContain('RESPONSE_PARSE_ERROR');
     }
   });
 });
 
 describe('timeout handling', () => {
-  it('returns CODEX_TIMEOUT on AbortError', async () => {
+  it('returns REVIEW_TIMEOUT on AbortError', async () => {
     const abortError = new DOMException('signal is aborted', 'AbortError');
     mockRun.mockRejectedValue(abortError);
 
@@ -223,11 +223,11 @@ describe('timeout handling', () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error).toContain('CODEX_TIMEOUT');
+      expect(result.error).toContain('REVIEW_TIMEOUT');
     }
   });
 
-  it('returns CODEX_TIMEOUT on generic error containing "aborted"', async () => {
+  it('returns REVIEW_TIMEOUT on generic error containing "aborted"', async () => {
     const err = new Error('The operation was aborted');
     mockRun.mockRejectedValue(err);
 
@@ -236,11 +236,11 @@ describe('timeout handling', () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error).toContain('CODEX_TIMEOUT');
+      expect(result.error).toContain('REVIEW_TIMEOUT');
     }
   });
 
-  it('returns CODEX_TIMEOUT on case-variant abort message', async () => {
+  it('returns REVIEW_TIMEOUT on case-variant abort message', async () => {
     const err = new Error('Request Aborted by signal');
     mockRun.mockRejectedValue(err);
 
@@ -249,7 +249,7 @@ describe('timeout handling', () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error).toContain('CODEX_TIMEOUT');
+      expect(result.error).toContain('REVIEW_TIMEOUT');
     }
   });
 });
@@ -1177,7 +1177,7 @@ describe('chunking', () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error).toContain('CODEX_TIMEOUT');
+      expect(result.error).toContain('REVIEW_TIMEOUT');
       expect(result.session_id).toBe(thread1Id);
     }
   });
@@ -1198,7 +1198,7 @@ describe('chunking', () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error).toContain('CODEX_TIMEOUT');
+      expect(result.error).toContain('REVIEW_TIMEOUT');
       expect(result.session_id).toBe(thread1Id);
     }
   });

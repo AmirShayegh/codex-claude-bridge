@@ -1,13 +1,13 @@
 {
   "blockedBy": [],
-  "completedDate": null,
+  "completedDate": "2026-06-28",
   "createdDate": "2026-06-28",
   "description": "Refactor the Codex-coupled client into a provider-neutral seam so a second backend can slot in. NO behavior change; suite stays green at every step.\n\n- Rename interface `CodexClient` (src/codex/client.ts:53-57) → `ReviewBackend`; move to new `src/backends/backend.ts`. Keep the three method signatures (reviewPlan/reviewCode/reviewPrecommit → Promise<Result<…>>) byte-for-byte so the tool layer is untouched.\n- Lift the shared orchestration out of client.ts into `src/backends/orchestrator.ts`: the chunk loops (client.ts:418-446 reviewCode, 514-536 reviewPrecommit), empty-diff synthetic results, `looksLikeDiff` guard, `deduplicateFindings`, `mergeCodeResults`, `mergePrecommitResults`, prompt building, and the parse-then-retry loop. Parameterize it by a backend-provided `TurnRunner` (the per-turn model call) so it is written ONCE, not cloned per provider.\n- Parameterize the two Codex-specific policies the loop currently bakes in (adversarial finding — this is real design work, not a rename): (a) model-omitted-on-resume (client.ts:430/524 — the Codex SDK reasserts --model on resume; other backends may allow per-turn model) via a backend capability flag e.g. `allowsModelOverrideOnResume`; (b) the session+model conflict policy (`sessionModelConflictMessage`) as a backend capability.\n- Move `createCodexClient` + Codex SDK specifics (threadOpts/resumeThreadOpts, classifyError, thread.id→session_id) into `src/backends/codex.ts`, exposed as a TurnRunner via `createCodexBackend`.\n\nGUARD FIRST: before refactoring, add/confirm regression tests pinning the T-001 partial-failure ordering (early return BEFORE preflight; surface partial session_id on mid-chunk failure) so the move cannot regress it.\n\nConventions: functions/factories over classes; Result<T> no-throw; ESM `.js` imports; config layer must NOT import from backends/codex.\nAcceptance: all existing tests green; zero functional change; client.ts no longer owns the orchestration; ReviewBackend is the single seam.",
   "displayId": "T-013",
   "id": "T-013",
   "order": 10,
   "phase": "multi-provider",
-  "status": "inprogress",
+  "status": "complete",
   "title": "Extract ReviewBackend seam + shared orchestrator",
   "type": "chore"
 }

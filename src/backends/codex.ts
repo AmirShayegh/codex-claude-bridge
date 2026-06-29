@@ -192,7 +192,9 @@ export function createCodexClient(
 
   const turn: TurnRunner = <T extends Record<string, unknown>>(params: TurnParams) =>
     runReview<T>({ ...params, codex, config });
-  const deps = { config, copilotInstructions };
+  // Codex's SDK reasserts --model on resume, so the model cannot change
+  // mid-session: reject session_id + model and omit the model on resumed chunks.
+  const deps = { config, copilotInstructions, allowsModelOverrideOnResume: false };
 
   return {
     reviewPlan: (input) => runPlanReview(input, deps, turn),

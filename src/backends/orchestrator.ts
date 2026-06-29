@@ -148,6 +148,10 @@ export type TurnRunner = <T extends Record<string, unknown>>(
 export interface ReviewFlowDeps {
   config: ReviewBridgeConfig;
   copilotInstructions?: CopilotInstructions;
+  // When false (e.g. Codex, whose SDK reasserts --model on resume) the flow
+  // rejects session_id + model and omits the model on resumed chunks. When true
+  // (e.g. Gemini) the caller may change model on a resumed session.
+  allowsModelOverrideOnResume: boolean;
 }
 
 export async function runPlanReview(
@@ -155,8 +159,8 @@ export async function runPlanReview(
   deps: ReviewFlowDeps,
   turn: TurnRunner,
 ): Promise<Result<PlanReviewResult>> {
-  const { config, copilotInstructions } = deps;
-  if (input.session_id && input.model) {
+  const { config, copilotInstructions, allowsModelOverrideOnResume } = deps;
+  if (!allowsModelOverrideOnResume && input.session_id && input.model) {
     return err<PlanReviewResult>(sessionModelConflictMessage());
   }
   const prompt = buildPlanReviewPrompt(input, {
@@ -179,8 +183,8 @@ export async function runCodeReview(
   deps: ReviewFlowDeps,
   turn: TurnRunner,
 ): Promise<Result<CodeReviewResult>> {
-  const { config, copilotInstructions } = deps;
-  if (input.session_id && input.model) {
+  const { config, copilotInstructions, allowsModelOverrideOnResume } = deps;
+  if (!allowsModelOverrideOnResume && input.session_id && input.model) {
     return err<CodeReviewResult>(sessionModelConflictMessage());
   }
   if (input.diff.length > 20 && !looksLikeDiff(input.diff)) {
@@ -249,14 +253,21 @@ export async function runCodeReview(
   for (let i = 0; i < chunks.length; i++) {
     const chunkHeader = `Chunk ${i + 1} of ${chunks.length}: reviewing the following files only.`;
     const prompt = buildCodeReviewPrompt({ ...input, diff: chunks[i], chunkHeader }, codeConfig);
+    // Chunk 1 starts the session with the requested model. For chunks 2..N the
+    // policy is per-backend: Codex (allowsModelOverrideOnResume=false) omits the
+    // model because its SDK reasserts --model on resume; backends that allow a
+    // mid-session model change forward it on every chunk.
+    let turnModel: string | undefined;
+    if (allowsModelOverrideOnResume) {
+      turnModel = input.model;
+    } else {
+      turnModel = sessionId ? undefined : input.model;
+    }
     const result = await turn<Omit<CodeReviewResult, 'session_id' | 'chunks_reviewed'>>({
       prompt,
       responseSchema: CodeReviewResponseSchema,
       sessionId,
-      // Model override applies only to the fresh session on chunk 1. Chunks 2..N
-      // resume chunk 1's session, already bound to the resolved model. (The
-      // per-backend resume-model policy is parameterized in a later increment.)
-      model: sessionId ? undefined : input.model,
+      model: turnModel,
       resolvedModel: codeResolvedModel,
     });
 
@@ -278,8 +289,8 @@ export async function runPrecommitReview(
   deps: ReviewFlowDeps,
   turn: TurnRunner,
 ): Promise<Result<PrecommitResult>> {
-  const { config, copilotInstructions } = deps;
-  if (input.session_id && input.model) {
+  const { config, copilotInstructions, allowsModelOverrideOnResume } = deps;
+  if (!allowsModelOverrideOnResume && input.session_id && input.model) {
     return err<PrecommitResult>(sessionModelConflictMessage());
   }
   if (input.diff.length > 20 && !looksLikeDiff(input.diff)) {
@@ -342,12 +353,19 @@ export async function runPrecommitReview(
   for (let i = 0; i < chunks.length; i++) {
     const chunkHeader = `Chunk ${i + 1} of ${chunks.length}: checking the following files only.`;
     const prompt = buildPrecommitPrompt({ ...input, diff: chunks[i], chunkHeader }, precommitConfig);
+    // See runCodeReview chunk loop: chunk 1 carries the model; the resume policy
+    // for chunks 2..N is per-backend (Codex omits, override-capable backends forward).
+    let turnModel: string | undefined;
+    if (allowsModelOverrideOnResume) {
+      turnModel = input.model;
+    } else {
+      turnModel = sessionId ? undefined : input.model;
+    }
     const result = await turn<Omit<PrecommitResult, 'session_id' | 'chunks_reviewed'>>({
       prompt,
       responseSchema: PrecommitResponseSchema,
       sessionId,
-      // Chunk 1 may carry the model override; chunks 2..N inherit via resume.
-      model: sessionId ? undefined : input.model,
+      model: turnModel,
       resolvedModel: precommitResolvedModel,
     });
 

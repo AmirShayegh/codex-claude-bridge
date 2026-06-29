@@ -38,8 +38,30 @@ function bigDiff(files: number, lines: number): string {
   return out;
 }
 
-function deps(allowsModelOverrideOnResume: boolean, overrides: Partial<typeof DEFAULT_CONFIG> = {}): ReviewFlowDeps {
-  return { config: { ...DEFAULT_CONFIG, ...overrides }, allowsModelOverrideOnResume, defaultModel: 'default-model' };
+function deps(
+  allowsModelOverrideOnResume: boolean,
+  overrides: Partial<typeof DEFAULT_CONFIG> = {},
+  resumesAcrossChunks = true,
+): ReviewFlowDeps {
+  return {
+    config: { ...DEFAULT_CONFIG, ...overrides },
+    allowsModelOverrideOnResume,
+    defaultModel: 'default-model',
+    resumesAcrossChunks,
+  };
+}
+
+// Like makeFakeTurn but returns a distinct session id per call (session-0,
+// session-1, ...) so tests can assert which session each chunk runs against.
+function makeCountingTurn(canned: Record<string, unknown>): { turn: TurnRunner; calls: TurnParams[] } {
+  const calls: TurnParams[] = [];
+  let n = 0;
+  const turn: TurnRunner = <T extends Record<string, unknown>>(params: TurnParams) => {
+    calls.push({ ...params });
+    const session_id = `session-${n++}`;
+    return Promise.resolve(ok({ ...canned, session_id } as T & { session_id: string }));
+  };
+  return { turn, calls };
 }
 
 describe('orchestrator — allowsModelOverrideOnResume capability', () => {
@@ -86,5 +108,42 @@ describe('orchestrator — allowsModelOverrideOnResume capability', () => {
     expect(calls.length).toBeGreaterThanOrEqual(2);
     expect(calls[0].model).toBe('m');
     expect(calls.slice(1).every((c) => c.model === undefined)).toBe(true);
+  });
+});
+
+describe('orchestrator — resumesAcrossChunks capability (chunked reviews)', () => {
+  it('resumesAcrossChunks=true (Codex): chunks 2..N resume the prior chunk session', async () => {
+    const { turn, calls } = makeCountingTurn(CANNED_CODE);
+    const res = await runCodeReview({ diff: bigDiff(3, 30) }, deps(false, { max_chunk_tokens: 2500 }, true), turn);
+    expect(res.ok).toBe(true);
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    expect(calls[0].sessionId).toBeUndefined(); // chunk 1 starts fresh
+    expect(calls[1].sessionId).toBe('session-0'); // chunk 2 resumes chunk 1's session
+    // Review id is the last threaded session (all one thread for real Codex).
+    if (res.ok) expect(res.data.session_id).toBe(`session-${calls.length - 1}`);
+  });
+
+  it('resumesAcrossChunks=false (Gemini): chunks 2..N run independently; review id is chunk 1', async () => {
+    const { turn, calls } = makeCountingTurn(CANNED_CODE);
+    const res = await runCodeReview({ diff: bigDiff(3, 30) }, deps(true, { max_chunk_tokens: 2500 }, false), turn);
+    expect(res.ok).toBe(true);
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    expect(calls[0].sessionId).toBeUndefined(); // chunk 1 fresh (no cross-phase session)
+    // Later chunks do NOT resume chunk 1 — independent sessions, no O(N²) growth.
+    expect(calls.slice(1).every((c) => c.sessionId === undefined)).toBe(true);
+    if (res.ok) expect(res.data.session_id).toBe('session-0'); // chunk 1's id is the review's
+  });
+
+  it('resumesAcrossChunks=false: chunk 1 resumes a cross-phase input session, later chunks do not', async () => {
+    const { turn, calls } = makeCountingTurn(CANNED_CODE);
+    const res = await runCodeReview(
+      { diff: bigDiff(3, 30), session_id: 'prior-phase' },
+      deps(true, { max_chunk_tokens: 2500 }, false),
+      turn,
+    );
+    expect(res.ok).toBe(true);
+    expect(calls[0].sessionId).toBe('prior-phase'); // cross-phase resume on chunk 1 only
+    expect(calls.slice(1).every((c) => c.sessionId === undefined)).toBe(true);
+    if (res.ok) expect(res.data.session_id).toBe('session-0'); // chunk 1's fresh id
   });
 });

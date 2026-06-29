@@ -6,10 +6,11 @@
   "completedDate": null,
   "createdDate": "2026-06-28",
   "description": "Implement the Gemini backend by wrapping the installed `agy` CLI in headless print mode (Path A — uses the user's Google AI Pro subscription, $0 marginal, ZERO new npm deps). Spike-validated (see lesson).\n\n- New `src/backends/gemini.ts` exposing a `TurnRunner` via `createGeminiBackend`: spawn `agy --print --sandbox --model <resolved> [--conversation <id>]` with the built prompt (reuse buildPlanReviewPrompt/buildCodeReviewPrompt/buildPrecommitPrompt); read clean JSON from stdout; JSON.parse → Zod safeParse → reuse the existing parse-then-retry loop.\n- MUST run read-only/sandboxed with a tight, self-contained prompt so agy REVIEWS rather than acts — the stashed PoC proved agy will implement code if unconstrained (see lesson). No tool wandering, no workspace writes.\n- Session continuity WITHOUT a ConversationStore (agy persists natively): fresh review → run without --conversation, then capture the new conversation id from `~/.gemini/antigravity-cli/cache/last_conversations.json` keyed by cwd; that id IS the session_id. Resume → pass `--conversation <session_id>`. (Spike-confirmed: --conversation restores full history in --print mode.)\n- Concurrency caveat: last_conversations.json is keyed by workspace path → serialize id-capture (or snapshot-diff `conversations/<uuid>.db`) so concurrent same-repo reviews don't race. Document the limit.\n- Chunked reviews: run chunks INDEPENDENTLY and merge (do NOT resume per chunk — that reintroduces the O(N²) context-growth/rate-limit risk the adversarial pass flagged); the review's session_id = chunk-1's conversation. Reserve resume for cross-phase (plan→code→precommit).\n- `classifyAgyError`: missing/failed auth (point at `agy` login), model-not-available, rate-limit, empty-output (retry), timeout via the spawn AbortSignal. Surface the partial session_id on mid-chunk failure (T-001 parity).\n- Functions over classes; Result<T> no-throw.\n\nAcceptance: a review with provider:'gemini' returns the SAME structured shape as codex; cross-phase resume remembers prior context; all failure modes return a structured Result, never throw.",
+  "displayId": "T-016",
   "id": "T-016",
   "order": 40,
   "phase": "multi-provider",
-  "status": "open",
+  "status": "inprogress",
   "title": "Gemini review backend via Antigravity CLI (agy)",
   "type": "feature"
 }

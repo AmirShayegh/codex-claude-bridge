@@ -203,6 +203,8 @@ export function createCodexBackend(
     copilotInstructions,
     allowsModelOverrideOnResume: false,
     defaultModel: CODEX_DEFAULT_MODEL,
+    // One Codex thread per review: chunks 2..N resume chunk 1's thread.
+    resumesAcrossChunks: true,
   };
 
   return {

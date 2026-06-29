@@ -622,14 +622,26 @@ describe('per-call model override (T-011)', () => {
     );
   });
 
-  it('falls back to config.model when override omitted', async () => {
+  it('uses config.model when set and no per-call override is given', async () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
 
-    const client = createCodexBackend(config);
+    const client = createCodexBackend({ ...config, model: 'gpt-5.4' });
     await client.reviewPlan({ plan: 'plan' });
 
     expect(mockStartThread).toHaveBeenCalledWith(
-      expect.objectContaining({ model: config.model }),
+      expect.objectContaining({ model: 'gpt-5.4' }),
+    );
+  });
+
+  it('falls back to the backend default model when neither override nor config.model is set', async () => {
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
+
+    const client = createCodexBackend({ ...config, model: undefined });
+    await client.reviewPlan({ plan: 'plan' });
+
+    // codex resolves its own default ('gpt-5.5') — the schema no longer supplies one.
+    expect(mockStartThread).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'gpt-5.5' }),
     );
   });
 

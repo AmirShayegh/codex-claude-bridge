@@ -152,6 +152,9 @@ export interface ReviewFlowDeps {
   // rejects session_id + model and omits the model on resumed chunks. When true
   // (e.g. Gemini) the caller may change model on a resumed session.
   allowsModelOverrideOnResume: boolean;
+  // The backend's own default model, used when neither a per-call override nor
+  // config.model is set. The config schema no longer carries a default model.
+  defaultModel: string;
 }
 
 export async function runPlanReview(
@@ -159,7 +162,7 @@ export async function runPlanReview(
   deps: ReviewFlowDeps,
   turn: TurnRunner,
 ): Promise<Result<PlanReviewResult>> {
-  const { config, copilotInstructions, allowsModelOverrideOnResume } = deps;
+  const { config, copilotInstructions, allowsModelOverrideOnResume, defaultModel } = deps;
   if (!allowsModelOverrideOnResume && input.session_id && input.model) {
     return err<PlanReviewResult>(sessionModelConflictMessage());
   }
@@ -174,7 +177,7 @@ export async function runPlanReview(
     responseSchema: PlanReviewResponseSchema,
     sessionId: input.session_id,
     model: input.model,
-    resolvedModel: input.model ?? config.model,
+    resolvedModel: input.model ?? config.model ?? defaultModel,
   });
 }
 
@@ -183,7 +186,7 @@ export async function runCodeReview(
   deps: ReviewFlowDeps,
   turn: TurnRunner,
 ): Promise<Result<CodeReviewResult>> {
-  const { config, copilotInstructions, allowsModelOverrideOnResume } = deps;
+  const { config, copilotInstructions, allowsModelOverrideOnResume, defaultModel } = deps;
   if (!allowsModelOverrideOnResume && input.session_id && input.model) {
     return err<CodeReviewResult>(sessionModelConflictMessage());
   }
@@ -235,7 +238,7 @@ export async function runCodeReview(
       responseSchema: CodeReviewResponseSchema,
       sessionId: input.session_id,
       model: input.model,
-      resolvedModel: input.model ?? config.model,
+      resolvedModel: input.model ?? config.model ?? defaultModel,
     });
   }
 
@@ -248,7 +251,7 @@ export async function runCodeReview(
   };
   const chunkResults: Omit<CodeReviewResult, 'chunks_reviewed'>[] = [];
   let sessionId = input.session_id;
-  const codeResolvedModel = input.model ?? config.model;
+  const codeResolvedModel = input.model ?? config.model ?? defaultModel;
 
   for (let i = 0; i < chunks.length; i++) {
     const chunkHeader = `Chunk ${i + 1} of ${chunks.length}: reviewing the following files only.`;
@@ -289,7 +292,7 @@ export async function runPrecommitReview(
   deps: ReviewFlowDeps,
   turn: TurnRunner,
 ): Promise<Result<PrecommitResult>> {
-  const { config, copilotInstructions, allowsModelOverrideOnResume } = deps;
+  const { config, copilotInstructions, allowsModelOverrideOnResume, defaultModel } = deps;
   if (!allowsModelOverrideOnResume && input.session_id && input.model) {
     return err<PrecommitResult>(sessionModelConflictMessage());
   }
@@ -336,7 +339,7 @@ export async function runPrecommitReview(
       responseSchema: PrecommitResponseSchema,
       sessionId: input.session_id,
       model: input.model,
-      resolvedModel: input.model ?? config.model,
+      resolvedModel: input.model ?? config.model ?? defaultModel,
     });
   }
 
@@ -348,7 +351,7 @@ export async function runPrecommitReview(
   };
   const chunkResults: Omit<PrecommitResult, 'chunks_reviewed'>[] = [];
   let sessionId = input.session_id;
-  const precommitResolvedModel = input.model ?? config.model;
+  const precommitResolvedModel = input.model ?? config.model ?? defaultModel;
 
   for (let i = 0; i < chunks.length; i++) {
     const chunkHeader = `Chunk ${i + 1} of ${chunks.length}: checking the following files only.`;

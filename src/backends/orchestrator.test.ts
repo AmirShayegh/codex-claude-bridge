@@ -39,7 +39,7 @@ function bigDiff(files: number, lines: number): string {
 }
 
 function deps(allowsModelOverrideOnResume: boolean, overrides: Partial<typeof DEFAULT_CONFIG> = {}): ReviewFlowDeps {
-  return { config: { ...DEFAULT_CONFIG, ...overrides }, allowsModelOverrideOnResume };
+  return { config: { ...DEFAULT_CONFIG, ...overrides }, allowsModelOverrideOnResume, defaultModel: 'default-model' };
 }
 
 describe('orchestrator — allowsModelOverrideOnResume capability', () => {

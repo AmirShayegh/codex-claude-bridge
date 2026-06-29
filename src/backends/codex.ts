@@ -83,9 +83,13 @@ export function classifyError(
   return { code: ErrorCode.UNKNOWN_ERROR, message: raw };
 }
 
+// Codex's default model, used when neither a per-call override nor config.model
+// is set. The backend owns this default — the config schema no longer supplies one.
+const CODEX_DEFAULT_MODEL = 'gpt-5.5';
+
 function threadOpts(config: ReviewBridgeConfig, modelOverride?: string) {
   return {
-    model: modelOverride ?? config.model,
+    model: modelOverride ?? config.model ?? CODEX_DEFAULT_MODEL,
     sandboxMode: 'read-only' as const,
     skipGitRepoCheck: true,
     modelReasoningEffort: config.reasoning_effort,
@@ -194,7 +198,12 @@ export function createCodexBackend(
     runReview<T>({ ...params, codex, config });
   // Codex's SDK reasserts --model on resume, so the model cannot change
   // mid-session: reject session_id + model and omit the model on resumed chunks.
-  const deps = { config, copilotInstructions, allowsModelOverrideOnResume: false };
+  const deps = {
+    config,
+    copilotInstructions,
+    allowsModelOverrideOnResume: false,
+    defaultModel: CODEX_DEFAULT_MODEL,
+  };
 
   return {
     reviewPlan: (input) => runPlanReview(input, deps, turn),

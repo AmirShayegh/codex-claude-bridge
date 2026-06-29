@@ -8,7 +8,9 @@ describe('ReviewBridgeConfigSchema', () => {
     expect(result.success).toBe(true);
     if (result.success) {
       const config: ReviewBridgeConfig = result.data;
-      expect(config.model).toBe('gpt-5.5');
+      // model is intentionally undefined at the schema level — each backend
+      // resolves its own default at construction (T-015).
+      expect(config.model).toBeUndefined();
       expect(config.reasoning_effort).toBe('medium');
       expect(config.timeout_seconds).toBe(300);
       expect(config.max_chunk_tokens).toBe(8000);
@@ -181,7 +183,7 @@ describe('ReviewBridgeConfigSchema', () => {
 
 describe('DEFAULT_CONFIG', () => {
   it('has all expected default values', () => {
-    expect(DEFAULT_CONFIG.model).toBe('gpt-5.5');
+    expect(DEFAULT_CONFIG.model).toBeUndefined();
     expect(DEFAULT_CONFIG.reasoning_effort).toBe('medium');
     expect(DEFAULT_CONFIG.timeout_seconds).toBe(300);
     expect(DEFAULT_CONFIG.max_chunk_tokens).toBe(8000);

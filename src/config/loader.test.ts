@@ -345,7 +345,7 @@ describe('loadConfig — default fallthrough', () => {
     if (r1.ok && r2.ok) {
       r1.data.config.model = 'mutated';
       r1.data.config.review_standards.precommit.block_on.push('minor');
-      expect(r2.data.config.model).toBe('gpt-5.5');
+      expect(r2.data.config.model).toBeUndefined();
       expect(r2.data.config.review_standards.precommit.block_on).toEqual([
         'critical',
         'major',

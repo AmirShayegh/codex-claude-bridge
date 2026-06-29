@@ -45,7 +45,9 @@ const ReviewStandardsSchema = z.object({
 export const ReviewBridgeConfigSchema = z.object({
   // Explicit provider selection only — no implicit env-based auto-switching.
   provider: ProviderSchema.default('codex'),
-  model: z.string().default('gpt-5.5'),
+  // No schema-level default — each backend resolves its own default model at
+  // construction. A config value or per-call override takes precedence.
+  model: z.string().optional(),
   reasoning_effort: z.enum(['low', 'medium', 'high']).default('medium'),
   timeout_seconds: z.number().int().positive().default(300),
   max_chunk_tokens: z.number().int().positive().default(8000),

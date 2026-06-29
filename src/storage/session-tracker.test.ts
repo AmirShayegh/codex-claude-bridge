@@ -62,7 +62,7 @@ describe('createSessionTracker — with db', () => {
     const tracker = createSessionTracker(mockDb, 'codex');
     tracker.preflight('sess_1');
 
-    expect(activateSession).toHaveBeenCalledWith(mockDb, 'sess_1');
+    expect(activateSession).toHaveBeenCalledWith(mockDb, 'sess_1', 'codex');
   });
 
   it('preflight skips when sessionId is undefined', () => {
@@ -161,7 +161,7 @@ describe('cross-provider resume guard', () => {
     const result = tracker.preflight('sess_x');
 
     expect(result.ok).toBe(true);
-    expect(activateSession).toHaveBeenCalledWith(mockDb, 'sess_x');
+    expect(activateSession).toHaveBeenCalledWith(mockDb, 'sess_x', 'codex');
   });
 
   it('allows resuming a legacy session with a null provider', () => {
@@ -171,7 +171,7 @@ describe('cross-provider resume guard', () => {
     const result = tracker.preflight('sess_x');
 
     expect(result.ok).toBe(true);
-    expect(activateSession).toHaveBeenCalledWith(mockDb, 'sess_x');
+    expect(activateSession).toHaveBeenCalledWith(mockDb, 'sess_x', 'gemini');
   });
 
   it('tags a freshly created session with the active provider', () => {

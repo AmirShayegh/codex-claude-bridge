@@ -46,7 +46,7 @@ export function createSessionTracker(db: Database.Database | undefined, provider
             `'${existing.data.provider}' to continue this one.`,
         );
       }
-      const result = activateSession(db, sessionId);
+      const result = activateSession(db, sessionId, provider);
       if (result.ok) {
         preflightId = sessionId;
       } else {

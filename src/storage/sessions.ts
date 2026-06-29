@@ -83,13 +83,21 @@ export function getSession(db: Database.Database, sessionId: string): Result<Ses
 export function activateSession(
   db: Database.Database,
   sessionId: string,
+  provider?: string,
 ): Result<SessionInfo> {
   try {
+    // Tag the provider on insert and backfill it on a NULL row, but never
+    // overwrite an existing provider — provenance is fixed at creation. Without
+    // this, a session first materialized via the resume/preflight path stays
+    // provider=NULL forever, silently defeating the cross-provider guard (m1).
     db.prepare(`
-      INSERT INTO sessions (session_id, status, completed_at)
-      VALUES (?, 'in_progress', NULL)
-      ON CONFLICT(session_id) DO UPDATE SET status = 'in_progress', completed_at = NULL
-    `).run(sessionId);
+      INSERT INTO sessions (session_id, status, completed_at, provider)
+      VALUES (?, 'in_progress', NULL, ?)
+      ON CONFLICT(session_id) DO UPDATE SET
+        status = 'in_progress',
+        completed_at = NULL,
+        provider = COALESCE(sessions.provider, excluded.provider)
+    `).run(sessionId, provider ?? null);
 
     const row = db
       .prepare(SELECT_SESSION)

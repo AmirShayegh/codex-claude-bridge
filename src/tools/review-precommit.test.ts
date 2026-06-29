@@ -331,7 +331,7 @@ describe('registerReviewPrecommitTool with db', () => {
 
     await handler({ session_id: 'thread_pre' }, {});
 
-    expect(activateSession).toHaveBeenCalledWith(mockDb, 'thread_pre');
+    expect(activateSession).toHaveBeenCalledWith(mockDb, 'thread_pre', 'codex');
     const activateOrder = vi.mocked(activateSession).mock.invocationCallOrder[0];
     const reviewOrder = vi.mocked(mockClient.reviewPrecommit).mock.invocationCallOrder[0];
     expect(activateOrder).toBeLessThan(reviewOrder);

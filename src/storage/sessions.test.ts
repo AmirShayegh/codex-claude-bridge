@@ -204,6 +204,32 @@ describe('activateSession', () => {
       expect(after.data.created_at).toBe(before.data.created_at);
     }
   });
+
+  it('tags the provider when creating a new session via the resume path (m1)', () => {
+    const result = activateSession(db, 'thread_activate_provider', 'gemini');
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.provider).toBe('gemini');
+  });
+
+  it('backfills the provider on a NULL-provider row without overwriting a set one', () => {
+    // Row exists with no provider (legacy / activate-first).
+    activateSession(db, 'thread_backfill');
+    const before = getSession(db, 'thread_backfill');
+    expect(before.ok && before.data?.provider).toBeNull();
+
+    // A later activate with a provider backfills the NULL.
+    activateSession(db, 'thread_backfill', 'codex');
+    const after = getSession(db, 'thread_backfill');
+    expect(after.ok && after.data?.provider).toBe('codex');
+  });
+
+  it('never overwrites an existing provider (provenance is fixed at creation)', () => {
+    activateSession(db, 'thread_fixed', 'gemini');
+    // Re-activating under a different provider must NOT change the original.
+    activateSession(db, 'thread_fixed', 'codex');
+    const row = getSession(db, 'thread_fixed');
+    expect(row.ok && row.data?.provider).toBe('gemini');
+  });
 });
 
 describe('provider provenance', () => {

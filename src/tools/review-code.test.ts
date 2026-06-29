@@ -260,7 +260,7 @@ describe('registerReviewCodeTool with db', () => {
 
     await handler({ diff: 'some diff', session_id: 'thread_xyz' }, {});
 
-    expect(activateSession).toHaveBeenCalledWith(mockDb, 'thread_xyz');
+    expect(activateSession).toHaveBeenCalledWith(mockDb, 'thread_xyz', 'codex');
     const activateOrder = vi.mocked(activateSession).mock.invocationCallOrder[0];
     const reviewOrder = vi.mocked(mockClient.reviewCode).mock.invocationCallOrder[0];
     expect(activateOrder).toBeLessThan(reviewOrder);

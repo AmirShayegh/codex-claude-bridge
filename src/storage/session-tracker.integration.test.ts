@@ -97,4 +97,19 @@ describe('createSessionTracker — cross-provider resume guard (T-017)', () => {
 
     expect(result.ok).toBe(true);
   });
+
+  it('preflight on a session not yet in the DB persists its provider, so the guard holds on the next resume (m1)', () => {
+    // Backend session exists (in ~/.gemini) but no bridge row yet — the first
+    // touch is a resume under gemini. Pre-fix this persisted provider=NULL.
+    const first = createSessionTracker(db, 'gemini').preflight('sess_new_resume');
+    expect(first.ok).toBe(true);
+
+    const row = getSession(db, 'sess_new_resume');
+    expect(row.ok && row.data?.provider).toBe('gemini');
+
+    // A later resume of the same id under codex is now correctly rejected.
+    const second = createSessionTracker(db, 'codex').preflight('sess_new_resume');
+    expect(second.ok).toBe(false);
+    if (!second.ok) expect(second.error).toContain('PROVIDER_MISMATCH');
+  });
 });

@@ -237,7 +237,7 @@ describe('registerReviewPlanTool with db', () => {
 
     await handler({ plan: 'My plan', session_id: 'thread_abc' }, {});
 
-    expect(activateSession).toHaveBeenCalledWith(mockDb, 'thread_abc');
+    expect(activateSession).toHaveBeenCalledWith(mockDb, 'thread_abc', 'codex');
     // activateSession should be called before reviewPlan
     const activateOrder = vi.mocked(activateSession).mock.invocationCallOrder[0];
     const reviewOrder = vi.mocked(mockClient.reviewPlan).mock.invocationCallOrder[0];

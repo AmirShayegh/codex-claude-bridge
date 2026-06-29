@@ -242,7 +242,7 @@ describe('pickLatestFlashModel', () => {
 });
 
 describe('runAgyModels', () => {
-  it('invokes `agy models` and returns raw stdout on success', async () => {
+  it('invokes `agy models`, closes stdin (agy blocks on it otherwise), and returns raw stdout', async () => {
     const p = runAgyModels();
     lastChild.stdout.emit('data', Buffer.from(REAL_AGY_MODELS));
     lastChild.emit('close', 0);
@@ -250,6 +250,8 @@ describe('runAgyModels', () => {
 
     expect(out).toBe(REAL_AGY_MODELS);
     expect(lastArgs).toEqual(['models']);
+    // Without this, real `agy models` hangs waiting for stdin EOF until timeout.
+    expect(lastChild.stdin.end).toHaveBeenCalled();
   });
 
   it('returns null on a non-zero exit', async () => {

@@ -317,6 +317,10 @@ export function runAgyModels(timeoutMs: number = MODEL_QUERY_TIMEOUT_MS): Promis
     child.on('close', (code: number | null) => {
       finish(code === 0 && stdout.trim() ? stdout : null);
     });
+
+    // agy reads stdin even for `models`; close it so the process gets EOF and
+    // exits instead of blocking until the timeout.
+    child.stdin?.end();
   });
 }
 

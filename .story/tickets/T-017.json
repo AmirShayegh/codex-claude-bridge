@@ -5,10 +5,11 @@
   "completedDate": null,
   "createdDate": "2026-06-28",
   "description": "Prevent silent cross-provider session resumes (adversarial finding #4). A Codex thread-id and an agy conversation-id share the sessions/reviews tables with no way to tell them apart; resuming one under the wrong backend fails confusingly (Gemini UUID → resumeThread failure; Codex thread-id → ConversationStore/agy miss).\n\n- Tag sessions with their provider: either add a `provider` column to the sessions table (src/storage/sessions.ts) or namespace the id (e.g. `gemini:<uuid>` / `codex:<threadid>`). Prefer the column (keeps ids clean) unless namespacing is simpler end-to-end.\n- On resume, if the stored provider ≠ the active backend, return a clear, specific error (not opaque SESSION_NOT_FOUND) — or route to the correct backend if/when that's supported.\n- review_history surfaces the provider per entry.\n\nKeep storage backend-agnostic (no SDK imports; provider is just a TEXT tag). Acceptance: resuming a gemini session under codex (and vice-versa) yields a clear correct error; history shows provider per review.",
+  "displayId": "T-017",
   "id": "T-017",
   "order": 50,
   "phase": "multi-provider",
-  "status": "open",
+  "status": "inprogress",
   "title": "Provider provenance on sessions",
   "type": "task"
 }

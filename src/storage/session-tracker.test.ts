@@ -24,8 +24,8 @@ const mockDb = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(activateSession).mockReturnValue(ok({ session_id: 'sess_1', status: 'in_progress' as const, created_at: '2026-01-01', completed_at: null }));
-  vi.mocked(getOrCreateSession).mockReturnValue(ok({ session_id: 'sess_1', status: 'in_progress' as const, created_at: '2026-01-01', completed_at: null }));
+  vi.mocked(activateSession).mockReturnValue(ok({ session_id: 'sess_1', status: 'in_progress' as const, created_at: '2026-01-01', completed_at: null, provider: null }));
+  vi.mocked(getOrCreateSession).mockReturnValue(ok({ session_id: 'sess_1', status: 'in_progress' as const, created_at: '2026-01-01', completed_at: null, provider: null }));
   vi.mocked(markSessionCompleted).mockReturnValue(ok(undefined));
   vi.mocked(markSessionFailed).mockReturnValue(ok(undefined));
   vi.mocked(saveReview).mockReturnValue(ok(undefined));

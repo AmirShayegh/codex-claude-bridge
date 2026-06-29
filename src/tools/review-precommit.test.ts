@@ -191,8 +191,8 @@ describe('registerReviewPrecommitTool with db', () => {
   const mockDb = { transaction: <T>(fn: () => T) => () => fn() };
 
   beforeEach(() => {
-    vi.mocked(getOrCreateSession).mockReturnValue(ok({ session_id: 'thread_pre', status: 'in_progress' as const, created_at: '2026-01-01', completed_at: null }));
-    vi.mocked(activateSession).mockReturnValue(ok({ session_id: 'thread_pre', status: 'in_progress' as const, created_at: '2026-01-01', completed_at: null }));
+    vi.mocked(getOrCreateSession).mockReturnValue(ok({ session_id: 'thread_pre', status: 'in_progress' as const, created_at: '2026-01-01', completed_at: null, provider: null }));
+    vi.mocked(activateSession).mockReturnValue(ok({ session_id: 'thread_pre', status: 'in_progress' as const, created_at: '2026-01-01', completed_at: null, provider: null }));
     vi.mocked(markSessionCompleted).mockReturnValue(ok(undefined));
     vi.mocked(markSessionFailed).mockReturnValue(ok(undefined));
     vi.mocked(saveReview).mockReturnValue(ok(undefined));
@@ -355,7 +355,7 @@ describe('registerReviewPrecommitTool with db', () => {
 
   it('uses preflightId for markSessionCompleted when session_id provided', async () => {
     vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
-    vi.mocked(activateSession).mockReturnValue(ok({ session_id: 'thread_pre', status: 'in_progress' as const, created_at: '2026-01-01', completed_at: null }));
+    vi.mocked(activateSession).mockReturnValue(ok({ session_id: 'thread_pre', status: 'in_progress' as const, created_at: '2026-01-01', completed_at: null, provider: null }));
     const codexResult = { ...validResult, session_id: 'thread_different' };
     vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(codexResult));
 

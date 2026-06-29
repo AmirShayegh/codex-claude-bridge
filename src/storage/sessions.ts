@@ -7,6 +7,9 @@ export interface SessionInfo {
   status: 'in_progress' | 'completed' | 'failed';
   created_at: string;
   completed_at: string | null;
+  // Which review provider created this session ('codex' | 'gemini'). A plain
+  // TEXT tag — storage stays backend-agnostic. Null for legacy rows.
+  provider: string | null;
 }
 
 export function initSessionsDb(db: Database.Database): void {
@@ -15,22 +18,31 @@ export function initSessionsDb(db: Database.Database): void {
       session_id TEXT PRIMARY KEY,
       status TEXT NOT NULL DEFAULT 'in_progress',
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      completed_at TEXT
+      completed_at TEXT,
+      provider TEXT
     )
   `);
-  // Migration for existing databases without completed_at column
-  try {
-    db.exec('ALTER TABLE sessions ADD COLUMN completed_at TEXT');
-  } catch {
-    // Column already exists — expected for new databases
+  // Migrations for databases created before these columns existed. Each ALTER
+  // throws if the column is already present — expected for new databases.
+  for (const ddl of [
+    'ALTER TABLE sessions ADD COLUMN completed_at TEXT',
+    'ALTER TABLE sessions ADD COLUMN provider TEXT',
+  ]) {
+    try {
+      db.exec(ddl);
+    } catch {
+      // Column already exists.
+    }
   }
 }
 
-const SELECT_SESSION = 'SELECT session_id, status, created_at, completed_at FROM sessions WHERE session_id = ?';
+const SELECT_SESSION =
+  'SELECT session_id, status, created_at, completed_at, provider FROM sessions WHERE session_id = ?';
 
 export function getOrCreateSession(
   db: Database.Database,
   sessionId: string,
+  provider?: string,
 ): Result<SessionInfo> {
   try {
     const existing = db
@@ -38,16 +50,30 @@ export function getOrCreateSession(
       .get(sessionId) as SessionInfo | undefined;
 
     if (existing) {
+      // Never overwrite an existing session's provider — provenance is fixed
+      // at creation.
       return ok(existing);
     }
 
-    db.prepare('INSERT INTO sessions (session_id) VALUES (?)').run(sessionId);
+    db.prepare('INSERT INTO sessions (session_id, provider) VALUES (?, ?)').run(sessionId, provider ?? null);
 
     const created = db
       .prepare(SELECT_SESSION)
       .get(sessionId) as SessionInfo;
 
     return ok(created);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return err(`${ErrorCode.STORAGE_ERROR}: ${msg}`);
+  }
+}
+
+// Read a session without creating one. Returns null when it doesn't exist —
+// used by the resume preflight to check provider provenance.
+export function getSession(db: Database.Database, sessionId: string): Result<SessionInfo | null> {
+  try {
+    const row = db.prepare(SELECT_SESSION).get(sessionId) as SessionInfo | undefined;
+    return ok(row ?? null);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return err(`${ErrorCode.STORAGE_ERROR}: ${msg}`);

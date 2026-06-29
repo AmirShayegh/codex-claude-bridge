@@ -3,6 +3,7 @@ import Database from 'better-sqlite3';
 import {
   initSessionsDb,
   getOrCreateSession,
+  getSession,
   markSessionCompleted,
   markSessionFailed,
   activateSession,
@@ -202,5 +203,62 @@ describe('activateSession', () => {
     if (before.ok && after.ok) {
       expect(after.data.created_at).toBe(before.data.created_at);
     }
+  });
+});
+
+describe('provider provenance', () => {
+  it('stores the provider when getOrCreateSession is given one', () => {
+    const result = getOrCreateSession(db, 'thread_p', 'codex');
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.provider).toBe('codex');
+  });
+
+  it('defaults provider to null when omitted', () => {
+    const result = getOrCreateSession(db, 'thread_np');
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.provider).toBeNull();
+  });
+
+  it('does not overwrite the provider of an existing session', () => {
+    getOrCreateSession(db, 'thread_keep', 'gemini');
+    const again = getOrCreateSession(db, 'thread_keep', 'codex');
+    expect(again.ok).toBe(true);
+    if (again.ok) expect(again.data.provider).toBe('gemini'); // original preserved
+  });
+
+  it('migrates an old schema by adding the provider column', () => {
+    const oldDb = new Database(':memory:');
+    oldDb.exec(`
+      CREATE TABLE sessions (
+        session_id TEXT PRIMARY KEY,
+        status TEXT NOT NULL DEFAULT 'in_progress',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        completed_at TEXT
+      )
+    `);
+    expect(() => initSessionsDb(oldDb)).not.toThrow();
+    oldDb.prepare('INSERT INTO sessions (session_id) VALUES (?)').run('t');
+    const row = oldDb.prepare('SELECT provider FROM sessions WHERE session_id = ?').get('t') as {
+      provider: string | null;
+    };
+    expect(row.provider).toBeNull();
+  });
+});
+
+describe('getSession', () => {
+  it('returns the stored session including its provider', () => {
+    getOrCreateSession(db, 'thread_gs', 'gemini');
+    const result = getSession(db, 'thread_gs');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data?.session_id).toBe('thread_gs');
+      expect(result.data?.provider).toBe('gemini');
+    }
+  });
+
+  it('returns null for a session that does not exist', () => {
+    const result = getSession(db, 'nope');
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data).toBeNull();
   });
 });

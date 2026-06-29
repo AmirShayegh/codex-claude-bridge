@@ -81,6 +81,9 @@ export const ReviewHistoryEntrySchema = z.object({
   verdict: VerdictSchema,
   timestamp: z.string(),
   summary: z.string(),
+  // Which provider produced the review, joined from the sessions table. Null
+  // for legacy reviews whose session predates provider tagging.
+  provider: z.string().nullable(),
 });
 
 // Inferred types for use across the codebase

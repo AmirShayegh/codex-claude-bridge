@@ -402,6 +402,7 @@ describe('ReviewHistoryEntrySchema', () => {
     verdict: 'approve',
     timestamp: '2026-02-18T10:00:00Z',
     summary: 'Plan approved',
+    provider: 'codex',
   };
 
   it('parses a valid history entry', () => {
@@ -410,7 +411,23 @@ describe('ReviewHistoryEntrySchema', () => {
     if (result.success) {
       expect(result.data.session_id).toBe('sess_history1');
       expect(result.data.type).toBe('plan');
+      expect(result.data.provider).toBe('codex');
     }
+  });
+
+  it('accepts a null provider (legacy reviews predating provider tagging)', () => {
+    const result = ReviewHistoryEntrySchema.safeParse({ ...validEntry, provider: null });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.provider).toBeNull();
+    }
+  });
+
+  it('rejects a missing provider key', () => {
+    const { provider: _omit, ...withoutProvider } = validEntry;
+    void _omit;
+    const result = ReviewHistoryEntrySchema.safeParse(withoutProvider);
+    expect(result.success).toBe(false);
   });
 
   it('accepts all valid types', () => {

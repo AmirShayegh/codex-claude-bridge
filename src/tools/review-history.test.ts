@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { registerReviewHistoryTool } from './review-history.js';
 import { initDb, saveReview } from '../storage/reviews.js';
+import { initSessionsDb } from '../storage/sessions.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -14,6 +15,7 @@ let handler: HandlerFn;
 beforeEach(() => {
   db = new Database(':memory:');
   initDb(db);
+  initSessionsDb(db);
   mockServer = { registerTool: vi.fn() };
   registerReviewHistoryTool(mockServer as unknown as McpServer, db);
   handler = mockServer.registerTool.mock.calls[0][2] as HandlerFn;

@@ -43,7 +43,12 @@ export function getReviewsBySession(
 ): Result<ReviewHistoryEntry[]> {
   try {
     const rows = db
-      .prepare('SELECT session_id, type, verdict, summary, timestamp FROM reviews WHERE session_id = ? ORDER BY id ASC')
+      .prepare(
+        `SELECT r.session_id, r.type, r.verdict, r.summary, r.timestamp, s.provider
+         FROM reviews r
+         LEFT JOIN sessions s ON s.session_id = r.session_id
+         WHERE r.session_id = ? ORDER BY r.id ASC`,
+      )
       .all(sessionId) as ReviewHistoryEntry[];
     return ok(rows);
   } catch (e) {
@@ -58,7 +63,12 @@ export function getRecentReviews(
 ): Result<ReviewHistoryEntry[]> {
   try {
     const rows = db
-      .prepare('SELECT session_id, type, verdict, summary, timestamp FROM reviews ORDER BY id DESC LIMIT ?')
+      .prepare(
+        `SELECT r.session_id, r.type, r.verdict, r.summary, r.timestamp, s.provider
+         FROM reviews r
+         LEFT JOIN sessions s ON s.session_id = r.session_id
+         ORDER BY r.id DESC LIMIT ?`,
+      )
       .all(limit) as ReviewHistoryEntry[];
     return ok(rows);
   } catch (e) {

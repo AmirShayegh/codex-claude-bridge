@@ -1,12 +1,14 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { initDb, saveReview, getReviewsBySession, getRecentReviews } from './reviews.js';
+import { initSessionsDb, getOrCreateSession } from './sessions.js';
 
 let db: InstanceType<typeof Database>;
 
 beforeEach(() => {
   db = new Database(':memory:');
   initDb(db);
+  initSessionsDb(db);
 });
 
 describe('initDb', () => {
@@ -155,6 +157,59 @@ describe('getRecentReviews', () => {
     if (result.ok) {
       expect(result.data[0].timestamp).toBeDefined();
       expect(typeof result.data[0].timestamp).toBe('string');
+    }
+  });
+});
+
+describe('provider provenance in history', () => {
+  it('getReviewsBySession surfaces the session provider', () => {
+    getOrCreateSession(db, 'thread_g', 'gemini');
+    saveReview(db, {
+      session_id: 'thread_g',
+      type: 'code',
+      verdict: 'approve',
+      summary: 'From gemini',
+      findings_json: '[]',
+    });
+
+    const result = getReviewsBySession(db, 'thread_g');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data[0].provider).toBe('gemini');
+    }
+  });
+
+  it('getRecentReviews surfaces the session provider', () => {
+    getOrCreateSession(db, 'thread_c', 'codex');
+    saveReview(db, {
+      session_id: 'thread_c',
+      type: 'plan',
+      verdict: 'approve',
+      summary: 'From codex',
+      findings_json: '[]',
+    });
+
+    const result = getRecentReviews(db, 1);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data[0].provider).toBe('codex');
+    }
+  });
+
+  it('provider is null when no session row exists (legacy reviews)', () => {
+    saveReview(db, {
+      session_id: 'orphan_thread',
+      type: 'plan',
+      verdict: 'approve',
+      summary: 'No session',
+      findings_json: '[]',
+    });
+
+    const result = getReviewsBySession(db, 'orphan_thread');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].provider).toBeNull();
     }
   });
 });

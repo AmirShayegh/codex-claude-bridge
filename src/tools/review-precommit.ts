@@ -81,13 +81,17 @@ export function registerReviewPrecommitTool(server: McpServer, client: ReviewBac
           return { content: [{ type: 'text' as const, text: result.error }], isError: true };
         }
 
-        tracker.recordSuccess(result.data.session_id, {
-          session_id: result.data.session_id,
-          type: 'precommit',
-          verdict: result.data.ready_to_commit ? 'approve' : 'reject',
-          summary: result.data.warnings.join('; ') || result.data.blockers.join('; ') || 'Clean',
-          findings_json: JSON.stringify(result.data.blockers),
-        });
+        tracker.recordSuccess(
+          result.data.session_id,
+          {
+            session_id: result.data.session_id,
+            type: 'precommit',
+            verdict: result.data.ready_to_commit ? 'approve' : 'reject',
+            summary: result.data.warnings.join('; ') || result.data.blockers.join('; ') || 'Clean',
+            findings_json: JSON.stringify(result.data.blockers),
+          },
+          result.data.provider,
+        );
 
         return { content: [{ type: 'text' as const, text: JSON.stringify(result.data) }] };
       } catch (e) {

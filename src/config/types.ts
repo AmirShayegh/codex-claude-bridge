@@ -54,6 +54,11 @@ export const ReviewBridgeConfigSchema = z.object({
   review_standards: ReviewStandardsSchema.default(() => ReviewStandardsSchema.parse({})),
   project_context: z.string().default(''),
   copilot_instructions: z.boolean().default(true),
+  // When a review fails because the configured provider is out of usage /
+  // unavailable, automatically retry through the other provider. On by default;
+  // set false for strict single-provider behavior (CI determinism, or to avoid
+  // sending a diff to a second vendor on failover).
+  fallback: z.boolean().default(true),
 });
 
 export type ReviewBridgeConfig = z.infer<typeof ReviewBridgeConfigSchema>;

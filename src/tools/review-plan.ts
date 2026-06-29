@@ -56,13 +56,17 @@ export function registerReviewPlanTool(server: McpServer, client: ReviewBackend,
           return { content: [{ type: 'text' as const, text: result.error }], isError: true };
         }
 
-        tracker.recordSuccess(result.data.session_id, {
-          session_id: result.data.session_id,
-          type: 'plan',
-          verdict: result.data.verdict,
-          summary: result.data.summary,
-          findings_json: JSON.stringify(result.data.findings),
-        });
+        tracker.recordSuccess(
+          result.data.session_id,
+          {
+            session_id: result.data.session_id,
+            type: 'plan',
+            verdict: result.data.verdict,
+            summary: result.data.summary,
+            findings_json: JSON.stringify(result.data.findings),
+          },
+          result.data.provider,
+        );
 
         return { content: [{ type: 'text' as const, text: JSON.stringify(result.data) }] };
       } catch (e) {

@@ -9,7 +9,11 @@ export interface SessionTracker {
   // Returns an error when the resumed session was created by a different
   // provider than the active backend — the tool aborts before reviewing.
   preflight(sessionId: string | undefined): Result<void>;
-  recordSuccess(resultSessionId: string, review: SaveReviewInput): void;
+  // servingProvider, when set, is the provider that actually produced the review
+  // (may differ from the tracker's configured provider under failover). It tags
+  // a NEW session's provenance so a failed-over session is owned by the provider
+  // that served it. Falls back to the configured provider when omitted.
+  recordSuccess(resultSessionId: string, review: SaveReviewInput, servingProvider?: string): void;
   // sessionId surfaces partial-chunk failures where chunk 1 created a
   // Codex thread but a later chunk errored — the tool layer must mark
   // that thread's session failed rather than orphaning it (T-001).
@@ -55,9 +59,11 @@ export function createSessionTracker(db: Database.Database | undefined, provider
       return ok(undefined);
     },
 
-    recordSuccess(resultSessionId, review) {
+    recordSuccess(resultSessionId, review, servingProvider) {
       if (!preflightId) {
-        const sessionResult = getOrCreateSession(db, resultSessionId, provider);
+        // Fresh review: tag provenance with the provider that actually served
+        // (failover may have switched it), defaulting to the configured one.
+        const sessionResult = getOrCreateSession(db, resultSessionId, servingProvider ?? provider);
         if (!sessionResult.ok) {
           console.error(`Failed to track session: ${sessionResult.error}`);
         }

@@ -43,11 +43,17 @@ export const ReviewFindingSchema = z.object({
   ...BaseFindingFields,
 });
 
+// The backend that actually produced this result. Set by each backend on its
+// own results; under provider failover it reflects the provider that served the
+// review (which may differ from the configured primary). Optional/additive.
+const ServingProviderSchema = z.enum(['codex', 'gemini']).optional();
+
 export const PlanReviewResultSchema = z.object({
   verdict: z.enum(['approve', 'revise', 'reject']),
   summary: z.string(),
   findings: z.array(PlanFindingSchema),
   session_id: z.string(),
+  provider: ServingProviderSchema,
 });
 
 export const CodeReviewResultSchema = z.object({
@@ -56,6 +62,7 @@ export const CodeReviewResultSchema = z.object({
   findings: z.array(CodeFindingSchema),
   session_id: z.string(),
   chunks_reviewed: z.number().int().positive().optional(),
+  provider: ServingProviderSchema,
 });
 
 export const PrecommitResultSchema = z.object({
@@ -64,6 +71,7 @@ export const PrecommitResultSchema = z.object({
   warnings: z.array(z.string()),
   session_id: z.string(),
   chunks_reviewed: z.number().int().positive().optional(),
+  provider: ServingProviderSchema,
 });
 
 export const ReviewStatusSchema = z.object({

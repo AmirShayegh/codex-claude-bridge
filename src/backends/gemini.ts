@@ -232,10 +232,101 @@ function stripCodeFences(text: string): string {
   return fenced ? fenced[1].trim() : trimmed;
 }
 
-// agy's default model. Owned by the backend (the config schema carries no
-// default). Effort is part of the model string for agy, so reasoning_effort is
-// not applied here. Mirrors RECOMMENDED_MODELS.gemini[0].
+// agy's default model, and the SAFE FALLBACK whenever `latest` resolution can't
+// produce a concrete id (agy missing, `agy models` unparseable, etc.). Owned by
+// the backend (the config schema carries no default). Effort is part of the
+// model string for agy, so reasoning_effort is not applied here. Mirrors
+// RECOMMENDED_MODELS.gemini[0].
 const GEMINI_DEFAULT_MODEL = 'Gemini 3.5 Flash (Medium)';
+
+// `agy models` is a quick metadata call; bound it well under a review timeout so
+// a hung query degrades to the fallback fast.
+const MODEL_QUERY_TIMEOUT_MS = 15_000;
+
+// `latest` for gemini means the newest Flash, at the same effort tier we default
+// to where available. Flash is the fast review line; Pro is a heavier, separate
+// line, so `latest` stays within Flash (acceptance: "resolves to a current
+// Flash"). Tier preference falls back down the list if the newest version omits
+// the preferred tier.
+const FLASH_LINE_RE = /^Gemini\s+(\d+(?:\.\d+)*)\s+Flash\s*\(([^)]+)\)$/i;
+const TIER_PREFERENCE = ['medium', 'high', 'low'];
+
+// Compare dotted version strings numerically component-by-component so 3.10 sorts
+// above 3.5 (a naive parseFloat would read 3.10 as 3.1). Returns >0 when a > b.
+function compareVersions(a: string, b: string): number {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+// Pick the newest Gemini Flash model from raw `agy models` output (one model per
+// line). Returns the exact model string agy listed (so it round-trips back as
+// --model), or null when no Flash line is present.
+export function pickLatestFlashModel(modelsOutput: string): string | null {
+  const flashes: { version: string; tier: string; raw: string }[] = [];
+  for (const line of modelsOutput.split('\n')) {
+    const trimmed = line.trim();
+    const m = FLASH_LINE_RE.exec(trimmed);
+    if (m) flashes.push({ version: m[1], tier: m[2].trim().toLowerCase(), raw: trimmed });
+  }
+  if (flashes.length === 0) return null;
+
+  flashes.sort((a, b) => compareVersions(b.version, a.version));
+  const newestVersion = flashes[0].version;
+  const newest = flashes.filter((f) => compareVersions(f.version, newestVersion) === 0);
+
+  for (const tier of TIER_PREFERENCE) {
+    const match = newest.find((f) => f.tier === tier);
+    if (match) return match.raw;
+  }
+  return newest[0].raw;
+}
+
+// Query `agy models` for the available model list. Returns raw stdout, or null on
+// spawn failure / non-zero exit / timeout / empty output — callers fall back to a
+// known-good model. Never throws.
+export function runAgyModels(timeoutMs: number = MODEL_QUERY_TIMEOUT_MS): Promise<string | null> {
+  return new Promise<string | null>((resolve) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let settled = false;
+    const finish = (r: string | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(r);
+    };
+
+    let child;
+    try {
+      child = spawn('agy', ['models'], { signal: controller.signal });
+    } catch {
+      finish(null);
+      return;
+    }
+
+    let stdout = '';
+    child.stdout?.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    child.on('error', () => finish(null));
+    child.on('close', (code: number | null) => {
+      finish(code === 0 && stdout.trim() ? stdout : null);
+    });
+  });
+}
+
+// Resolve gemini's `latest`: the newest Flash from `agy models`, degrading to the
+// known-good fallback if the query fails or yields no parseable Flash line.
+export async function resolveLatestGeminiModel(timeoutMs?: number): Promise<string> {
+  const output = await runAgyModels(timeoutMs);
+  if (!output) return GEMINI_DEFAULT_MODEL;
+  return pickLatestFlashModel(output) ?? GEMINI_DEFAULT_MODEL;
+}
 
 // Gemini implementation of the orchestrator's TurnRunner: run one prompt through
 // agy and return the schema-validated result plus the session (conversation) id.

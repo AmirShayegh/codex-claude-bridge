@@ -76,8 +76,23 @@ import {
   readConversationId,
   runSerialized,
   createGeminiBackend,
+  pickLatestFlashModel,
+  runAgyModels,
+  resolveLatestGeminiModel,
 } from './gemini.js';
 import { DEFAULT_CONFIG } from '../config/types.js';
+
+// Exact `agy models` output captured from agy 1.0.13.
+const REAL_AGY_MODELS = [
+  'Gemini 3.5 Flash (Medium)',
+  'Gemini 3.5 Flash (High)',
+  'Gemini 3.5 Flash (Low)',
+  'Gemini 3.1 Pro (Low)',
+  'Gemini 3.1 Pro (High)',
+  'Claude Sonnet 4.6 (Thinking)',
+  'Claude Opus 4.6 (Thinking)',
+  'GPT-OSS 120B (Medium)',
+].join('\n');
 
 const CACHE = '/home/test/.gemini/antigravity-cli/cache/last_conversations.json';
 
@@ -184,6 +199,95 @@ describe('runAgyPrint', () => {
     const res = await p;
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toContain(ErrorCode.REVIEW_TIMEOUT);
+  });
+});
+
+describe('pickLatestFlashModel', () => {
+  it('picks the newest Flash at the preferred (Medium) tier from real agy output', () => {
+    expect(pickLatestFlashModel(REAL_AGY_MODELS)).toBe('Gemini 3.5 Flash (Medium)');
+  });
+
+  it('prefers a newer version even when it only offers a non-preferred tier', () => {
+    const out = 'Gemini 4.0 Flash (High)\nGemini 3.5 Flash (Medium)';
+    expect(pickLatestFlashModel(out)).toBe('Gemini 4.0 Flash (High)');
+  });
+
+  it('compares versions numerically (3.10 is newer than 3.5)', () => {
+    const out = 'Gemini 3.5 Flash (Medium)\nGemini 3.10 Flash (Low)';
+    expect(pickLatestFlashModel(out)).toBe('Gemini 3.10 Flash (Low)');
+  });
+
+  it('falls down the tier preference when the newest version omits Medium', () => {
+    const out = 'Gemini 3.5 Flash (Low)\nGemini 3.5 Flash (High)';
+    expect(pickLatestFlashModel(out)).toBe('Gemini 3.5 Flash (High)');
+  });
+
+  it('stays within the Flash line — a higher-version Pro never wins', () => {
+    const out = 'Gemini 9.0 Pro (High)\nGemini 3.5 Flash (Medium)';
+    expect(pickLatestFlashModel(out)).toBe('Gemini 3.5 Flash (Medium)');
+  });
+
+  it('returns null when no Flash model is present', () => {
+    const out = 'Gemini 3.1 Pro (High)\nClaude Opus 4.6 (Thinking)';
+    expect(pickLatestFlashModel(out)).toBeNull();
+  });
+
+  it('returns null on empty output', () => {
+    expect(pickLatestFlashModel('')).toBeNull();
+  });
+});
+
+describe('runAgyModels', () => {
+  it('invokes `agy models` and returns raw stdout on success', async () => {
+    const p = runAgyModels();
+    lastChild.stdout.emit('data', Buffer.from(REAL_AGY_MODELS));
+    lastChild.emit('close', 0);
+    const out = await p;
+
+    expect(out).toBe(REAL_AGY_MODELS);
+    expect(lastArgs).toEqual(['models']);
+  });
+
+  it('returns null on a non-zero exit', async () => {
+    const p = runAgyModels();
+    lastChild.stderr.emit('data', Buffer.from('boom'));
+    lastChild.emit('close', 1);
+    expect(await p).toBeNull();
+  });
+
+  it('returns null when stdout is empty on a clean exit', async () => {
+    const p = runAgyModels();
+    lastChild.emit('close', 0);
+    expect(await p).toBeNull();
+  });
+
+  it('returns null without throwing when agy is not installed', async () => {
+    spawnThrows = Object.assign(new Error('spawn agy ENOENT'), { code: 'ENOENT' });
+    expect(await runAgyModels()).toBeNull();
+  });
+
+  it('returns null when the query exceeds its timeout', async () => {
+    vi.useFakeTimers();
+    const p = runAgyModels(1000);
+    vi.advanceTimersByTime(1001);
+    expect(await p).toBeNull();
+  });
+});
+
+describe('resolveLatestGeminiModel', () => {
+  it('resolves to the newest Flash reported by agy', async () => {
+    script({ stdout: 'Gemini 4.0 Flash (Medium)\nGemini 3.5 Flash (Medium)', code: 0 });
+    expect(await resolveLatestGeminiModel()).toBe('Gemini 4.0 Flash (Medium)');
+  });
+
+  it('falls back to the known-good model when the query fails', async () => {
+    script({ stderr: 'boom', code: 1 });
+    expect(await resolveLatestGeminiModel()).toBe('Gemini 3.5 Flash (Medium)');
+  });
+
+  it('falls back to the known-good model when no Flash line is parseable', async () => {
+    script({ stdout: 'Gemini 9.0 Pro (High)\nGPT-OSS 120B (Medium)', code: 0 });
+    expect(await resolveLatestGeminiModel()).toBe('Gemini 3.5 Flash (Medium)');
   });
 });
 

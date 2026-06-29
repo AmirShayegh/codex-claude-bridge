@@ -203,7 +203,12 @@ export function createCodexBackend(
     config,
     copilotInstructions,
     allowsModelOverrideOnResume: false,
-    defaultModel: CODEX_DEFAULT_MODEL,
+    // 'latest' (and unset) → the latest model the SDK-PINNED binary supports. We
+    // deliberately do NOT chase the newest announced model — that bundled-binary
+    // mismatch is the L-008 trap. CODEX_DEFAULT_MODEL moves only when the SDK pin
+    // moves. An explicit pin is forwarded unchanged (L-006).
+    resolveModel: async (requested: string | undefined) =>
+      requested && requested !== 'latest' ? requested : CODEX_DEFAULT_MODEL,
     // One Codex thread per review: chunks 2..N resume chunk 1's thread.
     resumesAcrossChunks: true,
   };

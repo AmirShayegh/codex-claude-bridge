@@ -46,7 +46,10 @@ function deps(
   return {
     config: { ...DEFAULT_CONFIG, ...overrides },
     allowsModelOverrideOnResume,
-    defaultModel: 'default-model',
+    // Faithful stand-in for a backend resolver: an explicit pin passes through,
+    // 'latest'/unset collapses to a fixed default. Backend-specific 'latest'
+    // discovery (agy models / SDK pin) is tested in the backend suites.
+    resolveModel: async (requested) => (requested && requested !== 'latest' ? requested : 'default-model'),
     resumesAcrossChunks,
   };
 }
@@ -108,6 +111,65 @@ describe('orchestrator — allowsModelOverrideOnResume capability', () => {
     expect(calls.length).toBeGreaterThanOrEqual(2);
     expect(calls[0].model).toBe('m');
     expect(calls.slice(1).every((c) => c.model === undefined)).toBe(true);
+  });
+});
+
+describe('orchestrator — model resolution wiring', () => {
+  function resolverDeps(
+    allowsModelOverrideOnResume: boolean,
+    resolveModel: (requested: string | undefined) => Promise<string>,
+  ): ReviewFlowDeps {
+    return { config: { ...DEFAULT_CONFIG }, allowsModelOverrideOnResume, resolveModel, resumesAcrossChunks: true };
+  }
+
+  it('uses the resolved id for both model and resolvedModel on a fresh session', async () => {
+    const { turn, calls } = makeFakeTurn(CANNED_PLAN);
+    await runPlanReview({ plan: 'x' }, resolverDeps(false, async () => 'RESOLVED-X'), turn);
+    expect(calls[0].model).toBe('RESOLVED-X');
+    expect(calls[0].resolvedModel).toBe('RESOLVED-X');
+  });
+
+  it('omits the per-turn model on a Codex-style resume but still reports resolvedModel', async () => {
+    const { turn, calls } = makeFakeTurn(CANNED_PLAN);
+    await runPlanReview({ plan: 'x', session_id: 's1' }, resolverDeps(false, async () => 'RESOLVED-X'), turn);
+    expect(calls[0].sessionId).toBe('s1');
+    expect(calls[0].model).toBeUndefined();
+    expect(calls[0].resolvedModel).toBe('RESOLVED-X');
+  });
+
+  it('forwards the resolved model on resume when the backend allows it (Gemini-style)', async () => {
+    const { turn, calls } = makeFakeTurn(CANNED_PLAN);
+    await runPlanReview({ plan: 'x', session_id: 's1' }, resolverDeps(true, async () => 'RESOLVED-X'), turn);
+    expect(calls[0].model).toBe('RESOLVED-X');
+    expect(calls[0].resolvedModel).toBe('RESOLVED-X');
+  });
+
+  it('passes the per-call override (or config.model) into resolveModel verbatim', async () => {
+    const { turn } = makeFakeTurn(CANNED_PLAN);
+    const seen: (string | undefined)[] = [];
+    const resolve = async (req: string | undefined): Promise<string> => {
+      seen.push(req);
+      return req ?? 'fallback';
+    };
+    await runPlanReview({ plan: 'x', model: 'pinned-1' }, resolverDeps(true, resolve), turn);
+    await runPlanReview({ plan: 'x' }, resolverDeps(true, resolve), turn);
+    expect(seen).toEqual(['pinned-1', undefined]);
+  });
+
+  it('resolves the model once and applies it across every chunk of a multi-chunk review', async () => {
+    const { turn, calls } = makeCountingTurn(CANNED_CODE);
+    let resolveCount = 0;
+    const d: ReviewFlowDeps = {
+      config: { ...DEFAULT_CONFIG, max_chunk_tokens: 2500 },
+      allowsModelOverrideOnResume: true,
+      resolveModel: async () => { resolveCount++; return 'RESOLVED-X'; },
+      resumesAcrossChunks: false,
+    };
+    const res = await runCodeReview({ diff: bigDiff(3, 30) }, d, turn);
+    expect(res.ok).toBe(true);
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    expect(resolveCount).toBe(1); // resolved once per review, not per chunk
+    expect(calls.every((c) => c.resolvedModel === 'RESOLVED-X' && c.model === 'RESOLVED-X')).toBe(true);
   });
 });
 

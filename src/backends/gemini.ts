@@ -392,7 +392,11 @@ export function createGeminiBackend(
     // conversation natively — so chunks review independently (resumesAcrossChunks
     // false) to avoid resending a growing transcript per chunk.
     allowsModelOverrideOnResume: true,
-    defaultModel: GEMINI_DEFAULT_MODEL,
+    // 'latest' (and unset) → the newest Flash from `agy models`, with a safe
+    // fallback to the known-good default. An explicit pin is forwarded unchanged
+    // (L-006).
+    resolveModel: async (requested: string | undefined) =>
+      requested && requested !== 'latest' ? requested : resolveLatestGeminiModel(),
     resumesAcrossChunks: false,
   };
 

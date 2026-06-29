@@ -340,15 +340,20 @@ const CWD = process.cwd();
 const SMALL_DIFF = 'diff --git a/f b/f\n@@ -1 +1 @@\n-a\n+b';
 const PLAN_OK = { verdict: 'approve', summary: 's', findings: [] };
 const CODE_OK = { verdict: 'approve', summary: 's', findings: [] };
+// An explicit pin short-circuits `latest` resolution, so the backend makes no
+// `agy models` call — these tests then exercise pure agy review mechanics
+// (resume / retry / fence / error / capture) with a single spawn per review.
+const PINNED_CONFIG = { ...DEFAULT_CONFIG, model: 'Gemini 3.5 Flash (Medium)' };
 
 describe('createGeminiBackend', () => {
   it("exposes its provider identity as 'gemini'", () => {
     expect(createGeminiBackend(DEFAULT_CONFIG).provider).toBe('gemini');
   });
 
-  it('reviewPlan: fresh run uses the default model in sandbox, captures the conversation id', async () => {
+  it('reviewPlan: fresh run with no model resolves the latest Flash from agy, runs in sandbox, captures the id', async () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-new' });
-    script({ stdout: JSON.stringify(PLAN_OK) });
+    // First spawn: `agy models`. Second spawn: the review itself.
+    script({ stdout: REAL_AGY_MODELS, code: 0 }, { stdout: JSON.stringify(PLAN_OK) });
 
     const res = await createGeminiBackend(DEFAULT_CONFIG).reviewPlan({ plan: 'do a thing' });
 
@@ -357,7 +362,9 @@ describe('createGeminiBackend', () => {
       expect(res.data.verdict).toBe('approve');
       expect(res.data.session_id).toBe('conv-new'); // captured from agy's cache
     }
+    expect(spawnCount).toBe(2); // agy models + the review
     expect(lastArgs).toContain('--sandbox');
+    // Resolved to the newest Flash agy reported.
     expect(lastArgs[lastArgs.indexOf('--model') + 1]).toBe('Gemini 3.5 Flash (Medium)');
     expect(lastArgs).not.toContain('--conversation');
     expect(lastCwd).toBe(CWD);
@@ -367,7 +374,7 @@ describe('createGeminiBackend', () => {
     // No cache entry on purpose — the resume path must not depend on capture.
     script({ stdout: JSON.stringify(CODE_OK) });
 
-    const res = await createGeminiBackend(DEFAULT_CONFIG).reviewCode({ diff: SMALL_DIFF, session_id: 'conv-prev' });
+    const res = await createGeminiBackend(PINNED_CONFIG).reviewCode({ diff: SMALL_DIFF, session_id: 'conv-prev' });
 
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.data.session_id).toBe('conv-prev');
@@ -378,7 +385,7 @@ describe('createGeminiBackend', () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-retry' });
     script({ stdout: 'not json at all' }, { stdout: JSON.stringify(PLAN_OK) });
 
-    const res = await createGeminiBackend(DEFAULT_CONFIG).reviewPlan({ plan: 'x' });
+    const res = await createGeminiBackend(PINNED_CONFIG).reviewPlan({ plan: 'x' });
 
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.data.session_id).toBe('conv-retry');
@@ -389,14 +396,14 @@ describe('createGeminiBackend', () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-fence' });
     script({ stdout: '```json\n' + JSON.stringify(PLAN_OK) + '\n```' });
 
-    const res = await createGeminiBackend(DEFAULT_CONFIG).reviewPlan({ plan: 'x' });
+    const res = await createGeminiBackend(PINNED_CONFIG).reviewPlan({ plan: 'x' });
     expect(res.ok).toBe(true);
   });
 
   it('returns a classified error when agy fails (auth), never throws', async () => {
     script({ stderr: 'Error: you are not authenticated', code: 1 });
 
-    const res = await createGeminiBackend(DEFAULT_CONFIG).reviewPlan({ plan: 'x' });
+    const res = await createGeminiBackend(PINNED_CONFIG).reviewPlan({ plan: 'x' });
 
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toContain(ErrorCode.AUTH_ERROR);
@@ -406,7 +413,7 @@ describe('createGeminiBackend', () => {
     // cache has no entry for CWD → capture fails
     script({ stdout: JSON.stringify(PLAN_OK) });
 
-    const res = await createGeminiBackend(DEFAULT_CONFIG).reviewPlan({ plan: 'x' });
+    const res = await createGeminiBackend(PINNED_CONFIG).reviewPlan({ plan: 'x' });
 
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toContain(ErrorCode.RESPONSE_PARSE_ERROR);
@@ -424,5 +431,30 @@ describe('createGeminiBackend', () => {
     expect(res.ok).toBe(true); // no INVALID_INPUT conflict — Gemini allows override on resume
     expect(lastArgs[lastArgs.indexOf('--model') + 1]).toBe('Gemini 3.1 Pro (High)');
     expect(lastArgs[lastArgs.indexOf('--conversation') + 1]).toBe('conv-x');
+  });
+
+  it('model "latest" resolves the newest Flash via `agy models`, then runs the review on it', async () => {
+    fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-latest' });
+    script(
+      { stdout: 'Gemini 4.0 Flash (Medium)\nGemini 3.5 Flash (Medium)', code: 0 },
+      { stdout: JSON.stringify(CODE_OK) },
+    );
+
+    const res = await createGeminiBackend(DEFAULT_CONFIG).reviewCode({ diff: SMALL_DIFF, model: 'latest' });
+
+    expect(res.ok).toBe(true);
+    expect(spawnCount).toBe(2);
+    expect(lastArgs[lastArgs.indexOf('--model') + 1]).toBe('Gemini 4.0 Flash (Medium)');
+  });
+
+  it('completes the review on the safe fallback model when the `agy models` query fails', async () => {
+    fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-fallback' });
+    script({ stderr: 'boom', code: 1 }, { stdout: JSON.stringify(PLAN_OK) });
+
+    const res = await createGeminiBackend(DEFAULT_CONFIG).reviewPlan({ plan: 'do a thing' });
+
+    expect(res.ok).toBe(true);
+    expect(spawnCount).toBe(2);
+    expect(lastArgs[lastArgs.indexOf('--model') + 1]).toBe('Gemini 3.5 Flash (Medium)');
   });
 });

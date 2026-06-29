@@ -178,6 +178,13 @@ export function runAgyPrint(opts: AgyPrintOptions): Promise<Result<string>> {
       finish(ok(stdout));
     });
 
+    // agy may close its read end before we finish writing (fast-fail paths like
+    // a bad model/auth, or the abort/timeout SIGTERM mid-flush of a large diff),
+    // surfacing EPIPE as an 'error' on the stdin Writable. An unhandled Writable
+    // 'error' is an uncaught exception that would crash the MCP server, so we
+    // swallow it — the real failure is already reported via the child
+    // 'error'/'close'/timeout handlers above. Honors the never-crash contract.
+    child.stdin?.on('error', () => {});
     child.stdin?.write(opts.prompt);
     child.stdin?.end();
   });
@@ -319,7 +326,9 @@ export function runAgyModels(timeoutMs: number = MODEL_QUERY_TIMEOUT_MS): Promis
     });
 
     // agy reads stdin even for `models`; close it so the process gets EOF and
-    // exits instead of blocking until the timeout.
+    // exits instead of blocking until the timeout. Swallow any EPIPE on the
+    // close (see runAgyPrint) so it can never crash the server.
+    child.stdin?.on('error', () => {});
     child.stdin?.end();
   });
 }

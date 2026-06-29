@@ -10,14 +10,17 @@ class FakeChild extends EventEmitter {
   stdout = new EventEmitter();
   stderr = new EventEmitter();
   stdinChunks: string[] = [];
-  stdin = {
-    write: (s: string) => {
-      this.stdinChunks.push(s);
-    },
-    end: vi.fn(),
-  };
+  // stdin is a real EventEmitter so tests can drive an EPIPE 'error' on it — a
+  // plain object could never emit, which is exactly why C1 went unnoticed.
+  stdin: EventEmitter & { write: (s: string) => void; end: ReturnType<typeof vi.fn> };
   constructor(signal?: AbortSignal) {
     super();
+    const stdin = new EventEmitter() as EventEmitter & { write: (s: string) => void; end: ReturnType<typeof vi.fn> };
+    stdin.write = (s: string) => {
+      this.stdinChunks.push(s);
+    };
+    stdin.end = vi.fn();
+    this.stdin = stdin;
     signal?.addEventListener('abort', () => {
       this.emit('error', Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }));
     });
@@ -204,6 +207,20 @@ describe('runAgyPrint', () => {
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toContain(ErrorCode.REVIEW_TIMEOUT);
   });
+
+  it('survives an EPIPE error on agy stdin without crashing the process (C1)', async () => {
+    const p = runAgyPrint(OPTS);
+    // agy closed its read end mid-write → EPIPE surfaces as an 'error' on the
+    // stdin Writable. With no listener this is an uncaught exception that kills
+    // the MCP server; with the fix it is swallowed and the run settles normally.
+    expect(() =>
+      lastChild.stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })),
+    ).not.toThrow();
+    lastChild.stdout.emit('data', Buffer.from('{"verdict":"approve"}'));
+    lastChild.emit('close', 0);
+    const res = await p;
+    expect(res.ok).toBe(true);
+  });
 });
 
 describe('pickLatestFlashModel', () => {
@@ -277,6 +294,16 @@ describe('runAgyModels', () => {
     const p = runAgyModels(1000);
     vi.advanceTimersByTime(1001);
     expect(await p).toBeNull();
+  });
+
+  it('survives an EPIPE error on stdin without crashing the process (C1)', async () => {
+    const p = runAgyModels();
+    expect(() =>
+      lastChild.stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })),
+    ).not.toThrow();
+    lastChild.stdout.emit('data', Buffer.from('Gemini 3.5 Flash (Medium)'));
+    lastChild.emit('close', 0);
+    expect(await p).toBe('Gemini 3.5 Flash (Medium)');
   });
 });
 

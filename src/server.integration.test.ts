@@ -5,7 +5,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-// --- Codex SDK mock (same pattern as codex/client.test.ts) ---
+// --- Codex SDK mock (same pattern as backends/codex.test.ts) ---
 let mockRun: ReturnType<typeof vi.fn>;
 let mockThreadId: string | null;
 let mockConstructorThrow: Error | null;

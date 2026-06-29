@@ -1,12 +1,12 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
-import type { CodexClient } from '../codex/client.js';
-import { sessionModelConflictMessage } from '../codex/client.js';
+import type { ReviewBackend } from '../backends/backend.js';
+import { sessionModelConflictMessage } from '../backends/orchestrator.js';
 import { resolveCodeDiff, NO_WORKING_CHANGES } from '../utils/resolve-diff.js';
 import { createSessionTracker } from '../storage/session-tracker.js';
 
-export function registerReviewCodeTool(server: McpServer, client: CodexClient, db?: Database.Database): void {
+export function registerReviewCodeTool(server: McpServer, client: ReviewBackend, db?: Database.Database): void {
   server.registerTool(
     'review_code',
     {

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import Database from 'better-sqlite3';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { loadConfig, formatConfigSource } from './config/loader.js';
-import { createCodexClient } from './codex/client.js';
+import { createCodexClient } from './backends/codex.js';
 import { loadCopilotInstructions } from './config/copilot-instructions.js';
 import type { CopilotInstructions } from './config/copilot-instructions.js';
 import { initDb } from './storage/reviews.js';

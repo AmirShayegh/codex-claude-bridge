@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createCodexClient, looksLikeDiff } from './client.js';
+import { createCodexClient } from './codex.js';
+import { looksLikeDiff } from './orchestrator.js';
 import type { ReviewBridgeConfig } from '../config/types.js';
 import { DEFAULT_CONFIG } from '../config/types.js';
 

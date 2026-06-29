@@ -3,8 +3,8 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Command, Option } from 'commander';
 import { loadConfig, formatConfigSource } from '../config/loader.js';
-import { createCodexClient } from '../codex/client.js';
-import type { CodexClient } from '../codex/client.js';
+import { createCodexClient } from '../backends/codex.js';
+import type { ReviewBackend } from '../backends/backend.js';
 import { loadCopilotInstructions } from '../config/copilot-instructions.js';
 import type { CopilotInstructions } from '../config/copilot-instructions.js';
 import { readInput, resetStdinGuard } from './stdin.js';
@@ -45,7 +45,7 @@ function buildIO(deps: CliDeps, json: boolean): HandlerIO {
   };
 }
 
-function initClient(configDir: string | undefined, deps: CliDeps): CodexClient | null {
+function initClient(configDir: string | undefined, deps: CliDeps): ReviewBackend | null {
   const configResult = loadConfig(configDir);
   if (!configResult.ok) {
     deps.stderr.write(`Error: ${configResult.error}\n`);

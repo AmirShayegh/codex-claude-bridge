@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { registerReviewCodeTool } from './review-code.js';
-import type { CodexClient } from '../codex/client.js';
+import type { ReviewBackend } from '../backends/backend.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CodeReviewResult } from '../codex/types.js';
 import { ok, err } from '../utils/errors.js';
@@ -31,7 +31,7 @@ import { resolveCodeDiff } from '../utils/resolve-diff.js';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type HandlerFn = (args: Record<string, unknown>, extra: unknown) => Promise<any>;
 
-let mockClient: CodexClient;
+let mockClient: ReviewBackend;
 let mockServer: { registerTool: ReturnType<typeof vi.fn> };
 let handler: HandlerFn;
 

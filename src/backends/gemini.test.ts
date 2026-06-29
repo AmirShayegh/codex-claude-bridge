@@ -28,16 +28,35 @@ let lastChild: FakeChild;
 let lastArgs: string[];
 let lastCwd: string | undefined;
 let spawnThrows: Error | undefined;
+let spawnCount = 0;
+let scriptedResponses: { stdout?: string; stderr?: string; code?: number }[] = [];
 
 vi.mock('node:child_process', () => ({
   spawn: (_cmd: string, args: string[], options: { cwd?: string; signal?: AbortSignal }) => {
     if (spawnThrows) throw spawnThrows;
     lastArgs = args;
     lastCwd = options.cwd;
-    lastChild = new FakeChild(options.signal);
-    return lastChild;
+    spawnCount += 1;
+    const child = new FakeChild(options.signal);
+    lastChild = child;
+    // If a response is scripted, auto-emit it on the next microtask (after the
+    // caller registers its listeners). Otherwise the test drives the child by
+    // hand (the runAgyPrint unit tests below do this).
+    const scripted = scriptedResponses.shift();
+    if (scripted) {
+      queueMicrotask(() => {
+        if (scripted.stdout !== undefined) child.stdout.emit('data', Buffer.from(scripted.stdout));
+        if (scripted.stderr !== undefined) child.stderr.emit('data', Buffer.from(scripted.stderr));
+        child.emit('close', scripted.code ?? 0);
+      });
+    }
+    return child;
   },
 }));
+
+function script(...responses: { stdout?: string; stderr?: string; code?: number }[]): void {
+  scriptedResponses.push(...responses);
+}
 
 // --- fs/os boundary mock for the conversation-id cache ---
 let fakeFiles: Record<string, string> = {};
@@ -51,13 +70,22 @@ vi.mock('node:fs', () => ({
   },
 }));
 
-import { classifyAgyError, runAgyPrint, readConversationId, runSerialized } from './gemini.js';
+import {
+  classifyAgyError,
+  runAgyPrint,
+  readConversationId,
+  runSerialized,
+  createGeminiBackend,
+} from './gemini.js';
+import { DEFAULT_CONFIG } from '../config/types.js';
 
 const CACHE = '/home/test/.gemini/antigravity-cli/cache/last_conversations.json';
 
 beforeEach(() => {
   spawnThrows = undefined;
   fakeFiles = {};
+  scriptedResponses = [];
+  spawnCount = 0;
 });
 
 afterEach(() => {
@@ -201,5 +229,92 @@ describe('runSerialized', () => {
   it('keeps the chain alive after a section rejects (no deadlock)', async () => {
     await expect(runSerialized(async () => Promise.reject(new Error('boom')))).rejects.toThrow('boom');
     await expect(runSerialized(async () => 'ok')).resolves.toBe('ok');
+  });
+});
+
+const CWD = process.cwd();
+const SMALL_DIFF = 'diff --git a/f b/f\n@@ -1 +1 @@\n-a\n+b';
+const PLAN_OK = { verdict: 'approve', summary: 's', findings: [] };
+const CODE_OK = { verdict: 'approve', summary: 's', findings: [] };
+
+describe('createGeminiBackend', () => {
+  it('reviewPlan: fresh run uses the default model in sandbox, captures the conversation id', async () => {
+    fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-new' });
+    script({ stdout: JSON.stringify(PLAN_OK) });
+
+    const res = await createGeminiBackend(DEFAULT_CONFIG).reviewPlan({ plan: 'do a thing' });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.data.verdict).toBe('approve');
+      expect(res.data.session_id).toBe('conv-new'); // captured from agy's cache
+    }
+    expect(lastArgs).toContain('--sandbox');
+    expect(lastArgs[lastArgs.indexOf('--model') + 1]).toBe('Gemini 3.5 Flash (Medium)');
+    expect(lastArgs).not.toContain('--conversation');
+    expect(lastCwd).toBe(CWD);
+  });
+
+  it('reviewCode: resuming a session passes --conversation and reuses that id (no capture needed)', async () => {
+    // No cache entry on purpose — the resume path must not depend on capture.
+    script({ stdout: JSON.stringify(CODE_OK) });
+
+    const res = await createGeminiBackend(DEFAULT_CONFIG).reviewCode({ diff: SMALL_DIFF, session_id: 'conv-prev' });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.data.session_id).toBe('conv-prev');
+    expect(lastArgs[lastArgs.indexOf('--conversation') + 1]).toBe('conv-prev');
+  });
+
+  it('retries once on malformed JSON, then succeeds (two spawns)', async () => {
+    fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-retry' });
+    script({ stdout: 'not json at all' }, { stdout: JSON.stringify(PLAN_OK) });
+
+    const res = await createGeminiBackend(DEFAULT_CONFIG).reviewPlan({ plan: 'x' });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.data.session_id).toBe('conv-retry');
+    expect(spawnCount).toBe(2);
+  });
+
+  it('strips a markdown code fence around the JSON before parsing', async () => {
+    fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-fence' });
+    script({ stdout: '```json\n' + JSON.stringify(PLAN_OK) + '\n```' });
+
+    const res = await createGeminiBackend(DEFAULT_CONFIG).reviewPlan({ plan: 'x' });
+    expect(res.ok).toBe(true);
+  });
+
+  it('returns a classified error when agy fails (auth), never throws', async () => {
+    script({ stderr: 'Error: you are not authenticated', code: 1 });
+
+    const res = await createGeminiBackend(DEFAULT_CONFIG).reviewPlan({ plan: 'x' });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain(ErrorCode.AUTH_ERROR);
+  });
+
+  it('errors clearly when a fresh run cannot capture a conversation id', async () => {
+    // cache has no entry for CWD → capture fails
+    script({ stdout: JSON.stringify(PLAN_OK) });
+
+    const res = await createGeminiBackend(DEFAULT_CONFIG).reviewPlan({ plan: 'x' });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain(ErrorCode.RESPONSE_PARSE_ERROR);
+  });
+
+  it('allows session_id + model together — model override on a resumed session', async () => {
+    script({ stdout: JSON.stringify(CODE_OK) });
+
+    const res = await createGeminiBackend(DEFAULT_CONFIG).reviewCode({
+      diff: SMALL_DIFF,
+      session_id: 'conv-x',
+      model: 'Gemini 3.1 Pro (High)',
+    });
+
+    expect(res.ok).toBe(true); // no INVALID_INPUT conflict — Gemini allows override on resume
+    expect(lastArgs[lastArgs.indexOf('--model') + 1]).toBe('Gemini 3.1 Pro (High)');
+    expect(lastArgs[lastArgs.indexOf('--conversation') + 1]).toBe('conv-x');
   });
 });

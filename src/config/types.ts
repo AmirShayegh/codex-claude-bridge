@@ -15,8 +15,8 @@ export type ReviewProvider = z.infer<typeof ProviderSchema>;
 // anything outside this set. See L-006 for the policy.
 export const RECOMMENDED_MODELS = {
   codex: ['gpt-5.5', 'gpt-5.4'],
-  // Provisional until confirmed against agy's accepted ids in T-016.
-  gemini: ['gemini-flash-latest'],
+  // agy model strings (effort is part of the name); from `agy models`.
+  gemini: ['Gemini 3.5 Flash (Medium)', 'Gemini 3.5 Flash (High)', 'Gemini 3.1 Pro (High)'],
 } as const satisfies Record<ReviewProvider, readonly string[]>;
 export type RecommendedModel = (typeof RECOMMENDED_MODELS)[ReviewProvider][number];
 

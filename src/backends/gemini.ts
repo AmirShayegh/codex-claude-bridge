@@ -4,6 +4,16 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { ok, err, ErrorCode } from '../utils/errors.js';
 import type { Result } from '../utils/errors.js';
+import type { ReviewBridgeConfig } from '../config/types.js';
+import type { CopilotInstructions } from '../config/copilot-instructions.js';
+import type { ReviewBackend } from './backend.js';
+import {
+  runPlanReview,
+  runCodeReview,
+  runPrecommitReview,
+  type TurnParams,
+  type TurnRunner,
+} from './orchestrator.js';
 
 // Gemini backend (Path A): wraps the Antigravity `agy` CLI in headless print
 // mode. agy uses the user's Google AI Pro subscription ($0 marginal) and
@@ -211,4 +221,93 @@ export function runSerialized<T>(fn: () => Promise<T>): Promise<T> {
     () => undefined,
   );
   return result;
+}
+
+// agy is prompted to emit raw JSON, but an autonomous agent occasionally wraps
+// it in a markdown code fence anyway. Strip one fence defensively before
+// parsing; anything still unparseable falls through to the retry loop.
+function stripCodeFences(text: string): string {
+  const trimmed = text.trim();
+  const fenced = /^```(?:json)?\s*\n?([\s\S]*?)\n?```$/.exec(trimmed);
+  return fenced ? fenced[1].trim() : trimmed;
+}
+
+// agy's default model. Owned by the backend (the config schema carries no
+// default). Effort is part of the model string for agy, so reasoning_effort is
+// not applied here. Mirrors RECOMMENDED_MODELS.gemini[0].
+const GEMINI_DEFAULT_MODEL = 'Gemini 3.5 Flash (Medium)';
+
+// Gemini implementation of the orchestrator's TurnRunner: run one prompt through
+// agy and return the schema-validated result plus the session (conversation) id.
+// Mirrors the Codex runReview shape — parse-then-retry on malformed/empty output
+// — but the model call is a subprocess and the session id comes from agy's cache.
+async function runAgyReview<T extends Record<string, unknown>>(
+  params: TurnParams & { config: ReviewBridgeConfig; cwd: string },
+): Promise<Result<T & { session_id: string }>> {
+  const { prompt, responseSchema, sessionId, resolvedModel, config, cwd } = params;
+  const timeoutMs = config.timeout_seconds * 1000;
+
+  // Serialize the whole run+capture so concurrent same-cwd reviews can't race on
+  // the id cache.
+  return runSerialized(async () => {
+    let lastError: string | undefined;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const run = await runAgyPrint({ prompt, model: resolvedModel, conversationId: sessionId, cwd, timeoutMs });
+      if (!run.ok) {
+        // Process-level failure (auth/model/rate/network/timeout) — already
+        // classified, not retryable here.
+        return err<T & { session_id: string }>(run.error);
+      }
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(stripCodeFences(run.data));
+      } catch {
+        lastError = 'malformed or empty JSON in agy response';
+        continue;
+      }
+      const result = responseSchema.safeParse(parsed);
+      if (!result.success) {
+        lastError = result.error.message;
+        continue;
+      }
+
+      // Resume → reuse the conversation we resumed; fresh → capture the new id
+      // agy just recorded for this cwd.
+      const resolvedId = sessionId ?? readConversationId(cwd);
+      if (!resolvedId) {
+        return err<T & { session_id: string }>(
+          `${ErrorCode.RESPONSE_PARSE_ERROR}: agy review succeeded but no conversation id was captured for ${cwd}. ` +
+            `Check that ~/.gemini/antigravity-cli is readable.`,
+        );
+      }
+      // Single cast justified: safeParse validated result.data matches the schema.
+      return ok({ ...(result.data as T), session_id: resolvedId });
+    }
+    return err<T & { session_id: string }>(`${ErrorCode.RESPONSE_PARSE_ERROR}: ${lastError}`);
+  });
+}
+
+export function createGeminiBackend(
+  config: ReviewBridgeConfig,
+  copilotInstructions?: CopilotInstructions,
+): ReviewBackend {
+  const turn: TurnRunner = <T extends Record<string, unknown>>(params: TurnParams) =>
+    runAgyReview<T>({ ...params, config, cwd: process.cwd() });
+  const deps = {
+    config,
+    copilotInstructions,
+    // agy accepts a model on resume (nothing reasserts it), and persists each
+    // conversation natively — so chunks review independently (resumesAcrossChunks
+    // false) to avoid resending a growing transcript per chunk.
+    allowsModelOverrideOnResume: true,
+    defaultModel: GEMINI_DEFAULT_MODEL,
+    resumesAcrossChunks: false,
+  };
+
+  return {
+    reviewPlan: (input) => runPlanReview(input, deps, turn),
+    reviewCode: (input) => runCodeReview(input, deps, turn),
+    reviewPrecommit: (input) => runPrecommitReview(input, deps, turn),
+  };
 }

@@ -1,0 +1,13 @@
+{
+  "blockedBy": [],
+  "completedDate": "2026-06-29",
+  "createdDate": "2026-06-29",
+  "description": "Automatically fail over to the other review provider when the primary is out of usage / unavailable, instead of returning an error. Live motivation: Codex hit its usage limit (gpt-5.5) and rejected gpt-5.4 on the ChatGPT tier while the Gemini backend worked end-to-end.\n\nDECISIONS (locked):\n- Mode: AUTO / zero-config. The composite is always built (primary = config.provider, secondary = the other provider). No config field needed to enable. Add a single opt-OUT `\"fallback\": false` (default true) so users who need strict single-provider behavior — CI determinism, or not sending diffs to a second vendor — can disable it.\n- Triggers (failover-eligible errors): RATE_LIMITED (incl. the \"usage limit\" fix, ISS-008), MODEL_ERROR (model unavailable on tier), AUTH_ERROR (primary not signed in). NOT eligible: INVALID_INPUT, RESPONSE_PARSE_ERROR (the model worked), REVIEW_TIMEOUT (ambiguous).\n\nDesign — failover backend decorator at the createBackend seam:\n- New createFailoverBackend(primary, secondary) implementing ReviewBackend. reviewPlan/reviewCode/reviewPrecommit run primary; on an eligible error, retry the same input via secondary and narrate the switch on stderr. If the secondary also fails, return a combined error that leads with the primary failure (and notes the fallback outcome). Symmetric: codex→gemini and gemini→codex.\n- Sessions: failover applies to FRESH reviews only (no session_id). A resumed thread can't continue on the other provider's store; on a resume where the primary is down, return the error and suggest starting fresh on the other provider.\n- Provenance: a review that fails over must be recorded with the ACTUAL serving provider so the cross-provider guard stays correct. Thread the serving provider out of the failover backend to the tool's recordSuccess (small additive change to the backend result + the 3 tool handlers + createSessionTracker), instead of the static client.provider.\n- Data-egress note: auto-fallback can send a diff to the secondary vendor; narrate clearly on stderr and honor the `\"fallback\": false` opt-out.\n\nDepends on ISS-008 (RATE_LIMITED classification) landing first. Pairs with ISS-009 (fix the circular tip). TDD with both backends mocked: eligible→fallback, ineligible→no-fallback, both-fail→combined error, resume→no-fallback, provenance tagged to the serving provider, opt-out disables, stderr narration.",
+  "displayId": "T-022",
+  "id": "T-022",
+  "order": 10,
+  "phase": "failover",
+  "status": "complete",
+  "title": "Auto-fallback failover backend (fail over to the other provider when one is unavailable)",
+  "type": "feature"
+}

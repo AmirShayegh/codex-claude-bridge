@@ -1,0 +1,19 @@
+{
+  "components": [
+    "src/backends/codex.ts"
+  ],
+  "discoveredDate": "2026-06-29",
+  "displayId": "ISS-009",
+  "id": "ISS-009",
+  "impact": "When the ChatGPT tier rejects a model, classifyCodexError emits a hardcoded tip (src/backends/codex.ts:57-59): 'Fall back to gpt-5.4 by setting \"model\": \"gpt-5.4\"'. Live repro with model=gpt-5.4 produced: 'Model \"gpt-5.4\" is not supported ... Fall back to gpt-5.4 by setting \"model\": \"gpt-5.4\"' — i.e. it tells the user to fall back to the exact model that just failed, because the fallback model is hardcoded regardless of which model failed. Fix: recommend a model OTHER than the failing one (don't suggest the failed model), and — now that multi-provider exists — suggest switching to the Gemini backend (\"provider\": \"gemini\") as an out-of-usage escape hatch. Ties into the failover feature.",
+  "location": [
+    "src/backends/codex.ts:55-63"
+  ],
+  "phase": "failover",
+  "relatedTickets": [],
+  "resolution": "Fixed in classifyError (src/backends/codex.ts): the model-not-supported tip now recommends a model OTHER than the one that failed (altModel = gpt-5.5 unless that was the failing model, else gpt-5.4) and points at the Gemini backend (\"provider\": \"gemini\"). No longer tells a failing gpt-5.4 to fall back to gpt-5.4. Commit 09fa68e; covered by codex.test.ts \"never recommends the failing model in the fallback tip (ISS-009)\".",
+  "resolvedDate": "2026-06-29",
+  "severity": "medium",
+  "status": "resolved",
+  "title": "Codex MODEL_ERROR fallback tip is circular — recommends the model that just failed"
+}

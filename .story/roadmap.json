@@ -45,6 +45,20 @@
       "summary": "Pluggable review backends; Gemini via agy CLI alongside Codex"
     },
     {
+      "description": "Ship the multi-provider work to users as v1.1.0. The Gemini backend (T-013→T-020) and the C1/M1/m1 + ISS-006/007 hardening are committed and pushed to main, but npm `latest` is still 1.0.0 (Codex-only) and the README/package.json are written as Codex-only. This phase updates the user-facing docs/metadata for multi-provider and cuts + publishes the release.",
+      "id": "release-1-1",
+      "label": "RELEASE",
+      "name": "Multi-Provider Release",
+      "summary": "Docs + metadata for multi-provider, then bump/tag/publish v1.1.0"
+    },
+    {
+      "description": "Automatic fallback between review providers when one is unavailable. Surfaced live: Codex hit its usage limit (gpt-5.5) and rejected gpt-5.4 on the ChatGPT tier, while the Gemini backend was fully working — exactly the case where the bridge should transparently fail over instead of returning an error. Includes the error-classification accuracy fixes that failover triggering depends on, plus the failover backend itself (provider provenance + session handling).",
+      "id": "failover",
+      "label": "FAILOVER",
+      "name": "Provider Failover",
+      "summary": "Auto-fallback to the other provider when one is out of usage/unavailable"
+    },
+    {
       "description": "Make the review loop useful for teams reviewing GitHub PRs. Adds a sixth MCP tool (review_pr) and a fourth CLI subcommand (review-pr). Fetches PR diff and metadata via `gh pr diff` and `gh pr view --json`, feeds PR title + description + diff to a PR-specific prompt, and returns scope-match and description-match as regular findings (not top-level fields, to keep the result type consistent with review_code). No storage changes needed.",
       "id": "team-integration",
       "label": "PHASE 6",

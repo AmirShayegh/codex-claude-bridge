@@ -1,0 +1,19 @@
+{
+  "components": [
+    "src/backends/codex.ts"
+  ],
+  "discoveredDate": "2026-06-29",
+  "displayId": "ISS-008",
+  "id": "ISS-008",
+  "impact": "Live repro: provider=codex on gpt-5.5 returned `UNKNOWN_ERROR: You've hit your usage limit. ... try again at Jul 28th`. classifyCodexError (src/backends/codex.ts ~line 67) only matches '429' / 'rate_limit' / 'rate limit', so the ChatGPT-tier \"usage limit\" / \"hit your usage limit\" wording falls through to UNKNOWN_ERROR. Two harms: (1) the user gets a vague UNKNOWN_ERROR instead of an actionable rate/quota error; (2) it blocks reliable provider failover, which must key on an accurate out-of-usage classification. Fix: add \"usage limit\" / \"hit your usage limit\" (and \"quota\") to the RATE_LIMITED branch. Prerequisite for the failover feature.",
+  "location": [
+    "src/backends/codex.ts:67"
+  ],
+  "phase": "failover",
+  "relatedTickets": [],
+  "resolution": "Fixed in classifyError (src/backends/codex.ts): the rate-limit branch now also matches \"usage limit\" / \"hit your usage limit\" / \"quota\", so a hit ChatGPT-tier usage cap classifies as RATE_LIMITED instead of UNKNOWN_ERROR. Verified live (real out-of-usage Codex now classifies as RATE_LIMITED and triggers failover). Commit 09fa68e; covered by codex.test.ts \"returns RATE_LIMITED for usage-limit / quota wording (ISS-008)\".",
+  "resolvedDate": "2026-06-29",
+  "severity": "medium",
+  "status": "resolved",
+  "title": "Codex \"usage limit\" error misclassified as UNKNOWN_ERROR (should be RATE_LIMITED)"
+}

@@ -1,0 +1,14 @@
+{
+  "blockedBy": [
+    "T-021"
+  ],
+  "completedDate": null,
+  "createdDate": "2026-06-29",
+  "description": "Cut v1.1.0 (minor — backward-compatible Gemini provider; codex stays the default). Steps: bump package.json version 1.0.0→1.1.0; commit (\"1.1.0\" or \"chore: bump version to 1.1.0\"); tag annotated `git tag -a v1.1.0 -m \"v1.1.0\"` (matches the v0.x convention; v1.0.0 was lightweight); push; `npm publish`.\n\nVerified this session: package is unscoped (npm publish defaults to public); prepublishOnly runs build+typecheck+lint+test; npm auth ok (logged in as owner `ashayegh`); no test asserts a literal version (server.test.ts reads it dynamically from package.json, asserts != 0.1.4); server + CLI read version from package.json at runtime so bumping is sufficient. Caveat: npm 2FA may prompt for an OTP at publish (`npm publish --otp=<code>`).\n\nBlocked by T-021 — the README/package.json multi-provider docs should land before publish so 1.1.0 ships with accurate docs.",
+  "id": "T-023",
+  "order": 20,
+  "phase": "release-1-1",
+  "status": "open",
+  "title": "Cut and publish v1.1.0",
+  "type": "chore"
+}

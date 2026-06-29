@@ -1,0 +1,12 @@
+{
+  "blockedBy": [],
+  "completedDate": null,
+  "createdDate": "2026-06-29",
+  "description": "Make the user-facing docs/metadata reflect the Gemini backend before publishing v1.1.0. This session's audit found the README is 100% Codex with one active inaccuracy and one stale error code.\n\nREADME.md changes:\n- Title/intro/pitch → provider-neutral (Codex default, Gemini as an option; \"$0 with your ChatGPT (Codex) or Google AI Pro (Gemini) subscription\").\n- Add a Gemini Quick Start: install the Antigravity `agy` CLI, run `agy` once to sign in (Google AI Pro), set `\"provider\": \"gemini\"`.\n- Document the `provider` config field; add the Gemini recommended-models table (Gemini 3.5 Flash (Medium/High), Gemini 3.1 Pro (High)) + `\"latest\"`; note reasoning_effort is baked into the agy model name (ignored for Gemini, emits a startup note).\n- Provider-neutral architecture diagram (codex SDK + agy CLI behind the backend seam).\n- FIX inaccuracy: the `model` tool-param tables say \"Incompatible with session_id\" — now Codex-only; Gemini ALLOWS model override on a resumed session (M1).\n- FIX stale error code: troubleshooting references `CODEX_TIMEOUT`, renamed to `REVIEW_TIMEOUT`. Add Gemini/agy rows: CONFIG_ERROR (agy not found), AUTH_ERROR (agy not signed in), PROVIDER_MISMATCH.\n\npackage.json: description hardcodes \"OpenAI Codex\" → provider-neutral; keywords add \"gemini\".\n\nOPEN QUESTION: repo documents agy sign-in (\"run `agy` once\") but NOT an install command — confirm the canonical agy install reference before writing that section; do not fabricate.\n\nNote: docs/ is gitignored; the live probe checklist lives in docs/hardening-probes.md (local only). Blocks the v1.1.0 publish ticket.",
+  "id": "T-021",
+  "order": 10,
+  "phase": "release-1-1",
+  "status": "open",
+  "title": "Update README + package.json for multi-provider",
+  "type": "task"
+}

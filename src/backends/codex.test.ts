@@ -507,7 +507,7 @@ describe('error classification', () => {
     }
   });
 
-  it('surfaces ChatGPT-account fallback tip for rolling-out models', async () => {
+  it('surfaces ChatGPT-account fallback tip recommending a different model + the Gemini backend', async () => {
     mockRun.mockRejectedValue(
       new Error(`The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account.`),
     );
@@ -518,14 +518,33 @@ describe('error classification', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain('MODEL_ERROR');
-      expect(result.error).toContain('gpt-5.5');
-      expect(result.error).toContain('Fall back to gpt-5.4');
-      expect(result.error).toContain('.reviewbridge.json');
-      expect(result.error).not.toContain('Try gpt-5.5 or gpt-5.4,');
+      expect(result.error).toContain('gpt-5.5'); // the failing model is named in the error
+      expect(result.error).toContain('ChatGPT-tier Codex');
+      expect(result.error).toContain('"model": "gpt-5.4"'); // recommend a DIFFERENT model
+      expect(result.error).toContain('"provider": "gemini"'); // Gemini fallback
     }
   });
 
-  it('uses generic MODEL_ERROR tip when ChatGPT account is not mentioned', async () => {
+  // ISS-009: the old tip hardcoded "Fall back to gpt-5.4", so a failing gpt-5.4
+  // was told to fall back to gpt-5.4 — recommending the model that just failed.
+  it('never recommends the failing model in the fallback tip (ISS-009)', async () => {
+    const failing = { ...config, model: 'gpt-5.4' };
+    mockRun.mockRejectedValue(
+      new Error(`The 'gpt-5.4' model is not supported when using Codex with a ChatGPT account.`),
+    );
+
+    const result = await createCodexBackend(failing).reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('MODEL_ERROR');
+      expect(result.error).toContain('"model": "gpt-5.5"'); // recommends the OTHER model
+      expect(result.error).not.toContain('Try "model": "gpt-5.4"'); // not the failed one
+      expect(result.error).toContain('"provider": "gemini"');
+    }
+  });
+
+  it('uses generic MODEL_ERROR tip (different model + Gemini) when ChatGPT account is not mentioned', async () => {
     mockRun.mockRejectedValue(new Error('The model "phantom-99" is not supported'));
 
     const client = createCodexBackend(config);
@@ -534,7 +553,8 @@ describe('error classification', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain('MODEL_ERROR');
-      expect(result.error).toContain('Try gpt-5.5 or gpt-5.4');
+      expect(result.error).toContain('"model": "gpt-5.5"');
+      expect(result.error).toContain('"provider": "gemini"');
       expect(result.error).not.toContain('ChatGPT-tier Codex');
     }
   });
@@ -561,7 +581,22 @@ describe('error classification', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain('RATE_LIMITED');
-      expect(result.error).toContain('Wait a moment');
+      expect(result.error).toContain('Wait');
+    }
+  });
+
+  // ISS-008: ChatGPT-tier Codex reports a hit monthly cap as "You've hit your
+  // usage limit ... try again at <date>" (not a 429). It was falling through to
+  // UNKNOWN_ERROR, which is vague and — critically — wouldn't trigger failover.
+  it('returns RATE_LIMITED for usage-limit / quota wording (ISS-008)', async () => {
+    for (const raw of [
+      "You've hit your usage limit. To continue, try again at Jul 28th, 2026.",
+      'quota exceeded for this organization',
+    ]) {
+      mockRun.mockRejectedValue(new Error(raw));
+      const result = await createCodexBackend(config).reviewPlan({ plan: 'plan' });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toContain('RATE_LIMITED');
     }
   });
 

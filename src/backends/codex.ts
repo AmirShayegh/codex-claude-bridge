@@ -50,25 +50,39 @@ export function classifyError(
     // ChatGPT-subscription Codex auth lags API availability by a few days after
     // OpenAI announces a new flagship model. When that happens the raw error
     // explicitly mentions the ChatGPT account — surface a targeted fallback tip
-    // so Claude Code can auto-set "model": "gpt-5.4" in .reviewbridge.json
-    // instead of leaving the user stuck.
+    // (a different model, the Gemini backend, or API-key auth) instead of
+    // leaving the user stuck.
     const isChatGptAccountLimitation = /chatgpt\s+account/i.test(raw);
+    // Recommend a model OTHER than the one that just failed. The old tip
+    // hardcoded gpt-5.4, so a failing gpt-5.4 was told to "fall back to gpt-5.4"
+    // (ISS-009). Also point at the Gemini backend as an out-of-usage escape hatch.
+    const altModel = modelName === 'gpt-5.5' ? 'gpt-5.4' : 'gpt-5.5';
     const tip = isChatGptAccountLimitation
       ? `This model may still be rolling out to ChatGPT-tier Codex. ` +
-        `Fall back to gpt-5.4 by setting "model": "gpt-5.4" in .reviewbridge.json, ` +
-        `or use an API key (OPENAI_API_KEY) instead of the ChatGPT subscription auth.`
-      : `Try gpt-5.5 or gpt-5.4, or configure a different model in .reviewbridge.json.`;
+        `Try "model": "${altModel}" in .reviewbridge.json, switch to the Gemini backend ` +
+        `("provider": "gemini"), or use an API key (OPENAI_API_KEY) instead of ChatGPT subscription auth.`
+      : `Try "model": "${altModel}", switch to the Gemini backend ("provider": "gemini"), ` +
+        `or configure a different model in .reviewbridge.json.`;
     return {
       code: ErrorCode.MODEL_ERROR,
       message: `Model "${modelName}" is not supported. ${tip} Original error: ${raw}`,
     };
   }
 
-  // Rate limit
-  if (lower.includes('429') || lower.includes('rate_limit') || lower.includes('rate limit')) {
+  // Rate limit / usage cap. ChatGPT-tier Codex reports a hit monthly cap as
+  // "You've hit your usage limit ... try again at <date>" — not a 429 — so match
+  // the usage/quota wording too. Accurate classification also lets provider
+  // failover treat an out-of-usage primary as retryable (ISS-008).
+  if (
+    lower.includes('429') ||
+    lower.includes('rate_limit') ||
+    lower.includes('rate limit') ||
+    lower.includes('usage limit') ||
+    lower.includes('quota')
+  ) {
     return {
       code: ErrorCode.RATE_LIMITED,
-      message: 'Rate limited by OpenAI. Wait a moment and retry.',
+      message: 'Rate limited or usage limit reached on the Codex provider. Wait and retry.',
     };
   }
 

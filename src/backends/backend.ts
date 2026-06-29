@@ -35,6 +35,11 @@ export interface ReviewBackend {
   // Which provider this backend is. Lets the tool layer detect a cross-provider
   // session resume (e.g. a gemini session reopened under codex) before reviewing.
   provider: ReviewProvider;
+  // Whether a resumed session may change model. False for Codex (its SDK
+  // reasserts --model on resume); true for Gemini. The tool layer gates the
+  // session_id+model conflict rejection on this so it isn't a Codex-only rule
+  // leaking onto every provider.
+  allowsModelOverrideOnResume: boolean;
   reviewPlan(input: PlanReviewInput): Promise<Result<PlanReviewResult>>;
   reviewCode(input: CodeReviewInput): Promise<Result<CodeReviewResult>>;
   reviewPrecommit(input: PrecommitReviewInput): Promise<Result<PrecommitResult>>;

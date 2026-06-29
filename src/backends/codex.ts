@@ -189,6 +189,7 @@ export function createCodexBackend(
     const errorMsg = `${classified.code}: SDK initialization failed: ${classified.message}`;
     return {
       provider: 'codex',
+      allowsModelOverrideOnResume: false,
       reviewPlan: () => Promise.resolve(err<PlanReviewResult>(errorMsg)),
       reviewCode: () => Promise.resolve(err<CodeReviewResult>(errorMsg)),
       reviewPrecommit: () => Promise.resolve(err<PrecommitResult>(errorMsg)),
@@ -215,6 +216,7 @@ export function createCodexBackend(
 
   return {
     provider: 'codex',
+    allowsModelOverrideOnResume: deps.allowsModelOverrideOnResume,
     reviewPlan: (input) => runPlanReview(input, deps, turn),
     reviewCode: (input) => runCodeReview(input, deps, turn),
     reviewPrecommit: (input) => runPrecommitReview(input, deps, turn),

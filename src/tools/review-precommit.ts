@@ -24,15 +24,16 @@ export function registerReviewPrecommitTool(server: McpServer, client: ReviewBac
           .min(1)
           .optional()
           .describe(
-            'Override the configured default model for this call (e.g., "gpt-5.4"). ' +
-              'Incompatible with session_id — resumed threads cannot change model.',
+            'Override the configured default model for this call (e.g., "gpt-5.4"), or "latest". ' +
+              'With the Codex provider this cannot be combined with session_id (a resumed thread ' +
+              'keeps its model); the Gemini provider allows changing model on a resumed session.',
           ),
       },
     },
     async (args) => {
-      // Reject session_id + model before activating any session state.
-      // See review-plan.ts for the rationale.
-      if (args.session_id && args.model) {
+      // Reject session_id + model only when the backend can't change model on
+      // resume. See review-plan.ts for the rationale.
+      if (!client.allowsModelOverrideOnResume && args.session_id && args.model) {
         return {
           content: [{ type: 'text' as const, text: sessionModelConflictMessage() }],
           isError: true,

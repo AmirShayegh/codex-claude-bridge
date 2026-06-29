@@ -56,6 +56,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockClient = {
     provider: 'codex',
+    allowsModelOverrideOnResume: false,
     reviewPlan: vi.fn(),
     reviewCode: vi.fn(),
     reviewPrecommit: vi.fn(),
@@ -91,6 +92,26 @@ describe('registerReviewCodeTool', () => {
     expect(parsed.verdict).toBe('request_changes');
     expect(parsed.session_id).toBe('thread_xyz');
     expect(result.isError).toBeUndefined();
+  });
+
+  it('rejects session_id + model when the backend disallows model override on resume (Codex)', async () => {
+    const result = await handler({ diff: 'some diff', session_id: 's1', model: 'gpt-5.4' }, {});
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Cannot change model on a resumed session');
+    expect(mockClient.reviewCode).not.toHaveBeenCalled();
+  });
+
+  it('allows session_id + model when the backend permits override on resume (Gemini)', async () => {
+    mockClient.allowsModelOverrideOnResume = true;
+    vi.mocked(mockClient.reviewCode).mockResolvedValue(ok(validResult));
+
+    const result = await handler({ diff: 'some diff', session_id: 's1', model: 'Gemini 3.1 Pro (High)' }, {});
+
+    expect(result.isError).toBeUndefined();
+    expect(mockClient.reviewCode).toHaveBeenCalledWith(
+      expect.objectContaining({ session_id: 's1', model: 'Gemini 3.1 Pro (High)' }),
+    );
   });
 
   it('findings include file/line references', async () => {

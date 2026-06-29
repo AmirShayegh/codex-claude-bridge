@@ -43,6 +43,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockClient = {
     provider: 'codex',
+    allowsModelOverrideOnResume: false,
     reviewPlan: vi.fn(),
     reviewCode: vi.fn(),
     reviewPrecommit: vi.fn(),
@@ -76,6 +77,27 @@ describe('registerReviewPrecommitTool', () => {
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.ready_to_commit).toBe(true);
     expect(result.isError).toBeUndefined();
+  });
+
+  it('rejects session_id + model when the backend disallows model override on resume (Codex)', async () => {
+    const result = await handler({ session_id: 's1', model: 'gpt-5.4' }, {});
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Cannot change model on a resumed session');
+    expect(mockClient.reviewPrecommit).not.toHaveBeenCalled();
+  });
+
+  it('allows session_id + model when the backend permits override on resume (Gemini)', async () => {
+    mockClient.allowsModelOverrideOnResume = true;
+    vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
+    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(validResult));
+
+    const result = await handler({ session_id: 's1', model: 'Gemini 3.1 Pro (High)' }, {});
+
+    expect(result.isError).toBeUndefined();
+    expect(mockClient.reviewPrecommit).toHaveBeenCalledWith(
+      expect.objectContaining({ session_id: 's1', model: 'Gemini 3.1 Pro (High)' }),
+    );
   });
 
   it('no staged changes returns warning', async () => {

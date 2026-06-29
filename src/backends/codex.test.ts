@@ -134,6 +134,10 @@ describe('createCodexBackend', () => {
   it("exposes its provider identity as 'codex'", () => {
     expect(createCodexBackend(config).provider).toBe('codex');
   });
+
+  it('reports it cannot change model on a resumed session (SDK reasserts --model)', () => {
+    expect(createCodexBackend(config).allowsModelOverrideOnResume).toBe(false);
+  });
 });
 
 describe('reviewPlan', () => {

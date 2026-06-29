@@ -25,17 +25,19 @@ export function registerReviewPlanTool(server: McpServer, client: ReviewBackend,
           .min(1)
           .optional()
           .describe(
-            'Override the configured default model for this call (e.g., "gpt-5.4"). ' +
-              'Incompatible with session_id — resumed threads cannot change model.',
+            'Override the configured default model for this call (e.g., "gpt-5.4"), or "latest". ' +
+              'With the Codex provider this cannot be combined with session_id (a resumed thread ' +
+              'keeps its model); the Gemini provider allows changing model on a resumed session.',
           ),
       },
     },
     async (args) => {
-      // Reject session_id + model before activating any session state.
-      // The client would reject this combination too, but preflight() would
-      // have already mutated SQLite — marking a valid session `failed` for
-      // what is purely an input validation error.
-      if (args.session_id && args.model) {
+      // Reject session_id + model only for backends that can't change model on
+      // resume (Codex, whose SDK reasserts --model). Done here, before
+      // preflight(), so this pure input error doesn't mark a valid session
+      // `failed`. Backends that allow override on resume (Gemini) fall through
+      // and honor the model — the orchestrator applies the same capability gate.
+      if (!client.allowsModelOverrideOnResume && args.session_id && args.model) {
         return {
           content: [{ type: 'text' as const, text: sessionModelConflictMessage() }],
           isError: true,

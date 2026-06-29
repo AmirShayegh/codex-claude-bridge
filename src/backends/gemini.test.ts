@@ -397,6 +397,10 @@ describe('createGeminiBackend', () => {
     expect(createGeminiBackend(DEFAULT_CONFIG).provider).toBe('gemini');
   });
 
+  it('reports it can change model on a resumed session', () => {
+    expect(createGeminiBackend(DEFAULT_CONFIG).allowsModelOverrideOnResume).toBe(true);
+  });
+
   it('reviewPlan: fresh run with no model resolves the latest Flash from agy, runs in sandbox, captures the id', async () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-new' });
     // First spawn: `agy models`. Second spawn: the review itself.

@@ -70,6 +70,7 @@ describe('review-plan command', () => {
     mockReadInput.mockResolvedValue({ ok: true, data: 'My plan content' });
     const mockClient = {
       provider: 'codex' as const,
+      allowsModelOverrideOnResume: false,
       reviewPlan: vi.fn().mockResolvedValue({
         ok: true,
         data: { verdict: 'approve', summary: 'Looks good', findings: [], session_id: 's1' },
@@ -94,6 +95,7 @@ describe('review-plan command', () => {
     mockReadInput.mockResolvedValue({ ok: true, data: 'plan' });
     const mockClient = {
       provider: 'codex' as const,
+      allowsModelOverrideOnResume: false,
       reviewPlan: vi.fn().mockResolvedValue({
         ok: true,
         data: { verdict: 'approve', summary: 'ok', findings: [], session_id: 's1' },
@@ -119,6 +121,7 @@ describe('review-plan command', () => {
     const data = { verdict: 'approve', summary: 'ok', findings: [], session_id: 's1' };
     const mockClient = {
       provider: 'codex' as const,
+      allowsModelOverrideOnResume: false,
       reviewPlan: vi.fn().mockResolvedValue({ ok: true, data }),
       reviewCode: vi.fn(),
       reviewPrecommit: vi.fn(),
@@ -135,6 +138,7 @@ describe('review-plan command', () => {
     mockReadInput.mockResolvedValue({ ok: false, error: 'ENOENT' });
     mockCreateClient.mockReturnValue({
       provider: 'codex',
+      allowsModelOverrideOnResume: false,
       reviewPlan: vi.fn(),
       reviewCode: vi.fn(),
       reviewPrecommit: vi.fn(),
@@ -153,6 +157,7 @@ describe('review-code command', () => {
     mockReadInput.mockResolvedValue({ ok: true, data: 'diff --git ...' });
     const mockClient = {
       provider: 'codex' as const,
+      allowsModelOverrideOnResume: false,
       reviewPlan: vi.fn(),
       reviewCode: vi.fn().mockResolvedValue({
         ok: true,
@@ -178,6 +183,7 @@ describe('review-precommit command', () => {
     mockResolveDiff.mockResolvedValue({ ok: true, data: 'staged diff' });
     const mockClient = {
       provider: 'codex' as const,
+      allowsModelOverrideOnResume: false,
       reviewPlan: vi.fn(),
       reviewCode: vi.fn(),
       reviewPrecommit: vi.fn().mockResolvedValue({
@@ -199,6 +205,7 @@ describe('review-precommit command', () => {
     mockResolveDiff.mockResolvedValue({ ok: true, data: 'staged diff' });
     const mockClient = {
       provider: 'codex' as const,
+      allowsModelOverrideOnResume: false,
       reviewPlan: vi.fn(),
       reviewCode: vi.fn(),
       reviewPrecommit: vi.fn().mockResolvedValue({
@@ -220,6 +227,7 @@ describe('review-precommit command', () => {
     mockResolveDiff.mockResolvedValue({ ok: true, data: 'explicit diff' });
     const mockClient = {
       provider: 'codex' as const,
+      allowsModelOverrideOnResume: false,
       reviewPlan: vi.fn(),
       reviewCode: vi.fn(),
       reviewPrecommit: vi.fn().mockResolvedValue({
@@ -241,6 +249,7 @@ describe('review-precommit command', () => {
     mockResolveDiff.mockResolvedValue({ ok: false, error: 'GIT_ERROR: not a git repo' });
     mockCreateClient.mockReturnValue({
       provider: 'codex',
+      allowsModelOverrideOnResume: false,
       reviewPlan: vi.fn(),
       reviewCode: vi.fn(),
       reviewPrecommit: vi.fn(),

@@ -11,6 +11,7 @@ vi.mock('../storage/reviews.js', () => ({
 
 vi.mock('../storage/sessions.js', () => ({
   getOrCreateSession: vi.fn(),
+  getSession: vi.fn(),
   markSessionCompleted: vi.fn(),
   markSessionFailed: vi.fn(),
   activateSession: vi.fn(),
@@ -25,7 +26,7 @@ vi.mock('../utils/resolve-diff.js', async (importOriginal) => {
 });
 
 import { saveReview } from '../storage/reviews.js';
-import { getOrCreateSession, markSessionCompleted, markSessionFailed, activateSession } from '../storage/sessions.js';
+import { getOrCreateSession, getSession, markSessionCompleted, markSessionFailed, activateSession } from '../storage/sessions.js';
 import { resolveCodeDiff } from '../utils/resolve-diff.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -149,6 +150,7 @@ describe('registerReviewCodeTool with db', () => {
 
   beforeEach(() => {
     vi.mocked(getOrCreateSession).mockReturnValue(ok({ session_id: 'thread_xyz', status: 'in_progress' as const, created_at: '2026-01-01', completed_at: null, provider: null }));
+    vi.mocked(getSession).mockReturnValue(ok(null));
     vi.mocked(activateSession).mockReturnValue(ok({ session_id: 'thread_xyz', status: 'in_progress' as const, created_at: '2026-01-01', completed_at: null, provider: null }));
     vi.mocked(markSessionCompleted).mockReturnValue(ok(undefined));
     vi.mocked(markSessionFailed).mockReturnValue(ok(undefined));
@@ -175,7 +177,7 @@ describe('registerReviewCodeTool with db', () => {
 
     await handler({ diff: 'some diff' }, {});
 
-    expect(getOrCreateSession).toHaveBeenCalledWith(mockDb, 'thread_xyz');
+    expect(getOrCreateSession).toHaveBeenCalledWith(mockDb, 'thread_xyz', 'codex');
   });
 
   it('does not save on client error', async () => {
@@ -249,7 +251,7 @@ describe('registerReviewCodeTool with db', () => {
     await handler({ diff: 'some diff' }, {});
 
     expect(activateSession).not.toHaveBeenCalled();
-    expect(getOrCreateSession).toHaveBeenCalledWith(mockDb, 'thread_xyz');
+    expect(getOrCreateSession).toHaveBeenCalledWith(mockDb, 'thread_xyz', 'codex');
   });
 
   it('marks session failed when client returns error and session_id provided', async () => {
@@ -290,6 +292,20 @@ describe('registerReviewCodeTool with db', () => {
     await handler({ diff: 'some diff', session_id: 'thread_xyz' }, {});
 
     expect(markSessionCompleted).toHaveBeenCalledWith(mockDb, 'thread_xyz');
+  });
+
+  it('rejects a cross-provider resume without calling the backend or failing the session', async () => {
+    vi.mocked(getSession).mockReturnValue(
+      ok({ session_id: 'thread_xyz', status: 'completed' as const, created_at: '2026-01-01', completed_at: '2026-01-02', provider: 'gemini' }),
+    );
+
+    const result = await handler({ diff: 'some diff', session_id: 'thread_xyz' }, {});
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('PROVIDER_MISMATCH');
+    expect(mockClient.reviewCode).not.toHaveBeenCalled();
+    expect(activateSession).not.toHaveBeenCalled();
+    expect(markSessionFailed).not.toHaveBeenCalled();
   });
 });
 

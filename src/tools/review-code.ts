@@ -48,7 +48,7 @@ export function registerReviewCodeTool(server: McpServer, client: ReviewBackend,
           isError: true,
         };
       }
-      const tracker = createSessionTracker(db);
+      const tracker = createSessionTracker(db, client.provider);
       try {
         // Resolve diff (auto-capture or explicit)
         const diffResult = await resolveCodeDiff({ diff: args.diff, auto_diff: args.auto_diff });
@@ -72,7 +72,10 @@ export function registerReviewCodeTool(server: McpServer, client: ReviewBackend,
         }
         const diff = diffResult.data;
 
-        tracker.preflight(args.session_id);
+        const preflight = tracker.preflight(args.session_id);
+        if (!preflight.ok) {
+          return { content: [{ type: 'text' as const, text: preflight.error }], isError: true };
+        }
 
         const result = await client.reviewCode({ ...args, diff });
         if (!result.ok) {

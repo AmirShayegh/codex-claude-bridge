@@ -38,7 +38,7 @@ export function registerReviewPrecommitTool(server: McpServer, client: ReviewBac
           isError: true,
         };
       }
-      const tracker = createSessionTracker(db);
+      const tracker = createSessionTracker(db, client.provider);
       try {
         const diffResult = await resolvePrecommitDiff({ diff: args.diff, auto_diff: args.auto_diff });
         if (!diffResult.ok) {
@@ -62,8 +62,12 @@ export function registerReviewPrecommitTool(server: McpServer, client: ReviewBac
         }
         const diff = diffResult.data;
 
-        // Pre-flight: activate session after diff resolved, before client call
-        tracker.preflight(args.session_id);
+        // Pre-flight: guard cross-provider resume, then activate session after
+        // diff resolved and before the client call.
+        const preflight = tracker.preflight(args.session_id);
+        if (!preflight.ok) {
+          return { content: [{ type: 'text' as const, text: preflight.error }], isError: true };
+        }
 
         const result = await client.reviewPrecommit({
           diff,

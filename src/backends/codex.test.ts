@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createCodexBackend } from './codex.js';
 import { looksLikeDiff } from './orchestrator.js';
 import type { ReviewBridgeConfig } from '../config/types.js';
@@ -54,6 +54,13 @@ beforeEach(() => {
   mockStartThread = vi.fn(() => makeMockThread());
   mockResumeThread = vi.fn(() => makeMockThread());
   mockConstructorThrow = null;
+  // The flow narrates the resolved model on stderr for unpinned reviews; these
+  // tests don't assert on it, so keep their output clean.
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 const config: ReviewBridgeConfig = { ...DEFAULT_CONFIG };

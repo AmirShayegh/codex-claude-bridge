@@ -101,10 +101,14 @@ beforeEach(() => {
   fakeFiles = {};
   scriptedResponses = [];
   spawnCount = 0;
+  // The flow narrates the resolved model on stderr for unpinned reviews; these
+  // tests don't assert on it, so keep their output clean.
+  vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe('classifyAgyError', () => {

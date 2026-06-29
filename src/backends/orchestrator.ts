@@ -179,7 +179,7 @@ export async function runPlanReview(
     focus: config.review_standards.plan_review.focus,
     depth: config.review_standards.plan_review.depth,
   });
-  const resolved = await resolveModel(input.model ?? config.model);
+  const resolved = await resolveModelLogged(resolveModel, input.model ?? config.model);
   return turn<Omit<PlanReviewResult, 'session_id'>>({
     prompt,
     responseSchema: PlanReviewResponseSchema,
@@ -187,6 +187,21 @@ export async function runPlanReview(
     model: perTurnModel(resolved, input.session_id, allowsModelOverrideOnResume),
     resolvedModel: resolved,
   });
+}
+
+// Resolve the model and, when the caller didn't pin one, narrate what
+// 'latest'/unset resolved to. The result schema is fixed, so stderr is the
+// surfacing point for "which model actually ran" (T-019). An explicit pin is
+// self-evident and stays quiet.
+async function resolveModelLogged(
+  resolveModel: (requested: string | undefined) => Promise<string>,
+  requested: string | undefined,
+): Promise<string> {
+  const resolved = await resolveModel(requested);
+  if (requested === undefined || requested === 'latest') {
+    console.error(`[codex-bridge] resolved model: ${resolved} (requested: ${requested ?? 'default'})`);
+  }
+  return resolved;
 }
 
 // The model to apply on a given turn. Backends that reassert model on resume
@@ -261,7 +276,7 @@ export async function runCodeReview(
     });
   }
 
-  const resolved = await resolveModel(input.model ?? config.model);
+  const resolved = await resolveModelLogged(resolveModel, input.model ?? config.model);
 
   // Single chunk — standard path (no chunks_reviewed)
   if (chunks.length === 1) {
@@ -368,7 +383,7 @@ export async function runPrecommitReview(
     });
   }
 
-  const resolved = await resolveModel(input.model ?? config.model);
+  const resolved = await resolveModelLogged(resolveModel, input.model ?? config.model);
 
   // Single chunk — standard path (no chunks_reviewed)
   if (chunks.length === 1) {

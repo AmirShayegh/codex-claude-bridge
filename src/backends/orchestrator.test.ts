@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ok } from '../utils/errors.js';
 import { DEFAULT_CONFIG } from '../config/types.js';
 import {
@@ -12,6 +12,16 @@ import {
 // A fake TurnRunner that records every call and returns a canned valid result.
 // Lets us assert how the flow drives the backend (sessionId/model per turn)
 // without any SDK or subprocess.
+// The flow narrates the resolved model on stderr for unpinned requests; spy it
+// so test output stays quiet and the transparency test can assert on it.
+let consoleSpy: ReturnType<typeof vi.spyOn>;
+beforeEach(() => {
+  consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+});
+afterEach(() => {
+  consoleSpy.mockRestore();
+});
+
 function makeFakeTurn(canned: Record<string, unknown>): { turn: TurnRunner; calls: TurnParams[] } {
   const calls: TurnParams[] = [];
   const turn: TurnRunner = <T extends Record<string, unknown>>(params: TurnParams) => {
@@ -142,6 +152,18 @@ describe('orchestrator — model resolution wiring', () => {
     await runPlanReview({ plan: 'x', session_id: 's1' }, resolverDeps(true, async () => 'RESOLVED-X'), turn);
     expect(calls[0].model).toBe('RESOLVED-X');
     expect(calls[0].resolvedModel).toBe('RESOLVED-X');
+  });
+
+  it('narrates the resolved model on stderr for an unpinned (latest/unset) request', async () => {
+    const { turn } = makeFakeTurn(CANNED_PLAN);
+    await runPlanReview({ plan: 'x' }, resolverDeps(false, async () => 'RESOLVED-X'), turn);
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('RESOLVED-X'));
+  });
+
+  it('stays quiet when an explicit model is pinned', async () => {
+    const { turn } = makeFakeTurn(CANNED_PLAN);
+    await runPlanReview({ plan: 'x', model: 'pinned-1' }, resolverDeps(true, async (r) => r ?? 'x'), turn);
+    expect(consoleSpy).not.toHaveBeenCalled();
   });
 
   it('passes the per-call override (or config.model) into resolveModel verbatim', async () => {

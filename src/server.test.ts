@@ -17,8 +17,8 @@ vi.mock('@modelcontextprotocol/sdk/server/mcp.js', () => {
   return { McpServer: MockMcpServer };
 });
 
-vi.mock('./backends/codex.js', () => ({
-  createCodexBackend: vi.fn(() => ({
+vi.mock('./backends/index.js', () => ({
+  createBackend: vi.fn(() => ({
     reviewPlan: vi.fn(),
     reviewCode: vi.fn(),
     reviewPrecommit: vi.fn(),

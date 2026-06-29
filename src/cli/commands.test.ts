@@ -3,8 +3,8 @@ import { runCli } from './commands.js';
 import type { CliDeps } from './commands.js';
 
 // Mock the codex client
-vi.mock('../backends/codex.js', () => ({
-  createCodexBackend: vi.fn().mockReturnValue({
+vi.mock('../backends/index.js', () => ({
+  createBackend: vi.fn().mockReturnValue({
     reviewPlan: vi.fn(),
     reviewCode: vi.fn(),
     reviewPrecommit: vi.fn(),
@@ -39,11 +39,11 @@ vi.mock('../utils/resolve-diff.js', () => ({
   resolvePrecommitDiff: vi.fn(),
 }));
 
-import { createCodexBackend } from '../backends/codex.js';
+import { createBackend } from '../backends/index.js';
 import { readInput } from './stdin.js';
 import { resolvePrecommitDiff } from '../utils/resolve-diff.js';
 
-const mockCreateClient = vi.mocked(createCodexBackend);
+const mockCreateClient = vi.mocked(createBackend);
 const mockReadInput = vi.mocked(readInput);
 const mockResolveDiff = vi.mocked(resolvePrecommitDiff);
 

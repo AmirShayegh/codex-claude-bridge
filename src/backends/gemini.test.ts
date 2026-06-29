@@ -39,10 +39,25 @@ vi.mock('node:child_process', () => ({
   },
 }));
 
-import { classifyAgyError, runAgyPrint } from './gemini.js';
+// --- fs/os boundary mock for the conversation-id cache ---
+let fakeFiles: Record<string, string> = {};
+vi.mock('node:os', () => ({ homedir: () => '/home/test' }));
+vi.mock('node:fs', () => ({
+  readFileSync: (p: string) => {
+    if (!(p in fakeFiles)) {
+      throw Object.assign(new Error(`ENOENT: ${p}`), { code: 'ENOENT' });
+    }
+    return fakeFiles[p];
+  },
+}));
+
+import { classifyAgyError, runAgyPrint, readConversationId, runSerialized } from './gemini.js';
+
+const CACHE = '/home/test/.gemini/antigravity-cli/cache/last_conversations.json';
 
 beforeEach(() => {
   spawnThrows = undefined;
+  fakeFiles = {};
 });
 
 afterEach(() => {
@@ -141,5 +156,50 @@ describe('runAgyPrint', () => {
     const res = await p;
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toContain(ErrorCode.REVIEW_TIMEOUT);
+  });
+});
+
+describe('readConversationId', () => {
+  it('returns the conversation id agy recorded for the given cwd', () => {
+    fakeFiles[CACHE] = JSON.stringify({ '/repo': 'conv-abc', '/other': 'conv-xyz' });
+    expect(readConversationId('/repo')).toBe('conv-abc');
+  });
+
+  it('returns undefined when the cwd has no recorded conversation', () => {
+    fakeFiles[CACHE] = JSON.stringify({ '/other': 'conv-xyz' });
+    expect(readConversationId('/repo')).toBeUndefined();
+  });
+
+  it('returns undefined when the cache file is missing', () => {
+    expect(readConversationId('/repo')).toBeUndefined();
+  });
+
+  it('returns undefined when the cache file is malformed JSON', () => {
+    fakeFiles[CACHE] = '{ not valid json';
+    expect(readConversationId('/repo')).toBeUndefined();
+  });
+});
+
+describe('runSerialized', () => {
+  it('runs critical sections one at a time, in call order', async () => {
+    const order: string[] = [];
+    const a = runSerialized(async () => {
+      order.push('a-start');
+      await Promise.resolve();
+      await Promise.resolve();
+      order.push('a-end');
+    });
+    const b = runSerialized(async () => {
+      order.push('b-start');
+      order.push('b-end');
+    });
+    await Promise.all([a, b]);
+    // b must not interleave with a — it waits for a to fully settle.
+    expect(order).toEqual(['a-start', 'a-end', 'b-start', 'b-end']);
+  });
+
+  it('keeps the chain alive after a section rejects (no deadlock)', async () => {
+    await expect(runSerialized(async () => Promise.reject(new Error('boom')))).rejects.toThrow('boom');
+    await expect(runSerialized(async () => 'ok')).resolves.toBe('ok');
   });
 });

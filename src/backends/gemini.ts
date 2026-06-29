@@ -1,4 +1,7 @@
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { ok, err, ErrorCode } from '../utils/errors.js';
 import type { Result } from '../utils/errors.js';
 
@@ -168,4 +171,44 @@ export function runAgyPrint(opts: AgyPrintOptions): Promise<Result<string>> {
     child.stdin?.write(opts.prompt);
     child.stdin?.end();
   });
+}
+
+function conversationCachePath(): string {
+  return join(homedir(), '.gemini', 'antigravity-cli', 'cache', 'last_conversations.json');
+}
+
+// agy records the most recent conversation id per workspace path. After a fresh
+// `--print` run we read it back to capture the new session's id — agy's native
+// persistence means no local history store is needed. Returns undefined if the
+// cache is missing, malformed, or has no entry for cwd.
+export function readConversationId(cwd: string): string | undefined {
+  let content: string;
+  try {
+    content = readFileSync(conversationCachePath(), 'utf-8');
+  } catch {
+    return undefined;
+  }
+  try {
+    const map = JSON.parse(content) as Record<string, unknown>;
+    const id = map[cwd];
+    return typeof id === 'string' ? id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// last_conversations.json is keyed by workspace path, so two concurrent fresh
+// runs in the same cwd would race on id capture. Serialize the run+capture
+// critical section through a process-global chain so captures can't interleave.
+// Documented limitation: this serializes same-process Gemini reviews; it does
+// not guard against a separate agy process writing the same cwd entry.
+let serialChain: Promise<unknown> = Promise.resolve();
+export function runSerialized<T>(fn: () => Promise<T>): Promise<T> {
+  const result = serialChain.then(fn);
+  // Keep the chain alive regardless of outcome so one failure can't wedge it.
+  serialChain = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
 }

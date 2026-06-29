@@ -153,6 +153,26 @@ describe('reviewPlan', () => {
   });
 });
 
+describe('model resolution (codex)', () => {
+  it('resolves an unset model to the SDK-pinned default and passes it to startThread', async () => {
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
+    await createCodexBackend(config).reviewPlan({ plan: 'My plan' });
+    expect(mockStartThread.mock.calls[0][0]).toMatchObject({ model: 'gpt-5.5' });
+  });
+
+  it("resolves model 'latest' to the SDK-pinned default (never passes the literal 'latest')", async () => {
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
+    await createCodexBackend(config).reviewPlan({ plan: 'My plan', model: 'latest' });
+    expect(mockStartThread.mock.calls[0][0]).toMatchObject({ model: 'gpt-5.5' });
+  });
+
+  it('forwards an explicit model pin unchanged to startThread', async () => {
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
+    await createCodexBackend(config).reviewPlan({ plan: 'My plan', model: 'gpt-5.4' });
+    expect(mockStartThread.mock.calls[0][0]).toMatchObject({ model: 'gpt-5.4' });
+  });
+});
+
 describe('reviewCode', () => {
   it('returns parsed CodeReviewResult', async () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validCodeResponse) });

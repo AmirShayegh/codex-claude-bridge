@@ -3,13 +3,14 @@
     "T-016",
     "T-018"
   ],
-  "completedDate": null,
+  "completedDate": "2026-06-28",
   "createdDate": "2026-06-28",
   "description": "Cover the new dual-backend behavior prod-realistically: mock ONLY external boundaries — the `agy` subprocess, git, fs — never internal chunking/merge/config (per the prod-realistic-integration-tests lesson).\n\n- Backend selection: provider dispatch (codex vs gemini) from config.\n- Config: provider parsing + per-provider default-model resolution; `model:'latest'` resolution + safe fallback.\n- Gemini backend (mock the agy spawn): assert the prompt passed to agy, JSON parsed from stdout, session_id captured from last_conversations.json, resume passes `--conversation`, chunked-independent + cross-phase resume behavior, `classifyAgyError` mappings, empty-output retry, and the T-001 partial-failure session_id passthrough.\n- Provider provenance: cross-provider resume produces the clear error.\n\nAcceptance: full suite green including all new cases; no internal product logic mocked; agy is exercised only at the subprocess boundary.",
+  "displayId": "T-020",
   "id": "T-020",
   "order": 80,
   "phase": "multi-provider",
-  "status": "open",
+  "status": "complete",
   "title": "Dual-backend test suite",
   "type": "task"
 }

@@ -1,0 +1,21 @@
+{
+  "content": "When spawning `agy` from Node, always close the child's stdin (`child.stdin.end()`) — agy reads stdin even for non-interactive subcommands like `models`, so leaving it open hangs the process until the abort timeout fires. A mocked-spawn unit test cannot catch this; live-validate agy integrations against the real CLI before trusting them.",
+  "context": "T-019: runAgyModels spawned `agy models` without ending stdin and returned null on every real call — it blocked ~15s, hit the AbortController timeout, then fell back to the default model, silently turning gemini's latest-model discovery into a slow no-op. All unit tests passed (spawn was mocked). Caught only by running the real binary via a throwaway tsx script; fixed with child.stdin.end() and locked with a regression assertion. The review path (runAgyPrint) already closed stdin — runAgyModels had simply omitted it.",
+  "createdDate": "2026-06-29",
+  "id": "L-011",
+  "lastValidated": "2026-06-29",
+  "reinforcements": 0,
+  "source": "postmortem",
+  "status": "active",
+  "supersedes": null,
+  "tags": [
+    "agy",
+    "gemini",
+    "subprocess",
+    "gotcha",
+    "testing",
+    "multi-provider"
+  ],
+  "title": "agy subprocesses block on stdin — close it even for `agy models`",
+  "updatedDate": "2026-06-29"
+}

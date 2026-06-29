@@ -3,13 +3,14 @@
     "T-015",
     "T-016"
   ],
-  "completedDate": null,
+  "completedDate": "2026-06-28",
   "createdDate": "2026-06-28",
   "description": "Honor \"always use the latest model from every provider\" as a default-intent sentinel — WITHOUT the model-currency footguns that caused the 1.0.0 saga (L-008).\n\n- Support `model: 'latest'` (and treat unset model as latest) resolved PER BACKEND:\n  - gemini (agy): query `agy models`, pick the newest via a version-sort heuristic, with a SAFE FALLBACK to a known-good Flash id if parsing fails or returns nothing.\n  - codex: 'latest' = the latest model the SDK-PINNED binary supports — NOT the newest announced model (chasing that is exactly the L-008 / bundled-binary trap). Derive from / bound by the SDK pin.\n- Keep explicit pins fully working (recommend-not-enforce, L-006). Surface the RESOLVED model in the result/logs so it's transparent which model actually ran.\n- This advances the existing Model Currency phase goal across both providers (cross-link).\n\nAcceptance: model:'latest' resolves to a current Flash for gemini and an SDK-supported id for codex; brittle `agy models` parsing degrades to a safe fallback; an explicit model always wins over 'latest'.",
+  "displayId": "T-019",
   "id": "T-019",
   "order": 70,
   "phase": "multi-provider",
-  "status": "open",
+  "status": "complete",
   "title": "model: \"latest\" resolver across providers",
   "type": "feature"
 }

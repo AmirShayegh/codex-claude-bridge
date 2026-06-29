@@ -351,6 +351,20 @@ const CODE_OK = { verdict: 'approve', summary: 's', findings: [] };
 // (resume / retry / fence / error / capture) with a single spawn per review.
 const PINNED_CONFIG = { ...DEFAULT_CONFIG, model: 'Gemini 3.5 Flash (Medium)' };
 
+// A multi-file diff large enough to force the chunk loop to split (paired with a
+// tiny max_chunk_tokens). Mirrors the orchestrator suite's bigDiff shape.
+function bigDiff(files: number, lines: number): string {
+  let out = '';
+  for (let f = 0; f < files; f++) {
+    out += `diff --git a/file${f}.ts b/file${f}.ts\n--- a/file${f}.ts\n+++ b/file${f}.ts\n@@ -1,${lines} +1,${lines} @@\n`;
+    for (let l = 0; l < lines; l++) {
+      out += `+const value_${f}_${l} = ${l}; // padding line to grow the diff past the chunk budget\n`;
+    }
+  }
+  return out;
+}
+const BIG_DIFF = bigDiff(3, 30);
+
 describe('createGeminiBackend', () => {
   it("exposes its provider identity as 'gemini'", () => {
     expect(createGeminiBackend(DEFAULT_CONFIG).provider).toBe('gemini');
@@ -462,5 +476,58 @@ describe('createGeminiBackend', () => {
     expect(res.ok).toBe(true);
     expect(spawnCount).toBe(2);
     expect(lastArgs[lastArgs.indexOf('--model') + 1]).toBe('Gemini 3.5 Flash (Medium)');
+  });
+
+  it('pipes the orchestrator-built review prompt (including the diff) to agy via stdin', async () => {
+    fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-stdin' });
+    script({ stdout: JSON.stringify(CODE_OK) });
+
+    await createGeminiBackend(PINNED_CONFIG).reviewCode({ diff: SMALL_DIFF });
+
+    const piped = lastChild.stdinChunks.join('');
+    expect(piped).toContain(SMALL_DIFF); // the diff itself reaches agy
+    expect(piped.length).toBeGreaterThan(SMALL_DIFF.length); // wrapped in a review prompt
+    expect(lastChild.stdin.end).toHaveBeenCalled();
+  });
+
+  it('retries once on empty agy output, then succeeds', async () => {
+    fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-empty' });
+    script({ stdout: '', code: 0 }, { stdout: JSON.stringify(PLAN_OK) });
+
+    const res = await createGeminiBackend(PINNED_CONFIG).reviewPlan({ plan: 'x' });
+
+    expect(res.ok).toBe(true);
+    expect(spawnCount).toBe(2);
+  });
+
+  it('chunked review: each chunk is an independent agy run; the review id is chunk 1’s captured id', async () => {
+    fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-chunk1' });
+    // Generously script success for every chunk (extra entries are ignored).
+    script(...Array.from({ length: 10 }, () => ({ stdout: JSON.stringify(CODE_OK) })));
+
+    const res = await createGeminiBackend({ ...PINNED_CONFIG, max_chunk_tokens: 2500 }).reviewCode({ diff: BIG_DIFF });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.data.chunks_reviewed).toBeGreaterThanOrEqual(2);
+      expect(res.data.session_id).toBe('conv-chunk1'); // chunk 1's id, not a later chunk's
+    }
+    expect(spawnCount).toBeGreaterThanOrEqual(2);
+    // resumesAcrossChunks=false: later chunks run fresh, never resuming a thread.
+    expect(lastArgs).not.toContain('--conversation');
+  });
+
+  it('multi-chunk: a later chunk failure surfaces chunk 1’s session id (T-001)', async () => {
+    fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-partial' });
+    // Chunk 1 succeeds (captures conv-partial); chunk 2 fails at the agy boundary.
+    script({ stdout: JSON.stringify(CODE_OK) }, { stderr: 'you are not authenticated', code: 1 });
+
+    const res = await createGeminiBackend({ ...PINNED_CONFIG, max_chunk_tokens: 2500 }).reviewCode({ diff: BIG_DIFF });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error).toContain(ErrorCode.AUTH_ERROR);
+      expect(res.session_id).toBe('conv-partial'); // T-001: partial session surfaced for cleanup
+    }
   });
 });

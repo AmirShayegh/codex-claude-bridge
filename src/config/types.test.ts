@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ReviewBridgeConfigSchema, DEFAULT_CONFIG } from './types.js';
+import { ReviewBridgeConfigSchema, DEFAULT_CONFIG, RECOMMENDED_MODELS } from './types.js';
 import type { ReviewBridgeConfig } from './types.js';
 
 describe('ReviewBridgeConfigSchema', () => {
@@ -105,6 +105,7 @@ describe('ReviewBridgeConfigSchema', () => {
 
   it('parses a full valid config', () => {
     const full = {
+      provider: 'codex',
       model: 'gpt-5.4',
       reasoning_effort: 'high',
       timeout_seconds: 600,
@@ -194,5 +195,32 @@ describe('DEFAULT_CONFIG', () => {
   it('matches parsing an empty object', () => {
     const parsed = ReviewBridgeConfigSchema.parse({});
     expect(DEFAULT_CONFIG).toEqual(parsed);
+  });
+});
+
+describe('provider selection', () => {
+  it('defaults to codex when unspecified (zero breaking change for existing installs)', () => {
+    const result = ReviewBridgeConfigSchema.safeParse({});
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.provider).toBe('codex');
+  });
+
+  it('accepts an explicit gemini provider', () => {
+    const result = ReviewBridgeConfigSchema.safeParse({ provider: 'gemini' });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.provider).toBe('gemini');
+  });
+
+  it('rejects an unknown provider (explicit selection only, no implicit switching)', () => {
+    expect(ReviewBridgeConfigSchema.safeParse({ provider: 'claude' }).success).toBe(false);
+  });
+});
+
+describe('RECOMMENDED_MODELS', () => {
+  it('is keyed by provider and is documentation, not an enforced allowlist', () => {
+    // recommend-not-enforce (L-006): these models seed error tips and README copy,
+    // never a blocking gate — see "accepts any non-empty model string" above.
+    expect(RECOMMENDED_MODELS.codex).toContain('gpt-5.5');
+    expect(Array.isArray(RECOMMENDED_MODELS.gemini)).toBe(true);
   });
 });

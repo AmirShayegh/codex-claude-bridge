@@ -3,13 +3,22 @@ import { z } from 'zod';
 // Config-local severity enum — avoids cross-layer import from codex/types.ts
 const BlockOnSeveritySchema = z.enum(['critical', 'major', 'minor', 'suggestion', 'nitpick']);
 
-// Models we officially document and recommend. Used for error-message tips
-// and README copy — NOT a blocking allowlist. Users who pass a different
-// model via .reviewbridge.json, the MCP `model` param, or the CLI --model
-// flag are forwarded to Codex as-is; we just don't advertise or recommend
+// The review providers the bridge can target. Single source of truth for the
+// config `provider` enum and the per-provider recommended-model map below.
+const ProviderSchema = z.enum(['codex', 'gemini']);
+export type ReviewProvider = z.infer<typeof ProviderSchema>;
+
+// Models we officially document and recommend, per provider. Used for
+// error-message tips and README copy — NOT a blocking allowlist. Users who
+// pass a different model via .reviewbridge.json, the MCP `model` param, or the
+// CLI --model flag are forwarded to the backend as-is; we just don't advertise
 // anything outside this set. See L-006 for the policy.
-export const RECOMMENDED_MODELS = ['gpt-5.5', 'gpt-5.4'] as const;
-export type RecommendedModel = (typeof RECOMMENDED_MODELS)[number];
+export const RECOMMENDED_MODELS = {
+  codex: ['gpt-5.5', 'gpt-5.4'],
+  // Provisional until confirmed against agy's accepted ids in T-016.
+  gemini: ['gemini-flash-latest'],
+} as const satisfies Record<ReviewProvider, readonly string[]>;
+export type RecommendedModel = (typeof RECOMMENDED_MODELS)[ReviewProvider][number];
 
 const PlanReviewStandardsSchema = z.object({
   focus: z.array(z.string()).default(['architecture', 'feasibility']),
@@ -34,6 +43,8 @@ const ReviewStandardsSchema = z.object({
 });
 
 export const ReviewBridgeConfigSchema = z.object({
+  // Explicit provider selection only — no implicit env-based auto-switching.
+  provider: ProviderSchema.default('codex'),
   model: z.string().default('gpt-5.5'),
   reasoning_effort: z.enum(['low', 'medium', 'high']).default('medium'),
   timeout_seconds: z.number().int().positive().default(300),

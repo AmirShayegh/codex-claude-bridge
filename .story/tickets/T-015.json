@@ -3,10 +3,11 @@
   "completedDate": null,
   "createdDate": "2026-06-28",
   "description": "Add provider selection to config without breaking existing installs.\n\n- Add `provider: z.enum(['codex','gemini']).default('codex')` to `ReviewBridgeConfigSchema` (src/config/types.ts). Existing configs resolve to codex → zero breaking change.\n- Make `model` optional (drop the schema-level `.default('gpt-5.5')`); each backend resolves its OWN default at construction (codex → 'gpt-5.5'; gemini → latest Flash). Audit the `DEFAULT_CONFIG.model` references (client.ts threadOpts/resolvedModel ~142-148/345) since it becomes undefined.\n- Convert `RECOMMENDED_MODELS` (const array) → a per-provider `Record<'codex'|'gemini', readonly string[]>` used ONLY for error-message tips + README (recommend-not-enforce, L-006) — never a blocking allowlist. Keep it pure data: config layer imports nothing from codex/backends (config/types.ts:3 boundary).\n- Explicit provider ONLY — no implicit env-based auto-switching (avoids the silent provider-flip the stashed agy PoC introduced).\n\nAcceptance: parsing `{}` yields `provider:'codex'`; per-call MCP `model` and CLI `--model` still override; config layer has no backend imports; default-model resolution happens in the backend, not the schema.",
+  "displayId": "T-015",
   "id": "T-015",
   "order": 30,
   "phase": "multi-provider",
-  "status": "open",
+  "status": "inprogress",
   "title": "Provider config + per-provider default models",
   "type": "feature"
 }

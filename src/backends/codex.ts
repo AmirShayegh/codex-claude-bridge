@@ -173,7 +173,7 @@ async function runReview<T extends Record<string, unknown>>(
   return err(`${ErrorCode.CODEX_PARSE_ERROR}: ${lastError}`);
 }
 
-export function createCodexClient(
+export function createCodexBackend(
   config: ReviewBridgeConfig,
   copilotInstructions?: CopilotInstructions,
 ): ReviewBackend {

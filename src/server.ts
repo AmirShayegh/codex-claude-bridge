@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import Database from 'better-sqlite3';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { loadConfig, formatConfigSource } from './config/loader.js';
-import { createCodexClient } from './backends/codex.js';
+import { createCodexBackend } from './backends/codex.js';
 import { loadCopilotInstructions } from './config/copilot-instructions.js';
 import type { CopilotInstructions } from './config/copilot-instructions.js';
 import { initDb } from './storage/reviews.js';
@@ -78,7 +78,7 @@ export function createServer(): McpServer {
     }
   }
 
-  const client = createCodexClient(config, copilotInstr);
+  const client = createCodexBackend(config, copilotInstr);
 
   const dbPath = process.env.REVIEW_BRIDGE_DB ?? 'reviews.db';
   let db: InstanceType<typeof Database>;

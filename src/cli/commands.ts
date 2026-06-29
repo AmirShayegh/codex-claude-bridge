@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Command, Option } from 'commander';
 import { loadConfig, formatConfigSource } from '../config/loader.js';
-import { createCodexClient } from '../backends/codex.js';
+import { createCodexBackend } from '../backends/codex.js';
 import type { ReviewBackend } from '../backends/backend.js';
 import { loadCopilotInstructions } from '../config/copilot-instructions.js';
 import type { CopilotInstructions } from '../config/copilot-instructions.js';
@@ -71,7 +71,7 @@ function initClient(configDir: string | undefined, deps: CliDeps): ReviewBackend
   }
 
   try {
-    return createCodexClient(config, copilotInstr);
+    return createCodexBackend(config, copilotInstr);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     deps.stderr.write(`Error: Failed to initialize Codex client: ${msg}\n`);

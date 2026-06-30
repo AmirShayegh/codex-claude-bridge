@@ -1,0 +1,19 @@
+{
+  "content": "A stdio MCP server (e.g. codex-bridge-local → node dist/index.js) loads its code once when the client spawns it at session start. Rebuilding dist mid-session does NOT update the running server — it keeps the in-memory code from spawn time. To serve new code through the MCP tools, restart the client (Claude Code) so it re-spawns the server, or reconnect that server via /mcp. The CLI (node dist/index.js …) always runs the fresh dist, so use it to verify changes mid-session; the MCP path needs a restart.",
+  "context": "During the failover session, calling mcp__codex-bridge-local__review_code returned the pre-fix circular gpt-5.4 tip and did not fail over, even though dist had been rebuilt with the fix — the server process had spawned at 10:27PM before the changes. The same review via the CLI on fresh dist failed over correctly. Proven live.",
+  "createdDate": "2026-06-30",
+  "id": "L-013",
+  "lastValidated": "2026-06-30",
+  "reinforcements": 0,
+  "source": "postmortem",
+  "status": "active",
+  "supersedes": null,
+  "tags": [
+    "mcp",
+    "dev-workflow",
+    "dist",
+    "testing"
+  ],
+  "title": "MCP servers don't hot-reload a rebuilt dist — restart to pick up changes",
+  "updatedDate": "2026-06-30"
+}

@@ -1,7 +1,7 @@
 {
   "name": "codex-claude-bridge",
   "version": "1.0.0",
-  "description": "MCP server that automates code review workflows between Claude Code and OpenAI Codex",
+  "description": "MCP server for automated code review in Claude Code — OpenAI Codex or Google Gemini reviews your plans and diffs inline, with automatic failover between providers.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -25,8 +25,10 @@
     "mcp",
     "claude",
     "codex",
+    "gemini",
     "code-review",
     "openai",
+    "google",
     "anthropic"
   ],
   "author": "Amir Shayegh",

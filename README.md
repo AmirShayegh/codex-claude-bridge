@@ -1,51 +1,54 @@
-# Claude ↔ Codex Review Bridge
+# Claude Review Bridge — Codex + Gemini
 
-MCP server for automated code review. Claude Code writes the code, [OpenAI Codex](https://developers.openai.com/codex) reviews it — structured feedback comes back inline, no copy-pasting between tools.
+MCP server for automated code review. Claude Code writes the code; a second model reviews it and structured feedback comes back inline, no copy-pasting between tools. The reviewer is [OpenAI Codex](https://developers.openai.com/codex) by default, or Google Gemini (via the Antigravity `agy` CLI).
 
-**Works with your ChatGPT subscription — no API costs.**
+**Works with a subscription you already have — $0 marginal cost.** Codex runs on your ChatGPT plan; Gemini runs on your Google AI Pro plan.
+
+**Out of usage on one provider?** When both are set up, the bridge automatically fails over to the other so a review still comes back — see [Provider failover](#provider-failover).
 
 ## Quick Start
 
-### Free (ChatGPT subscription)
+Add the MCP server to Claude Code (same for every provider):
 
-Install the Codex CLI and sign in with your ChatGPT account:
+```bash
+claude mcp add codex-bridge -- npx -y codex-claude-bridge@latest
+```
+
+Then set up at least one reviewer. **Codex is the default**; set up both and the bridge fails over between them automatically.
+
+### Codex (default) — your ChatGPT subscription
+
+Install the Codex CLI and sign in:
 
 ```bash
 npm install -g @openai/codex
 codex login
 ```
 
-Then add the MCP server to Claude Code:
+The SDK reads OAuth tokens from `~/.codex/auth.json` (created by `codex login`); when no `OPENAI_API_KEY` is set it uses your ChatGPT subscription automatically. To pay per token instead, `export OPENAI_API_KEY=sk-...`.
+
+### Gemini — your Google AI Pro subscription
+
+Install the Antigravity (`agy`) CLI, then run it once to sign in with your Google account (AI Pro):
 
 ```bash
-claude mcp add codex-bridge -- npx -y codex-claude-bridge@latest
+agy        # first run prompts a Google sign-in
 ```
 
-### API key (pay per token)
+Select Gemini with a `.reviewbridge.json` at your project root:
 
-Set your API key:
-
-```bash
-export OPENAI_API_KEY=sk-...
-```
-
-Then add the MCP server to Claude Code:
-
-```bash
-claude mcp add codex-bridge -- npx -y codex-claude-bridge@latest
+```json
+{ "provider": "gemini" }
 ```
 
 Restart Claude Code after setup. The review tools are now available.
-
-### How auth works
-
-The SDK reads OAuth tokens from `~/.codex/auth.json` (created by `codex login`). When no `OPENAI_API_KEY` is set, it uses your ChatGPT subscription automatically.
 
 ### Prerequisites
 
 - **Node.js 18+** — [nodejs.org](https://nodejs.org/)
 - **Claude Code** — [code.claude.com](https://code.claude.com/docs/en/overview)
-- **Codex CLI** (free path only) — installed via `npm install -g @openai/codex`
+- **Codex CLI** (Codex path) — `npm install -g @openai/codex`, then `codex login`
+- **Antigravity `agy` CLI** (Gemini path) — install it, then run `agy` to sign in (Google AI Pro)
 
 ## What You Get
 
@@ -111,7 +114,7 @@ Add `--json` to any command for raw JSON output. Use `--help` to see all options
 
 ### `review_plan`
 
-Send an implementation plan to Codex for architectural/feasibility review.
+Send an implementation plan for architectural/feasibility review.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -120,13 +123,13 @@ Send an implementation plan to Codex for architectural/feasibility review.
 | `focus` | string[] | no | Review focus areas (e.g. `["architecture", "security"]`) |
 | `depth` | `"quick"` \| `"thorough"` | no | Review depth |
 | `session_id` | string | no | Continue from a previous review session |
-| `model` | string | no | Override the configured default model for this call (e.g. `"gpt-5.4"`). Incompatible with `session_id`. |
+| `model` | string | no | Override the model for this call (e.g. `"gpt-5.4"` or `"latest"`). With Codex this can't be combined with `session_id` (a resumed thread keeps its model); Gemini allows changing model on a resumed session. |
 
 Returns: `{ verdict, summary, findings[], session_id }`
 
 ### `review_code`
 
-Send a code diff to Codex for code review.
+Send a code diff for code review.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -134,7 +137,7 @@ Send a code diff to Codex for code review.
 | `context` | string | no | Intent of the changes |
 | `session_id` | string | no | Continue from previous review (e.g. plan review session) |
 | `criteria` | string[] | no | Review criteria (e.g. `["bugs", "security", "performance"]`) |
-| `model` | string | no | Override the configured default model for this call (e.g. `"gpt-5.4"`). Incompatible with `session_id`. |
+| `model` | string | no | Override the model for this call (e.g. `"gpt-5.4"` or `"latest"`). With Codex this can't be combined with `session_id` (a resumed thread keeps its model); Gemini allows changing model on a resumed session. |
 
 Returns: `{ verdict, summary, findings[], session_id }`
 
@@ -150,7 +153,7 @@ Quick pre-commit sanity check. Auto-captures staged git changes by default.
 | `diff` | string | no | Explicit diff instead of auto-capture |
 | `session_id` | string | no | Continue from previous review |
 | `checklist` | string[] | no | Custom pre-commit checks |
-| `model` | string | no | Override the configured default model for this call (e.g. `"gpt-5.4"`). Incompatible with `session_id`. |
+| `model` | string | no | Override the model for this call (e.g. `"gpt-5.4"` or `"latest"`). With Codex this can't be combined with `session_id` (a resumed thread keeps its model); Gemini allows changing model on a resumed session. |
 
 Returns: `{ ready_to_commit, blockers[], warnings[], session_id }`
 
@@ -181,6 +184,8 @@ Create `.reviewbridge.json` in your project root to customize review behavior:
 
 ```json
 {
+  "provider": "codex",
+  "fallback": true,
   "model": "gpt-5.5",
   "reasoning_effort": "medium",
   "timeout_seconds": 300,
@@ -206,6 +211,10 @@ Create `.reviewbridge.json` in your project root to customize review behavior:
 
 All fields are optional. Missing fields use the defaults shown above. Large diffs are automatically split into chunks of approximately `max_chunk_tokens` tokens and reviewed sequentially.
 
+- **`provider`** — `"codex"` (default) or `"gemini"`. Selects which backend reviews.
+- **`fallback`** — `true` (default) auto-fails-over to the other provider when the configured one is out of usage or unavailable; see [Provider failover](#provider-failover). Set `false` for strict single-provider behavior.
+- **`reasoning_effort`** — Codex only. Gemini's effort is baked into its model name (e.g. `"Gemini 3.5 Flash (High)"`), so the field is ignored for Gemini.
+
 ### Where the config is discovered
 
 When the MCP server or CLI starts, it looks for `.reviewbridge.json` in this order. The first match wins; nothing is merged.
@@ -223,52 +232,75 @@ The CLI's `--config <dir>` flag is an explicit override: it looks only at `<dir>
 
 ### Model selection
 
-The default model is `gpt-5.5`. When the ChatGPT-subscription tier of Codex doesn't yet have a newly-announced flagship, fall back to `gpt-5.4` via `.reviewbridge.json`:
+`model` takes a concrete id or `"latest"`; each provider resolves its own default when the field is unset.
 
-```json
-{
-  "model": "gpt-5.4"
-}
-```
+**Codex** — default `gpt-5.5`. When the ChatGPT tier doesn't yet have a newly-announced flagship, pin `gpt-5.4`:
 
 | Model | Description |
 |-------|-------------|
 | `gpt-5.5` | Flagship frontier model (default) — 400K context in Codex |
 | `gpt-5.4` | Previous flagship. Use when `gpt-5.5` isn't yet available on your account tier. |
 
-These are the models we document and recommend — the flagship plus one fallback. The `model` field in `.reviewbridge.json`, the `model` tool parameter, and the `--model` CLI flag all accept any string and forward it to Codex as-is, so if you want to run a different model you can. We just don't advertise anything outside the table above.
+**Gemini** — default resolves to the latest Flash via `agy models`. Effort is part of the model name:
+
+| Model | Description |
+|-------|-------------|
+| `Gemini 3.5 Flash (Medium)` | Default — fast review line |
+| `Gemini 3.5 Flash (High)` | Higher effort |
+| `Gemini 3.1 Pro (High)` | Heavier reasoning line |
+
+`"latest"` resolves to the newest Flash for Gemini, or the SDK-pinned flagship for Codex. These are the models we document and recommend; the `model` field, the `model` tool parameter, and the `--model` CLI flag accept any string and forward it as-is, so you can run others. For Gemini, an unrecognized model triggers a non-blocking stderr warning (agy may silently run a different one) — run `agy models` to see the live list.
+
+### Provider failover
+
+When `fallback` is on (the default) and both providers are set up, a review that fails because the configured provider is **out of usage or unavailable** (rate-limited / usage cap, model not available on your tier, or not signed in) is automatically retried on the other provider. You'll see a one-line note on stderr:
+
+```
+[codex-bridge] codex unavailable (RATE_LIMITED); falling back to gemini
+```
+
+The result is tagged with the provider that actually served it (`"provider": "gemini"`). Notes:
+
+- **Fresh reviews only.** A resumed session lives in one provider's conversation store, so a `session_id` review is not failed over — start a fresh review on the other provider to continue.
+- **Data egress.** Failover can send your diff to the other vendor (e.g. OpenAI → Google) when the primary is down. Set `"fallback": false` to disable this (also good for CI determinism).
+- Failover never triggers on a bad diff or a malformed model response — only on genuine provider-unavailability.
 
 ## Storage
 
 Set `REVIEW_BRIDGE_DB` to persist review history and session state:
 
 ```bash
-export REVIEW_BRIDGE_DB=~/.codex-reviews.db
+export REVIEW_BRIDGE_DB=~/.review-bridge.db
 ```
 
 Defaults to `reviews.db` in the current directory. Set to `:memory:` for ephemeral storage.
 
 ## Troubleshooting
 
+Error codes are provider-neutral. With `fallback` on (default), many of these auto-recover by retrying on the other provider — the messages below apply when there's no second provider set up or `fallback` is off.
+
 | Error | Fix |
 |-------|-----|
-| `AUTH_ERROR: No OpenAI API key found` | Run `codex login` to authenticate, or set `OPENAI_API_KEY`. Check that `~/.codex/auth.json` exists. |
-| `MODEL_ERROR: Model "X" is not supported` | Try `gpt-5.5` or `gpt-5.4`. Set `"model"` in `.reviewbridge.json`. |
-| `MODEL_ERROR: ... when using Codex with a ChatGPT account` | The model is still rolling out to ChatGPT-tier Codex. Set `"model": "gpt-5.4"` in `.reviewbridge.json`, or switch to API-key auth via `OPENAI_API_KEY`. |
-| `NETWORK_ERROR: Could not reach OpenAI API` | Check your internet connection. |
-| `RATE_LIMITED: Rate limited by OpenAI` | Wait a moment and retry. |
-| `CODEX_TIMEOUT: review timed out` | Increase `"timeout_seconds"` in `.reviewbridge.json` (default: 300). |
+| `AUTH_ERROR` (Codex) | Run `codex login`, or set `OPENAI_API_KEY`. Check that `~/.codex/auth.json` exists. |
+| `AUTH_ERROR: agy is not authenticated` (Gemini) | Run `agy` once to sign in with your Google account (AI Pro), then retry. |
+| `CONFIG_ERROR: 'agy' ... not found on PATH` (Gemini) | Install the Antigravity `agy` CLI and sign in, or set `"provider": "codex"`. |
+| `MODEL_ERROR: Model "X" is not supported` | Try a different model, switch `"provider"`, or (Codex) use API-key auth. For Gemini, run `agy models` for valid ids. |
+| `RATE_LIMITED` (rate limit or usage cap) | Wait and retry, or rely on failover to the other provider. |
+| `NETWORK_ERROR` | Check your internet connection. |
+| `PROVIDER_MISMATCH` | The `session_id` was created by a different provider. Start a new session, or switch `"provider"` back to continue it. |
+| `REVIEW_TIMEOUT: review timed out` | Increase `"timeout_seconds"` in `.reviewbridge.json` (default: 300). |
 
 ## Architecture
 
 ```
-Claude Code ──MCP──► codex-claude-bridge ──SDK──► OpenAI Codex
-                            │
-                        SQLite DB
-                     (review history)
+                                  ┌─ @openai/codex-sdk ──► OpenAI Codex
+Claude Code ──MCP/CLI──► bridge ──┤
+                          │       └─ agy subprocess ─────► Google Gemini
+                      SQLite DB
+                    (review history)
 ```
 
-The SDK (`@openai/codex-sdk`) internally spawns `codex exec` as a subprocess — there is no separate "CLI mode." Both ChatGPT subscription auth and API key auth use the same SDK path.
+Both providers sit behind one `ReviewBackend` seam. Codex uses `@openai/codex-sdk` (which spawns `codex exec` internally; ChatGPT and API-key auth share the same path); Gemini wraps the `agy --print --sandbox` subprocess. A failover decorator wraps the two so an out-of-usage primary retries on the other.
 
 ```
 src/
@@ -277,7 +309,9 @@ src/
   server.ts         → Server setup, tool registration
   cli/              → Standalone CLI (Commander.js)
   tools/            → MCP tool handlers (5 tools)
-  codex/            → Codex SDK wrapper, prompts, types
+  backends/         → Provider backends behind one seam: codex, gemini (agy),
+                      a shared orchestrator, and the failover decorator
+  codex/            → Prompts, Zod response schemas, shared types
   config/           → .reviewbridge.json loader
   storage/          → SQLite persistence (reviews, sessions)
   utils/            → Git diff, chunking, error types

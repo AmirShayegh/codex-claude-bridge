@@ -1,0 +1,13 @@
+{
+  "blockedBy": [],
+  "completedDate": "2026-07-01",
+  "createdDate": "2026-07-01",
+  "description": "Phase 2 of deliberation. New mode \"deliberate-deep\": after both providers draft (v1 deliberate), each provider adjudicates the OTHER's divergent (one-sided) findings — confirmed | disputed | unsure + reason — so agreement becomes semantic, not positional, and false positives are caught. Motivated by dogfooding v1 (two same-meaning findings stayed divergent under exact-key matching; a shared false positive slipped through).\n\nDesign: add an optional crossReview capability to ReviewBackend (leaves implement via the orchestrator's structured-output turn; composites don't expose it). New CrossReviewResult schema ({adjudications: {index, verdict, reason}[]}) + buildCrossReviewPrompt + runCrossReview in the orchestrator, wired in codex.ts + gemini.ts. The deliberation composite, when built for deliberate-deep, runs 2 cross-review calls (each provider judges the other's divergent findings) and attaches an optional `adjudication` to each divergent item in the deliberation block. Best-effort: cross-review failure degrades to the v1 computed map. Findings presented neutrally (\"another reviewer flagged\"); heavy anonymization deferred (only matters at 3+ providers). Config: mode enum gains 'deliberate-deep'. Scope: plan + code. TDD; live-verify.",
+  "displayId": "T-025",
+  "id": "T-025",
+  "order": 20,
+  "phase": "deliberation",
+  "status": "complete",
+  "title": "Cross-review round (deliberate-deep): providers adjudicate each other's divergent findings",
+  "type": "feature"
+}

@@ -102,6 +102,12 @@ export function classifyAgyError(raw: string): { code: ErrorCode; message: strin
   return { code: ErrorCode.UNKNOWN_ERROR, message: text || 'agy failed with no output.' };
 }
 
+// Cap on how much output we buffer from an agy subprocess. Review responses are
+// small JSON; a multi-megabyte stream means agy is looping or misbehaving, and
+// accumulating it unbounded would grow memory until OOM. Measured in string
+// length (chars), which is close enough to bytes for a safety valve.
+const MAX_AGY_OUTPUT_CHARS = 10 * 1024 * 1024; // ~10 MB
+
 export interface AgyPrintOptions {
   // The full review prompt, piped to agy via stdin (avoids argv length limits
   // for large diffs).
@@ -151,11 +157,25 @@ export function runAgyPrint(opts: AgyPrintOptions): Promise<Result<string>> {
 
     let stdout = '';
     let stderr = '';
+    // Abort and fail if the combined output blows past the cap, rather than
+    // buffering an unbounded stream into memory. finish() before abort() so this
+    // error wins over the AbortError the abort would otherwise surface.
+    const overflow = (): void => {
+      finish(
+        err(
+          `${ErrorCode.UNKNOWN_ERROR}: agy produced more than ${MAX_AGY_OUTPUT_CHARS} bytes of output; ` +
+            `aborted to bound memory. This usually means agy is looping or emitting non-JSON.`,
+        ),
+      );
+      controller.abort();
+    };
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString();
+      if (stdout.length + stderr.length > MAX_AGY_OUTPUT_CHARS) overflow();
     });
     child.stderr?.on('data', (chunk: Buffer) => {
       stderr += chunk.toString();
+      if (stdout.length + stderr.length > MAX_AGY_OUTPUT_CHARS) overflow();
     });
 
     child.on('error', (e: Error) => {
@@ -321,6 +341,12 @@ export function runAgyModels(timeoutMs: number = MODEL_QUERY_TIMEOUT_MS): Promis
     let stdout = '';
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString();
+      // `agy models` output is a short list; a runaway stream degrades to the
+      // fallback (null) rather than buffering unbounded.
+      if (stdout.length > MAX_AGY_OUTPUT_CHARS) {
+        finish(null);
+        controller.abort();
+      }
     });
     child.on('error', () => finish(null));
     child.on('close', (code: number | null) => {

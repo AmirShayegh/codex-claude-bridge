@@ -228,6 +228,19 @@ describe('runAgyPrint', () => {
     const res = await p;
     expect(res.ok).toBe(true);
   });
+
+  it('aborts and errors when agy output exceeds the size cap, without crashing (B2)', async () => {
+    const p = runAgyPrint(OPTS);
+    // One oversized chunk (>10MB) trips the cap: the run resolves to an error and
+    // the child is aborted rather than buffering the stream unbounded.
+    expect(() => lastChild.stdout.emit('data', Buffer.from('x'.repeat(10 * 1024 * 1024 + 1)))).not.toThrow();
+    const res = await p;
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error).toContain(ErrorCode.UNKNOWN_ERROR);
+      expect(res.error).toContain('aborted to bound memory');
+    }
+  });
 });
 
 describe('pickLatestFlashModel', () => {
@@ -301,6 +314,12 @@ describe('runAgyModels', () => {
     const p = runAgyModels(1000);
     vi.advanceTimersByTime(1001);
     expect(await p).toBeNull();
+  });
+
+  it('returns null (degrades to fallback) when output exceeds the size cap (B2)', async () => {
+    const p = runAgyModels();
+    expect(() => lastChild.stdout.emit('data', Buffer.from('x'.repeat(10 * 1024 * 1024 + 1)))).not.toThrow();
+    expect(await p).toBeNull(); // over-cap output → null, caller falls back to the default model
   });
 
   it('survives an EPIPE error on stdin without crashing the process (C1)', async () => {

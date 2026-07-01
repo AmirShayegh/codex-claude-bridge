@@ -215,9 +215,13 @@ export function createCodexBackend(
   config: ReviewBridgeConfig,
   copilotInstructions?: CopilotInstructions,
 ): ReviewBackend {
+  // Point the SDK at an explicit codex binary when configured (config.codex_path,
+  // then the CODEX_PATH env). Escape hatch for a missing/unusable bundled binary
+  // — e.g. macOS XProtect quarantining it. Undefined → the SDK's bundled binary.
+  const codexPathOverride = config.codex_path ?? process.env.CODEX_PATH;
   let codex: Codex;
   try {
-    codex = new Codex();
+    codex = new Codex({ codexPathOverride });
   } catch (e: unknown) {
     const classified = classifyError(e);
     const errorMsg = `${classified.code}: SDK initialization failed: ${classified.message}`;

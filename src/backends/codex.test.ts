@@ -34,10 +34,12 @@ let mockStartThread: ReturnType<typeof vi.fn<ThreadFactory>>;
 let mockResumeThread: ReturnType<typeof vi.fn<ThreadFactory>>;
 
 let mockConstructorThrow: Error | null;
+let mockConstructorOptions: { codexPathOverride?: string } | undefined;
 
 vi.mock('@openai/codex-sdk', () => {
   // Must use function (not arrow) so it's valid as a constructor with `new`
-  function MockCodex() {
+  function MockCodex(options?: { codexPathOverride?: string }) {
+    mockConstructorOptions = options;
     if (mockConstructorThrow) throw mockConstructorThrow;
     return {
       startThread: (...args: unknown[]) => mockStartThread(...args),
@@ -54,6 +56,8 @@ beforeEach(() => {
   mockStartThread = vi.fn(() => makeMockThread());
   mockResumeThread = vi.fn(() => makeMockThread());
   mockConstructorThrow = null;
+  mockConstructorOptions = undefined;
+  delete process.env.CODEX_PATH;
   // The flow narrates the resolved model on stderr for unpinned reviews; these
   // tests don't assert on it, so keep their output clean.
   vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -174,6 +178,30 @@ describe('model resolution (codex)', () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
     await createCodexBackend(config).reviewPlan({ plan: 'My plan', model: 'gpt-5.4' });
     expect(mockStartThread.mock.calls[0][0]).toMatchObject({ model: 'gpt-5.4' });
+  });
+});
+
+describe('codex binary override (codex_path)', () => {
+  it('passes config.codex_path to the SDK as codexPathOverride', () => {
+    createCodexBackend({ ...config, codex_path: '/Users/me/.local/bin/codex' });
+    expect(mockConstructorOptions).toEqual({ codexPathOverride: '/Users/me/.local/bin/codex' });
+  });
+
+  it('falls back to the CODEX_PATH env var when config.codex_path is unset', () => {
+    process.env.CODEX_PATH = '/opt/codex/bin/codex';
+    createCodexBackend(config);
+    expect(mockConstructorOptions).toEqual({ codexPathOverride: '/opt/codex/bin/codex' });
+  });
+
+  it('prefers config.codex_path over the CODEX_PATH env var', () => {
+    process.env.CODEX_PATH = '/env/codex';
+    createCodexBackend({ ...config, codex_path: '/config/codex' });
+    expect(mockConstructorOptions).toEqual({ codexPathOverride: '/config/codex' });
+  });
+
+  it('passes codexPathOverride: undefined (SDK uses its bundled binary) when neither is set', () => {
+    createCodexBackend(config);
+    expect(mockConstructorOptions).toEqual({ codexPathOverride: undefined });
   });
 });
 

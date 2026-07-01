@@ -160,6 +160,13 @@ async function runReview<T extends Record<string, unknown>>(
       turn = await thread.run(prompt, { outputSchema, signal });
     } catch (e: unknown) {
       if (isAbortError(e)) {
+        // If a prior attempt already produced unparseable output, the malformed
+        // response — not the clock — is the actionable cause. Don't mask it as a
+        // timeout (m2). A first-attempt timeout has no lastError and still
+        // reports REVIEW_TIMEOUT.
+        if (lastError) {
+          return err(`${ErrorCode.RESPONSE_PARSE_ERROR}: ${lastError}`);
+        }
         const tokenEst = estimateTokens(prompt);
         return err(
           `${ErrorCode.REVIEW_TIMEOUT}: review timed out after ${config.timeout_seconds}s ` +

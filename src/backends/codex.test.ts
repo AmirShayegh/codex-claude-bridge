@@ -287,6 +287,26 @@ describe('timeout handling', () => {
       expect(result.error).toContain('REVIEW_TIMEOUT');
     }
   });
+
+  // m2: a timeout on the RETRY, after attempt 1 already produced unparseable
+  // output, must surface the parse failure (the actionable cause) — not mask it
+  // as a timeout. A bare timeout with no prior parse failure still reports
+  // REVIEW_TIMEOUT (covered above).
+  it('reports RESPONSE_PARSE_ERROR, not REVIEW_TIMEOUT, when the retry times out after a malformed first attempt', async () => {
+    mockRun
+      .mockResolvedValueOnce({ finalResponse: 'not json {{{' })
+      .mockRejectedValueOnce(new DOMException('signal is aborted', 'AbortError'));
+
+    const client = createCodexBackend(config);
+    const result = await client.reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('RESPONSE_PARSE_ERROR');
+      expect(result.error).not.toContain('REVIEW_TIMEOUT');
+    }
+    expect(mockRun).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('session management', () => {

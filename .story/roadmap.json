@@ -59,6 +59,13 @@
       "summary": "Auto-fallback to the other provider when one is out of usage/unavailable"
     },
     {
+      "description": "Multi-provider deliberation for high-stakes reviews (idea borrowed from LLMtium). Instead of one provider reviewing (with failover), both providers review the same plan/diff independently and the bridge surfaces a structured agreement/disagreement map — findings both flag are high-confidence, findings only one flags need judgment. Claude Code (the caller) synthesizes. Opt-in via config mode; scoped to review_plan + review_code.",
+      "id": "deliberation",
+      "label": "DELIBERATION",
+      "name": "Deliberation",
+      "summary": "Both providers review in parallel; bridge surfaces agree/diverge; Claude synthesizes"
+    },
+    {
       "description": "Make the review loop useful for teams reviewing GitHub PRs. Adds a sixth MCP tool (review_pr) and a fourth CLI subcommand (review-pr). Fetches PR diff and metadata via `gh pr diff` and `gh pr view --json`, feeds PR title + description + diff to a PR-specific prompt, and returns scope-match and description-match as regular findings (not top-level fields, to keep the result type consistent with review_code). No storage changes needed.",
       "id": "team-integration",
       "label": "PHASE 6",

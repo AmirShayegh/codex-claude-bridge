@@ -1,0 +1,13 @@
+{
+  "blockedBy": [],
+  "completedDate": "2026-06-30",
+  "createdDate": "2026-07-01",
+  "description": "DONE (commit f7dad93). v1: independent parallel reviews + computed agreement/disagreement map; Claude Code synthesizes. mode: single|failover|deliberate (derived from fallback when unset). New src/backends/deliberation.ts (createDeliberationBackend + computeAgreement), additive `deliberation` block on Plan/Code result schemas (omitted from response schemas), withFailover exported for the precommit/resume path. 662 tests green, typecheck+lint clean, live-verified: a mode:deliberate review of a SQLi diff had both providers catch the injection (agreed/high-confidence) with divergent secondary findings and agreement:conflict. Phase 2 (not built): LLM cross-review round (lift @llmtium/core anonymizer + CrossReview), per-call deliberate flag, precommit deliberation.",
+  "displayId": "T-024",
+  "id": "T-024",
+  "order": 10,
+  "phase": "deliberation",
+  "status": "complete",
+  "title": "Deliberation composite backend (both providers review; surface disagreement)",
+  "type": "feature"
+}

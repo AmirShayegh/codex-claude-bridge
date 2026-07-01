@@ -505,6 +505,65 @@ describe('createGeminiBackend', () => {
     expect(spawnCount).toBe(2);
   });
 
+  // m2: when the retry runs out of the shared budget AFTER a malformed first
+  // attempt, surface the parse failure — not a timeout. Attempt 1 is scripted
+  // malformed (exit 0); attempt 2 is undriven and aborted by advancing past the
+  // budget.
+  it('reports RESPONSE_PARSE_ERROR, not REVIEW_TIMEOUT, when the retry times out after a malformed attempt (m2)', async () => {
+    vi.useFakeTimers();
+    fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-x' });
+    script({ stdout: 'not json', code: 0 }); // attempt 1 malformed; attempt 2 left to time out
+
+    const p = createGeminiBackend({ ...PINNED_CONFIG, timeout_seconds: 10 }).reviewPlan({ plan: 'x' });
+    await vi.advanceTimersByTimeAsync(10_000 + 50); // blow past the total budget → attempt 2 aborts
+    const res = await p;
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error).toContain(ErrorCode.RESPONSE_PARSE_ERROR);
+      expect(res.error).not.toContain(ErrorCode.REVIEW_TIMEOUT);
+    }
+    expect(spawnCount).toBe(2);
+  });
+
+  // m2: a genuine process failure (e.g. auth) on the retry after a malformed
+  // first attempt must still surface as itself — the mask-fix only diverts
+  // timeouts, never real classified errors.
+  it('still surfaces a genuine process error on the retry, not a masked parse error (m2)', async () => {
+    fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-x' });
+    script({ stdout: 'not json', code: 0 }, { stderr: 'Error: you are not authenticated', code: 1 });
+
+    const res = await createGeminiBackend(PINNED_CONFIG).reviewPlan({ plan: 'x' });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error).toContain(ErrorCode.AUTH_ERROR);
+      expect(res.error).not.toContain(ErrorCode.RESPONSE_PARSE_ERROR);
+    }
+    expect(spawnCount).toBe(2);
+  });
+
+  // m2: the retry gets only the REMAINING budget, not a fresh full timeout.
+  // Attempt 1 is driven by hand to consume 6s of a 10s budget, then attempt 2 is
+  // aborted after only ~4s more — which a fresh per-attempt 10s timer would not do.
+  it('gives the retry only the remaining budget, not a fresh full timeout (m2)', async () => {
+    vi.useFakeTimers();
+    fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-x' });
+
+    const p = createGeminiBackend({ ...PINNED_CONFIG, timeout_seconds: 10 }).reviewPlan({ plan: 'x' });
+    // Let attempt 1 spawn, consume 6s, then return malformed (exit 0).
+    await vi.advanceTimersByTimeAsync(6_000);
+    lastChild.stdout.emit('data', Buffer.from('not json'));
+    lastChild.emit('close', 0);
+    // Attempt 2 now has only ~4s of budget left; advancing past that aborts it.
+    await vi.advanceTimersByTimeAsync(4_000 + 50);
+    const res = await p;
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain(ErrorCode.RESPONSE_PARSE_ERROR); // timeout-after-malformed → parse error
+    expect(spawnCount).toBe(2);
+  });
+
   it('strips a markdown code fence around the JSON before parsing', async () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-fence' });
     script({ stdout: '```json\n' + JSON.stringify(PLAN_OK) + '\n```' });

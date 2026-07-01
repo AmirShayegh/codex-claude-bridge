@@ -387,17 +387,29 @@ async function runAgyReview<T extends Record<string, unknown>>(
   params: TurnParams & { config: ReviewBridgeConfig; cwd: string },
 ): Promise<Result<T & { session_id: string }>> {
   const { prompt, responseSchema, sessionId, resolvedModel, config, cwd } = params;
-  const timeoutMs = config.timeout_seconds * 1000;
+  // One shared deadline across both attempts (total budget), mirroring Codex's
+  // single AbortSignal.timeout — a fresh per-attempt timeout would grant up to
+  // ~2× timeout_seconds of wall-clock (m2).
+  const deadline = Date.now() + config.timeout_seconds * 1000;
 
   // Serialize the whole run+capture so concurrent same-cwd reviews can't race on
   // the id cache.
   return runSerialized(async () => {
     let lastError: string | undefined;
     for (let attempt = 0; attempt < 2; attempt++) {
+      // The retry gets only the budget remaining after attempt 1 (floored at 1ms
+      // so setTimeout never goes negative — an exhausted budget aborts at once).
+      const timeoutMs = Math.max(deadline - Date.now(), 1);
       const run = await runAgyPrint({ prompt, model: resolvedModel, conversationId: sessionId, cwd, timeoutMs });
       if (!run.ok) {
-        // Process-level failure (auth/model/rate/network/timeout) — already
-        // classified, not retryable here.
+        // A retry that timed out AFTER a prior parse failure: the malformed
+        // response — not the clock — is the actionable cause, so surface it as a
+        // parse error (m2). Every other process failure (auth/model/rate/network,
+        // or a first-attempt timeout with no prior parse failure) is already
+        // classified and surfaces as itself.
+        if (lastError && run.error.startsWith(`${ErrorCode.REVIEW_TIMEOUT}:`)) {
+          return err<T & { session_id: string }>(`${ErrorCode.RESPONSE_PARSE_ERROR}: ${lastError}`);
+        }
         return err<T & { session_id: string }>(run.error);
       }
 

@@ -4,7 +4,7 @@ import type {
   CodeReviewResult,
   PrecommitResult,
   CrossReviewResult,
-} from '../codex/types.js';
+} from '../review/types.js';
 import type { ReviewProvider } from '../config/types.js';
 
 // Input shapes accepted by every review backend. Provider-agnostic — these are

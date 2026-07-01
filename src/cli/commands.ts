@@ -17,7 +17,7 @@ import {
   formatPrecommitResult,
   detectColor,
 } from './formatter.js';
-import type { PlanReviewResult, CodeReviewResult, PrecommitResult } from '../codex/types.js';
+import type { PlanReviewResult, CodeReviewResult, PrecommitResult } from '../review/types.js';
 
 export interface CliDeps {
   stdout: HandlerIO['stdout'];

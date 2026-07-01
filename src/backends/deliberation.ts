@@ -4,8 +4,8 @@ import type { ReviewProvider } from '../config/types.js';
 import {
   CodeFindingSeveritySchema,
   PlanFindingSeveritySchema,
-} from '../codex/types.js';
-import type { PlanReviewResult, CodeReviewResult } from '../codex/types.js';
+} from '../review/types.js';
+import type { PlanReviewResult, CodeReviewResult } from '../review/types.js';
 import { withFailover } from './failover.js';
 import type {
   ReviewBackend,

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-// Config-local severity enum — avoids cross-layer import from codex/types.ts
+// Config-local severity enum — avoids cross-layer import from review/types.ts
 const BlockOnSeveritySchema = z.enum(['critical', 'major', 'minor', 'suggestion', 'nitpick']);
 
 // The review providers the bridge can target. Single source of truth for the

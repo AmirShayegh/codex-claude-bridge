@@ -1,5 +1,5 @@
 import pc from 'picocolors';
-import type { PlanReviewResult, CodeReviewResult, PrecommitResult, PlanFinding, CodeFinding } from '../codex/types.js';
+import type { PlanReviewResult, CodeReviewResult, PrecommitResult, PlanFinding, CodeFinding } from '../review/types.js';
 
 export function detectColor(env: Record<string, string | undefined>, isTTY: boolean): boolean {
   if (env.FORCE_COLOR !== undefined) {

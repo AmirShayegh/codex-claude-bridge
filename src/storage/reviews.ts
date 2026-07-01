@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 import { ok, err, ErrorCode } from '../utils/errors.js';
 import type { Result } from '../utils/errors.js';
-import type { ReviewHistoryEntry } from '../codex/types.js';
+import type { ReviewHistoryEntry } from '../review/types.js';
 
 export interface SaveReviewInput {
   session_id: string;

@@ -7,7 +7,7 @@ import type {
   CodeReviewResult,
   PrecommitResult,
   CrossReviewResult,
-} from '../codex/types.js';
+} from '../review/types.js';
 import type { ReviewBridgeConfig } from '../config/types.js';
 import { estimateTokens } from '../utils/chunking.js';
 import type { CopilotInstructions } from '../config/copilot-instructions.js';

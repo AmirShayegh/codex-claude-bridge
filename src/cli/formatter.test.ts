@@ -5,7 +5,7 @@ import {
   formatPrecommitResult,
   detectColor,
 } from './formatter.js';
-import type { PlanReviewResult, CodeReviewResult, PrecommitResult } from '../codex/types.js';
+import type { PlanReviewResult, CodeReviewResult, PrecommitResult } from '../review/types.js';
 
 describe('detectColor', () => {
   it('returns true when FORCE_COLOR is set to non-zero', () => {

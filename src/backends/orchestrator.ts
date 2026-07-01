@@ -8,7 +8,7 @@ import {
   PrecommitResultSchema,
   CrossReviewResultSchema,
   CodeFindingSeveritySchema,
-} from '../codex/types.js';
+} from '../review/types.js';
 import type {
   PlanReviewResult,
   CodeReviewResult,
@@ -16,13 +16,13 @@ import type {
   CrossReviewResult,
   CodeFinding,
   CodeFindingSeverity,
-} from '../codex/types.js';
+} from '../review/types.js';
 import {
   buildPlanReviewPrompt,
   buildCodeReviewPrompt,
   buildPrecommitPrompt,
   buildCrossReviewPrompt,
-} from '../codex/prompts.js';
+} from '../review/prompts.js';
 import type { ReviewBridgeConfig } from '../config/types.js';
 import { chunkDiff, estimateTokens } from '../utils/chunking.js';
 import { filterByFiles, formatForPrompt } from '../config/copilot-instructions.js';

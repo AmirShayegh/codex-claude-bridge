@@ -3,7 +3,7 @@ import { z } from 'zod';
 import Database from 'better-sqlite3';
 import { initDb, saveReview, getReviewsBySession, getRecentReviews } from './reviews.js';
 import { initSessionsDb, getOrCreateSession } from './sessions.js';
-import { ReviewHistoryEntrySchema } from '../codex/types.js';
+import { ReviewHistoryEntrySchema } from '../review/types.js';
 
 let db: InstanceType<typeof Database>;
 

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { registerReviewCodeTool } from './review-code.js';
 import type { ReviewBackend } from '../backends/backend.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { CodeReviewResult } from '../codex/types.js';
+import type { CodeReviewResult } from '../review/types.js';
 import { ok, err } from '../utils/errors.js';
 
 vi.mock('../storage/reviews.js', () => ({

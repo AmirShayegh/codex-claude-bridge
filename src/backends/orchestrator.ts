@@ -110,8 +110,11 @@ export function mergePrecommitResults(
 ): PrecommitResult {
   return {
     ready_to_commit: results.every((r) => r.ready_to_commit),
-    blockers: results.flatMap((r) => r.blockers),
-    warnings: results.flatMap((r) => r.warnings),
+    // Chunks reviewed independently often repeat the same blocker/warning (e.g. a
+    // project-wide concern surfaced per chunk). Drop exact duplicates, preserving
+    // first-seen order — mirrors the finding dedup in mergeCodeResults.
+    blockers: [...new Set(results.flatMap((r) => r.blockers))],
+    warnings: [...new Set(results.flatMap((r) => r.warnings))],
     session_id: sessionId,
     chunks_reviewed: results.length,
   };

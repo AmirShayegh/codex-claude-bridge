@@ -5,6 +5,9 @@ import {
   runPlanReview,
   runCodeReview,
   runCrossReview,
+  deduplicateFindings,
+  mergeCodeResults,
+  mergePrecommitResults,
   type TurnParams,
   type TurnRunner,
   type ReviewFlowDeps,
@@ -253,5 +256,83 @@ describe('orchestrator — runCrossReview (deliberate-deep)', () => {
     const { turn, calls } = makeFakeTurn(CANNED_CROSS);
     await runCrossReview({ content: 'x', findings: [finding], model: 'gpt-5.5' }, deps(false), turn);
     expect(calls[0].model).toBe('gpt-5.5');
+  });
+});
+
+// Direct units for the merge helpers. They're the same key/severity logic that
+// deliberation.computeAgreement mirrors, but were only exercised through the
+// chunk loop — so their edge cases (severity precedence, keyless preservation,
+// verdict precedence, cross-chunk AND, string dedup) had no direct coverage.
+describe('merge helpers', () => {
+  const cf = (
+    file: string | null,
+    line: number | null,
+    category: string,
+    severity: 'critical' | 'major' | 'minor' | 'nitpick',
+  ) => ({
+    severity,
+    category,
+    description: `${category} issue`,
+    file,
+    line,
+    suggestion: null,
+  });
+
+  describe('deduplicateFindings', () => {
+    it('collapses same file:line:category to the higher-severity finding', () => {
+      const out = deduplicateFindings([cf('a.ts', 1, 'bugs', 'minor'), cf('a.ts', 1, 'bugs', 'critical')]);
+      expect(out).toHaveLength(1);
+      expect(out[0].severity).toBe('critical');
+    });
+
+    it('keeps distinct keys separate', () => {
+      const out = deduplicateFindings([cf('a.ts', 1, 'bugs', 'major'), cf('a.ts', 2, 'bugs', 'major')]);
+      expect(out).toHaveLength(2);
+    });
+
+    it('preserves keyless findings (null file or line) without deduping them', () => {
+      const out = deduplicateFindings([cf(null, null, 'style', 'minor'), cf(null, null, 'style', 'minor')]);
+      expect(out).toHaveLength(2); // keyless can't be matched → both kept
+    });
+  });
+
+  describe('mergeCodeResults', () => {
+    const cr = (verdict: 'approve' | 'request_changes' | 'reject', summary: string, findings: ReturnType<typeof cf>[]) => ({ verdict, summary, findings, session_id: 's' });
+
+    it('takes the worst verdict (approve < request_changes < reject)', () => {
+      const merged = mergeCodeResults([cr('approve', 'a', []), cr('reject', 'b', []), cr('request_changes', 'c', [])], 'sid');
+      expect(merged.verdict).toBe('reject');
+    });
+
+    it('joins summaries, dedups findings across chunks, and records chunks_reviewed', () => {
+      const merged = mergeCodeResults(
+        [cr('approve', 'first.', [cf('a.ts', 1, 'bugs', 'minor')]), cr('approve', 'second.', [cf('a.ts', 1, 'bugs', 'critical')])],
+        'sid',
+      );
+      expect(merged.summary).toBe('first. second.');
+      expect(merged.findings).toHaveLength(1); // same key → deduped
+      expect(merged.findings[0].severity).toBe('critical'); // higher severity wins
+      expect(merged.chunks_reviewed).toBe(2);
+      expect(merged.session_id).toBe('sid');
+    });
+  });
+
+  describe('mergePrecommitResults', () => {
+    const pr = (ready: boolean, blockers: string[], warnings: string[]) => ({ ready_to_commit: ready, blockers, warnings, session_id: 's' });
+
+    it('is ready_to_commit only when EVERY chunk is ready (AND across chunks)', () => {
+      expect(mergePrecommitResults([pr(true, [], []), pr(true, [], [])], 'sid').ready_to_commit).toBe(true);
+      expect(mergePrecommitResults([pr(true, [], []), pr(false, ['x'], [])], 'sid').ready_to_commit).toBe(false);
+    });
+
+    it('dedupes identical blockers/warnings across chunks, preserving first-seen order', () => {
+      const merged = mergePrecommitResults(
+        [pr(false, ['secret in config', 'debug log'], ['slow test']), pr(false, ['secret in config'], ['slow test', 'todo left'])],
+        'sid',
+      );
+      expect(merged.blockers).toEqual(['secret in config', 'debug log']); // 'secret in config' not repeated
+      expect(merged.warnings).toEqual(['slow test', 'todo left']);
+      expect(merged.chunks_reviewed).toBe(2);
+    });
   });
 });

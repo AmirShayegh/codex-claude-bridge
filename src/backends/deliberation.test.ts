@@ -49,6 +49,19 @@ describe('computeAgreement', () => {
     expect(divergent.map((d) => d.provider).sort()).toEqual(['codex', 'gemini']);
   });
 
+  it('keeps the higher-severity finding when one provider reports the same key twice', () => {
+    // Surfaced by deliberating on this feature's own code: same-key dupes from one
+    // provider must collapse to the higher severity, not the last-seen.
+    const { agreed, divergent } = computeAgreement(
+      { provider: 'codex', findings: [f('a.ts', 1, 'security', 'minor'), f('a.ts', 1, 'security', 'critical')] },
+      { provider: 'gemini', findings: [] },
+      rank,
+    );
+    expect(agreed).toHaveLength(0); // only one provider flagged it
+    expect(divergent).toHaveLength(1); // collapsed to a single finding
+    expect(divergent[0].finding.severity).toBe('critical');
+  });
+
   it('all-agreed when every finding shares a key', () => {
     const shared = [f('x.ts', 3, 'bugs', 'major')];
     const { agreed, divergent } = computeAgreement(

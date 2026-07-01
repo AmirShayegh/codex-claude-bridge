@@ -53,16 +53,27 @@ export function computeAgreement<F extends AnyFinding>(
   const map = new Map<string, { a?: F; b?: F }>();
   const divergent: { provider: ReviewProvider; finding: F }[] = [];
 
-  for (const f of a.findings) {
-    const k = keyOf(f);
-    if (k === null) divergent.push({ provider: a.provider, finding: f });
-    else map.set(k, { ...map.get(k), a: f });
-  }
-  for (const f of b.findings) {
-    const k = keyOf(f);
-    if (k === null) divergent.push({ provider: b.provider, finding: f });
-    else map.set(k, { ...map.get(k), b: f });
-  }
+  // Add one provider's findings to its side of the map. Keyless findings (no
+  // file/line) can't be matched → divergent. When a provider reports the same
+  // key twice, keep the higher-severity one (mirrors deduplicateFindings) rather
+  // than letting the last silently win.
+  const put = (side: 'a' | 'b', provider: ReviewProvider, findings: F[]): void => {
+    for (const f of findings) {
+      const k = keyOf(f);
+      if (k === null) {
+        divergent.push({ provider, finding: f });
+        continue;
+      }
+      const entry = map.get(k) ?? {};
+      const existing = entry[side];
+      if (!existing || rankOf(f.severity) > rankOf(existing.severity)) {
+        entry[side] = f;
+        map.set(k, entry);
+      }
+    }
+  };
+  put('a', a.provider, a.findings);
+  put('b', b.provider, b.findings);
 
   const agreed: F[] = [];
   for (const { a: fa, b: fb } of map.values()) {

@@ -212,7 +212,8 @@ Create `.reviewbridge.json` in your project root to customize review behavior:
 All fields are optional. Missing fields use the defaults shown above. Large diffs are automatically split into chunks of approximately `max_chunk_tokens` tokens and reviewed sequentially.
 
 - **`provider`** — `"codex"` (default) or `"gemini"`. Selects which backend reviews.
-- **`fallback`** — `true` (default) auto-fails-over to the other provider when the configured one is out of usage or unavailable; see [Provider failover](#provider-failover). Set `false` for strict single-provider behavior.
+- **`mode`** — `"failover"` (default), `"single"`, or `"deliberate"`. Picks how the two providers combine; see [Provider failover](#provider-failover) and [Deliberation](#deliberation). When unset it's derived from `fallback`.
+- **`fallback`** — `true` (default) auto-fails-over to the other provider when the configured one is out of usage or unavailable. Set `false` (equivalently `"mode": "single"`) for strict single-provider behavior.
 - **`reasoning_effort`** — Codex only. Gemini's effort is baked into its model name (e.g. `"Gemini 3.5 Flash (High)"`), so the field is ignored for Gemini.
 
 ### Where the config is discovered
@@ -264,6 +265,35 @@ The result is tagged with the provider that actually served it (`"provider": "ge
 - **Fresh reviews only.** A resumed session lives in one provider's conversation store, so a `session_id` review is not failed over — start a fresh review on the other provider to continue.
 - **Data egress.** Failover can send your diff to the other vendor (e.g. OpenAI → Google) when the primary is down. Set `"fallback": false` to disable this (also good for CI determinism).
 - Failover never triggers on a bad diff or a malformed model response — only on genuine provider-unavailability.
+
+### Deliberation
+
+`"mode": "deliberate"` sends `review_plan` and `review_code` to **both** providers independently, then returns where they **agree** vs **diverge** so the caller (Claude Code) can synthesize. Findings both providers flag are high-confidence; findings only one flags need a judgment call.
+
+```json
+{ "provider": "codex", "mode": "deliberate" }
+```
+
+The result keeps the usual shape (a merged `verdict`/`findings`, worst-verdict wins) plus an additive `deliberation` block:
+
+```json
+{
+  "verdict": "reject",
+  "findings": [ /* deduped union of both providers */ ],
+  "deliberation": {
+    "providers": ["codex", "gemini"],
+    "verdicts": [ { "provider": "codex", "verdict": "request_changes" }, { "provider": "gemini", "verdict": "reject" } ],
+    "agreement": "conflict",                 // agree | mixed | conflict
+    "agreed":    [ /* findings BOTH flagged — high confidence */ ],
+    "divergent": [ { "provider": "gemini", "finding": { /* only one flagged */ } } ]
+  }
+}
+```
+
+Notes:
+- **Cost/egress:** deliberation always runs both providers and sends the diff to both vendors — best for high-stakes reviews, not every precommit. `review_precommit` stays failover under this mode.
+- **Degrades gracefully:** if one provider is out of usage, you get the other's review with `deliberation.degraded` set (it subsumes failover).
+- Resumed sessions (`session_id`) don't deliberate — they continue on the original provider.
 
 ## Storage
 

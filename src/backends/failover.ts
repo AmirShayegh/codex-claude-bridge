@@ -40,7 +40,9 @@ function tag<R extends { provider?: ReviewProvider }>(
 
 type FailoverInput = { session_id?: string; model?: string };
 
-async function withFailover<I extends FailoverInput, R extends { provider?: ReviewProvider }>(
+// Exported for reuse by the deliberation composite, whose precommit path (and
+// resumed-session path) is plain failover, not deliberation.
+export async function withFailover<I extends FailoverInput, R extends { provider?: ReviewProvider }>(
   primary: ReviewBackend,
   secondary: ReviewBackend,
   input: I,

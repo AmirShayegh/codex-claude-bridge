@@ -46,7 +46,27 @@ export const ReviewFindingSchema = z.object({
 // The backend that actually produced this result. Set by each backend on its
 // own results; under provider failover it reflects the provider that served the
 // review (which may differ from the configured primary). Optional/additive.
-const ServingProviderSchema = z.enum(['codex', 'gemini']).optional();
+const ReviewProviderEnum = z.enum(['codex', 'gemini']);
+const ServingProviderSchema = ReviewProviderEnum.optional();
+
+// Deliberation metadata: when both providers review the same input, the bridge
+// reports each provider's verdict and splits findings into those BOTH flagged
+// (high confidence) vs. only one flagged (needs judgment) so the caller can
+// synthesize. Additive/optional — consumers that ignore it still get a coherent
+// merged result. `degraded` is set when only one provider could review (the
+// other was out of usage), i.e. the result is effectively a single-provider one.
+function deliberationSchema<F extends z.ZodTypeAny>(findingSchema: F) {
+  return z
+    .object({
+      providers: z.array(ReviewProviderEnum),
+      verdicts: z.array(z.object({ provider: ReviewProviderEnum, verdict: z.string() })),
+      agreement: z.enum(['agree', 'mixed', 'conflict']),
+      agreed: z.array(findingSchema),
+      divergent: z.array(z.object({ provider: ReviewProviderEnum, finding: findingSchema })),
+      degraded: z.object({ failed: ReviewProviderEnum, reason: z.string() }).optional(),
+    })
+    .optional();
+}
 
 export const PlanReviewResultSchema = z.object({
   verdict: z.enum(['approve', 'revise', 'reject']),
@@ -54,6 +74,7 @@ export const PlanReviewResultSchema = z.object({
   findings: z.array(PlanFindingSchema),
   session_id: z.string(),
   provider: ServingProviderSchema,
+  deliberation: deliberationSchema(PlanFindingSchema),
 });
 
 export const CodeReviewResultSchema = z.object({
@@ -63,6 +84,7 @@ export const CodeReviewResultSchema = z.object({
   session_id: z.string(),
   chunks_reviewed: z.number().int().positive().optional(),
   provider: ServingProviderSchema,
+  deliberation: deliberationSchema(CodeFindingSchema),
 });
 
 export const PrecommitResultSchema = z.object({

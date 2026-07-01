@@ -116,11 +116,16 @@ export function mergePrecommitResults(
 // Response schemas omit fields the reviewer doesn't produce — session_id and
 // chunks_reviewed are set by the backend/flow, and provider is set authoritatively
 // by the backend (never trusted from the model's JSON, which could mis-tag).
-const PlanReviewResponseSchema = PlanReviewResultSchema.omit({ session_id: true, provider: true });
+const PlanReviewResponseSchema = PlanReviewResultSchema.omit({
+  session_id: true,
+  provider: true,
+  deliberation: true,
+});
 const CodeReviewResponseSchema = CodeReviewResultSchema.omit({
   session_id: true,
   chunks_reviewed: true,
   provider: true,
+  deliberation: true,
 });
 const PrecommitResponseSchema = PrecommitResultSchema.omit({
   session_id: true,

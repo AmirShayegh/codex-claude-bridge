@@ -59,6 +59,13 @@ export const ReviewBridgeConfigSchema = z.object({
   // set false for strict single-provider behavior (CI determinism, or to avoid
   // sending a diff to a second vendor on failover).
   fallback: z.boolean().default(true),
+  // Review mode. 'single' = one provider only; 'failover' = one provider, fall
+  // back to the other when it's out of usage (default); 'deliberate' = both
+  // providers review (plan + code) and the bridge returns a structured
+  // agreement/disagreement map for the caller to synthesize. Optional — when
+  // unset it's derived from `fallback` (false → single, else failover) so 1.1.0
+  // configs keep working.
+  mode: z.enum(['single', 'failover', 'deliberate']).optional(),
 });
 
 export type ReviewBridgeConfig = z.infer<typeof ReviewBridgeConfigSchema>;

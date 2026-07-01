@@ -4,6 +4,7 @@ import type { ReviewBackend } from './backend.js';
 import { createCodexBackend } from './codex.js';
 import { createGeminiBackend } from './gemini.js';
 import { createFailoverBackend } from './failover.js';
+import { createDeliberationBackend } from './deliberation.js';
 
 export type { ReviewBackend } from './backend.js';
 
@@ -29,23 +30,28 @@ function createLeafBackend(
   return createCodexBackend(config, copilotInstructions);
 }
 
-// Build the review backend the config selects. When `fallback` is on (default),
-// wrap the configured provider with the other one as a failover secondary so an
-// out-of-usage / unavailable primary transparently retries on the other provider.
+// Build the review backend the config selects. `mode` picks the composition:
+// 'single' = the configured provider only; 'failover' (default) = fall back to
+// the other provider when the primary is out of usage; 'deliberate' = both
+// providers review (plan + code) and the bridge surfaces the agreement map. When
+// `mode` is unset it's derived from the 1.1.0 `fallback` flag for back-compat.
 export function createBackend(
   config: ReviewBridgeConfig,
   copilotInstructions?: CopilotInstructions,
 ): ReviewBackend {
+  const mode = config.mode ?? (config.fallback ? 'failover' : 'single');
   const primary = createLeafBackend(config, copilotInstructions);
-  if (!config.fallback) return primary;
+  if (mode === 'single') return primary;
 
   const secondaryProvider: ReviewProvider = config.provider === 'codex' ? 'gemini' : 'codex';
   // Build the secondary leaf directly (NOT via createBackend — that would recurse
-  // and try to build its own fallback). Clear `model` so a primary-specific pin
+  // and try to build its own composite). Clear `model` so a primary-specific pin
   // (e.g. a Codex model) isn't forced onto the secondary, which resolves its own.
   const secondary = createLeafBackend(
     { ...config, provider: secondaryProvider, model: undefined },
     copilotInstructions,
   );
-  return createFailoverBackend(primary, secondary);
+  return mode === 'deliberate'
+    ? createDeliberationBackend(primary, secondary)
+    : createFailoverBackend(primary, secondary);
 }

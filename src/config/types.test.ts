@@ -115,6 +115,7 @@ describe('ReviewBridgeConfigSchema', () => {
       project_context: 'React SPA with GraphQL backend',
       copilot_instructions: true,
       fallback: false,
+      mode: 'deliberate',
       review_standards: {
         plan_review: {
           focus: ['security', 'scalability'],

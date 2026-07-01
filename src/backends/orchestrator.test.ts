@@ -4,6 +4,7 @@ import { DEFAULT_CONFIG } from '../config/types.js';
 import {
   runPlanReview,
   runCodeReview,
+  runCrossReview,
   type TurnParams,
   type TurnRunner,
   type ReviewFlowDeps,
@@ -229,5 +230,28 @@ describe('orchestrator — resumesAcrossChunks capability (chunked reviews)', ()
     expect(calls[0].sessionId).toBe('prior-phase'); // cross-phase resume on chunk 1 only
     expect(calls.slice(1).every((c) => c.sessionId === undefined)).toBe(true);
     if (res.ok) expect(res.data.session_id).toBe('session-0'); // chunk 1's fresh id
+  });
+});
+
+describe('orchestrator — runCrossReview (deliberate-deep)', () => {
+  const CANNED_CROSS = { adjudications: [{ index: 0, verdict: 'confirmed', reason: 'real' }] };
+  const finding = { severity: 'major', category: 'bugs', file: 'a.ts', line: 5, description: 'off-by-one' };
+
+  it('runs a single turn and returns adjudications with the session_id stripped', async () => {
+    const { turn, calls } = makeFakeTurn(CANNED_CROSS);
+    const res = await runCrossReview({ content: SMALL_DIFF, findings: [finding] }, deps(false), turn);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data).toEqual(CANNED_CROSS);
+    expect(res.data).not.toHaveProperty('session_id'); // cross-review is stateless — no thread leaks out
+    expect(calls).toHaveLength(1);
+    expect(calls[0].prompt).toContain('off-by-one'); // the finding reached the prompt
+    expect(calls[0].prompt).toContain(SMALL_DIFF); // against the real change
+  });
+
+  it('forwards an explicit model pin to the turn', async () => {
+    const { turn, calls } = makeFakeTurn(CANNED_CROSS);
+    await runCrossReview({ content: 'x', findings: [finding], model: 'gpt-5.5' }, deps(false), turn);
+    expect(calls[0].model).toBe('gpt-5.5');
   });
 });

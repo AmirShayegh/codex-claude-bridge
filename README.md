@@ -212,7 +212,7 @@ Create `.reviewbridge.json` in your project root to customize review behavior:
 All fields are optional. Missing fields use the defaults shown above. Large diffs are automatically split into chunks of approximately `max_chunk_tokens` tokens and reviewed sequentially.
 
 - **`provider`** — `"codex"` (default) or `"gemini"`. Selects which backend reviews.
-- **`mode`** — `"failover"` (default), `"single"`, or `"deliberate"`. Picks how the two providers combine; see [Provider failover](#provider-failover) and [Deliberation](#deliberation). When unset it's derived from `fallback`.
+- **`mode`** — `"failover"` (default), `"single"`, `"deliberate"`, or `"deliberate-deep"`. Picks how the two providers combine; see [Provider failover](#provider-failover) and [Deliberation](#deliberation). When unset it's derived from `fallback`.
 - **`fallback`** — `true` (default) auto-fails-over to the other provider when the configured one is out of usage or unavailable. Set `false` (equivalently `"mode": "single"`) for strict single-provider behavior.
 - **`reasoning_effort`** — Codex only. Gemini's effort is baked into its model name (e.g. `"Gemini 3.5 Flash (High)"`), so the field is ignored for Gemini.
 
@@ -294,6 +294,31 @@ Notes:
 - **Cost/egress:** deliberation always runs both providers and sends the diff to both vendors — best for high-stakes reviews, not every precommit. `review_precommit` stays failover under this mode.
 - **Degrades gracefully:** if one provider is out of usage, you get the other's review with `deliberation.degraded` set (it subsumes failover).
 - Resumed sessions (`session_id`) don't deliberate — they continue on the original provider.
+
+### Deliberate-deep (cross-review round)
+
+`"mode": "deliberate-deep"` is deliberation plus one more step: after both providers review, each **divergent** finding (one only one provider flagged) is handed to the **other** provider to adjudicate — confirm it's a real issue, dispute it as a false positive, or mark it unsure. Because providers word findings differently and cite different line numbers, semantically-identical issues often land in `divergent` rather than `agreed`; the cross-review round tells you which of those one-sided findings the other provider actually stands behind.
+
+```json
+{ "provider": "codex", "mode": "deliberate-deep" }
+```
+
+Each divergent item gains an optional `adjudication` (the `agreed` findings and top-level shape are unchanged):
+
+```json
+"divergent": [
+  {
+    "provider": "codex",
+    "finding": { "severity": "major", "category": "Null safety", "file": "src/auth.ts", "line": 5, "description": "…" },
+    "adjudication": { "by": "gemini", "verdict": "confirmed", "reason": "returns undefined for a header with no space" }
+  }
+]
+```
+
+Notes:
+- **`verdict`** is `confirmed` (a real issue), `disputed` (a false positive here), or `unsure` (can't tell from the change). `by` is the provider that adjudicated — always the one that did *not* raise the finding.
+- **Cost:** adds up to two more provider calls per review (one per side that has divergent findings). Skipped entirely when there's nothing divergent.
+- **Best-effort:** if a provider is out of usage or errors during the cross-review round, its side is simply left un-adjudicated — the deliberation result still returns.
 
 ## Storage
 

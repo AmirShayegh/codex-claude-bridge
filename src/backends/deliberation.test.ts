@@ -4,7 +4,9 @@ import { ok, err, ErrorCode } from '../utils/errors.js';
 import type { ReviewBackend } from './backend.js';
 import type { ReviewProvider } from '../config/types.js';
 
-type Methods = Partial<Pick<ReviewBackend, 'reviewPlan' | 'reviewCode' | 'reviewPrecommit'>>;
+type Methods = Partial<
+  Pick<ReviewBackend, 'reviewPlan' | 'reviewCode' | 'reviewPrecommit' | 'crossReview'>
+>;
 function backend(provider: ReviewProvider, methods: Methods = {}): ReviewBackend {
   return {
     provider,
@@ -12,6 +14,7 @@ function backend(provider: ReviewProvider, methods: Methods = {}): ReviewBackend
     reviewPlan: methods.reviewPlan ?? vi.fn(),
     reviewCode: methods.reviewCode ?? vi.fn(),
     reviewPrecommit: methods.reviewPrecommit ?? vi.fn(),
+    ...(methods.crossReview ? { crossReview: methods.crossReview } : {}),
   };
 }
 
@@ -201,5 +204,123 @@ describe('createDeliberationBackend', () => {
       expect(res.data.deliberation?.agreement).toBe('conflict'); // verdicts differ
       expect(res.data.deliberation?.divergent).toHaveLength(1);
     }
+  });
+});
+
+// A mixed code review where each provider flags one one-sided (divergent) finding:
+//   divergent[0] = codex's a.ts:5:bugs  (judged by the gemini secondary)
+//   divergent[1] = gemini's b.ts:2:perf (judged by the codex primary)
+const cross = (verdict: string, reason: string) => ({ adjudications: [{ index: 0, verdict, reason }] });
+function mixedPair(pMethods: Methods = {}, sMethods: Methods = {}) {
+  const primary = backend('codex', {
+    reviewCode: vi.fn().mockResolvedValue(ok(codeResult('request_changes', [f('a.ts', 1, 'security', 'critical'), f('a.ts', 5, 'bugs', 'major')]))),
+    ...pMethods,
+  });
+  const secondary = backend('gemini', {
+    reviewCode: vi.fn().mockResolvedValue(ok(codeResult('request_changes', [f('a.ts', 1, 'security', 'critical'), f('b.ts', 2, 'perf', 'minor')]))),
+    ...sMethods,
+  });
+  return { primary, secondary };
+}
+
+describe('createDeliberationBackend — deliberate-deep (cross-review round)', () => {
+  it('adjudicates each provider\'s divergent findings with the OTHER provider', async () => {
+    const secReview = vi.fn().mockResolvedValue(ok(cross('confirmed', 'yes real'))); // gemini judges codex's finding
+    const priReview = vi.fn().mockResolvedValue(ok(cross('disputed', 'false positive'))); // codex judges gemini's finding
+    const { primary, secondary } = mixedPair({ crossReview: priReview }, { crossReview: secReview });
+
+    const res = await createDeliberationBackend(primary, secondary, { crossReview: true }).reviewCode({ diff: DIFF });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const div = res.data.deliberation?.divergent ?? [];
+    expect(div).toHaveLength(2);
+    // codex's divergent finding, adjudicated by gemini.
+    expect(div[0].provider).toBe('codex');
+    expect(div[0].adjudication).toEqual({ by: 'gemini', verdict: 'confirmed', reason: 'yes real' });
+    // gemini's divergent finding, adjudicated by codex.
+    expect(div[1].provider).toBe('gemini');
+    expect(div[1].adjudication).toEqual({ by: 'codex', verdict: 'disputed', reason: 'false positive' });
+    // Each judge saw the diff and only the OTHER provider's one finding.
+    expect(secReview).toHaveBeenCalledWith(expect.objectContaining({ content: DIFF, findings: [expect.objectContaining({ file: 'a.ts', line: 5 })] }));
+    expect(priReview).toHaveBeenCalledWith(expect.objectContaining({ content: DIFF, findings: [expect.objectContaining({ file: 'b.ts', line: 2 })] }));
+  });
+
+  it('does not cross-review by default (plain deliberate leaves divergent un-adjudicated)', async () => {
+    const secReview = vi.fn();
+    const priReview = vi.fn();
+    const { primary, secondary } = mixedPair({ crossReview: priReview }, { crossReview: secReview });
+
+    const res = await createDeliberationBackend(primary, secondary).reviewCode({ diff: DIFF });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(secReview).not.toHaveBeenCalled();
+    expect(priReview).not.toHaveBeenCalled();
+    expect(res.data.deliberation?.divergent.every((d) => d.adjudication === undefined)).toBe(true);
+  });
+
+  it('is best-effort: a judge without crossReview leaves its side un-adjudicated', async () => {
+    // secondary (gemini) has no crossReview → codex's divergent finding stays bare;
+    // primary (codex) can still adjudicate gemini's finding.
+    const priReview = vi.fn().mockResolvedValue(ok(cross('confirmed', 'real')));
+    const { primary, secondary } = mixedPair({ crossReview: priReview }, {});
+
+    const res = await createDeliberationBackend(primary, secondary, { crossReview: true }).reviewCode({ diff: DIFF });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const div = res.data.deliberation?.divergent ?? [];
+    expect(div[0].adjudication).toBeUndefined(); // gemini couldn't judge
+    expect(div[1].adjudication).toEqual({ by: 'codex', verdict: 'confirmed', reason: 'real' });
+  });
+
+  it('is best-effort: a failed crossReview call leaves those findings un-adjudicated', async () => {
+    const secReview = vi.fn().mockResolvedValue(err(`${ErrorCode.RATE_LIMITED}: out of usage`));
+    const priReview = vi.fn().mockResolvedValue(ok(cross('confirmed', 'real')));
+    const { primary, secondary } = mixedPair({ crossReview: priReview }, { crossReview: secReview });
+
+    const res = await createDeliberationBackend(primary, secondary, { crossReview: true }).reviewCode({ diff: DIFF });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const div = res.data.deliberation?.divergent ?? [];
+    expect(div[0].adjudication).toBeUndefined(); // gemini's call failed
+    expect(div[1].adjudication).toEqual({ by: 'codex', verdict: 'confirmed', reason: 'real' });
+  });
+
+  it('skips cross-review entirely when there are no divergent findings', async () => {
+    const secReview = vi.fn();
+    const priReview = vi.fn();
+    const shared = [f('a.ts', 1, 'security', 'major')];
+    const primary = backend('codex', { reviewCode: vi.fn().mockResolvedValue(ok(codeResult('approve', shared))), crossReview: priReview });
+    const secondary = backend('gemini', { reviewCode: vi.fn().mockResolvedValue(ok(codeResult('approve', [f('a.ts', 1, 'security', 'major')]))), crossReview: secReview });
+
+    const res = await createDeliberationBackend(primary, secondary, { crossReview: true }).reviewCode({ diff: DIFF });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.deliberation?.divergent).toHaveLength(0);
+    expect(secReview).not.toHaveBeenCalled();
+    expect(priReview).not.toHaveBeenCalled();
+  });
+
+  it('cross-reviews plan divergent findings against the plan text', async () => {
+    const planA = { verdict: 'revise', summary: 's', findings: [f('p.ts', 1, 'feasibility', 'major')], session_id: 'a' };
+    const planB = { verdict: 'revise', summary: 's', findings: [f('q.ts', 9, 'security', 'major')], session_id: 'b' };
+    const secReview = vi.fn().mockResolvedValue(ok(cross('confirmed', 'agreed'))); // gemini judges codex's finding
+    const priReview = vi.fn().mockResolvedValue(ok(cross('unsure', 'cannot tell'))); // codex judges gemini's finding
+    const primary = backend('codex', { reviewPlan: vi.fn().mockResolvedValue(ok(planA)), crossReview: priReview });
+    const secondary = backend('gemini', { reviewPlan: vi.fn().mockResolvedValue(ok(planB)), crossReview: secReview });
+
+    const res = await createDeliberationBackend(primary, secondary, { crossReview: true }).reviewPlan({ plan: 'do a thing' });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const div = res.data.deliberation?.divergent ?? [];
+    expect(div).toHaveLength(2);
+    expect(div[0].adjudication).toEqual({ by: 'gemini', verdict: 'confirmed', reason: 'agreed' });
+    expect(div[1].adjudication).toEqual({ by: 'codex', verdict: 'unsure', reason: 'cannot tell' });
+    expect(secReview).toHaveBeenCalledWith(expect.objectContaining({ content: 'do a thing' }));
   });
 });

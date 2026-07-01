@@ -62,10 +62,12 @@ export const ReviewBridgeConfigSchema = z.object({
   // Review mode. 'single' = one provider only; 'failover' = one provider, fall
   // back to the other when it's out of usage (default); 'deliberate' = both
   // providers review (plan + code) and the bridge returns a structured
-  // agreement/disagreement map for the caller to synthesize. Optional — when
-  // unset it's derived from `fallback` (false → single, else failover) so 1.1.0
-  // configs keep working.
-  mode: z.enum(['single', 'failover', 'deliberate']).optional(),
+  // agreement/disagreement map for the caller to synthesize; 'deliberate-deep' =
+  // deliberate plus a cross-review round where each provider adjudicates the
+  // other's divergent findings (confirmed/disputed/unsure). Optional — when unset
+  // it's derived from `fallback` (false → single, else failover) so 1.1.0 configs
+  // keep working.
+  mode: z.enum(['single', 'failover', 'deliberate', 'deliberate-deep']).optional(),
 });
 
 export type ReviewBridgeConfig = z.infer<typeof ReviewBridgeConfigSchema>;

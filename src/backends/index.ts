@@ -33,8 +33,10 @@ function createLeafBackend(
 // Build the review backend the config selects. `mode` picks the composition:
 // 'single' = the configured provider only; 'failover' (default) = fall back to
 // the other provider when the primary is out of usage; 'deliberate' = both
-// providers review (plan + code) and the bridge surfaces the agreement map. When
-// `mode` is unset it's derived from the 1.1.0 `fallback` flag for back-compat.
+// providers review (plan + code) and the bridge surfaces the agreement map;
+// 'deliberate-deep' = deliberate plus a cross-review round where each provider
+// adjudicates the other's divergent findings. When `mode` is unset it's derived
+// from the 1.1.0 `fallback` flag for back-compat.
 export function createBackend(
   config: ReviewBridgeConfig,
   copilotInstructions?: CopilotInstructions,
@@ -51,7 +53,7 @@ export function createBackend(
     { ...config, provider: secondaryProvider, model: undefined },
     copilotInstructions,
   );
-  return mode === 'deliberate'
-    ? createDeliberationBackend(primary, secondary)
-    : createFailoverBackend(primary, secondary);
+  if (mode === 'deliberate') return createDeliberationBackend(primary, secondary);
+  if (mode === 'deliberate-deep') return createDeliberationBackend(primary, secondary, { crossReview: true });
+  return createFailoverBackend(primary, secondary);
 }

@@ -1,5 +1,10 @@
 import type { Result } from '../utils/errors.js';
-import type { PlanReviewResult, CodeReviewResult, PrecommitResult } from '../codex/types.js';
+import type {
+  PlanReviewResult,
+  CodeReviewResult,
+  PrecommitResult,
+  CrossReviewResult,
+} from '../codex/types.js';
 import type { ReviewProvider } from '../config/types.js';
 
 // Input shapes accepted by every review backend. Provider-agnostic — these are
@@ -28,6 +33,23 @@ export interface PrecommitReviewInput {
   model?: string;
 }
 
+// One finding (from another reviewer) to adjudicate in a cross-review round.
+export interface CrossReviewFinding {
+  severity: string;
+  category: string;
+  file: string | null;
+  line: number | null;
+  description: string;
+}
+
+export interface CrossReviewInput {
+  // The diff (code) or plan text under review.
+  content: string;
+  // Findings to adjudicate, in order — the response references them by index.
+  findings: CrossReviewFinding[];
+  model?: string;
+}
+
 // The seam every review provider implements (Codex today, Gemini next).
 // Method signatures are intentionally identical to the original CodexClient
 // interface so the tool and CLI layers are untouched by the multi-provider work.
@@ -43,4 +65,8 @@ export interface ReviewBackend {
   reviewPlan(input: PlanReviewInput): Promise<Result<PlanReviewResult>>;
   reviewCode(input: CodeReviewInput): Promise<Result<CodeReviewResult>>;
   reviewPrecommit(input: PrecommitReviewInput): Promise<Result<PrecommitResult>>;
+  // Optional: adjudicate another reviewer's findings against the same subject
+  // (deliberate-deep's cross-review round). Leaf backends implement it; composites
+  // don't — the deliberation composite calls it on its underlying leaves.
+  crossReview?(input: CrossReviewInput): Promise<Result<CrossReviewResult>>;
 }

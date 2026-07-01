@@ -84,4 +84,11 @@ describe('createBackend — deliberate', () => {
       undefined,
     );
   });
+
+  it("mode 'deliberate-deep' turns on the cross-review round via the composite opts", () => {
+    const backend = createBackend({ ...DEFAULT_CONFIG, provider: 'codex', mode: 'deliberate-deep' });
+    expect(createDeliberationBackend).toHaveBeenCalledWith(codexStub, geminiStub, { crossReview: true });
+    expect(createFailoverBackend).not.toHaveBeenCalled();
+    expect(backend).toBe(deliberationStub);
+  });
 });

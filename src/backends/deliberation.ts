@@ -223,10 +223,69 @@ function errOf<T>(r: Result<T>): string {
   return r.ok ? '' : r.error;
 }
 
+// --- Cross-review round (deliberate-deep) ---
+
+type Adjudication = { by: ReviewProvider; verdict: 'confirmed' | 'disputed' | 'unsure'; reason: string };
+type CrossFinding = AnyFinding & { description: string };
+
+// Ask `judge` to adjudicate `findings` (from the other provider) against the
+// change. Returns adjudications aligned to `findings` (undefined where none).
+// Best-effort: a missing capability or a failed call leaves findings un-adjudicated.
+async function runAdjudicate(
+  judge: ReviewBackend,
+  content: string,
+  findings: CrossFinding[],
+): Promise<(Adjudication | undefined)[]> {
+  const out: (Adjudication | undefined)[] = new Array(findings.length).fill(undefined);
+  if (findings.length === 0 || !judge.crossReview) return out;
+  const res = await judge.crossReview({
+    content,
+    findings: findings.map((f) => ({
+      severity: f.severity,
+      category: f.category,
+      file: f.file,
+      line: f.line,
+      description: f.description,
+    })),
+  });
+  if (!res.ok) return out;
+  for (const a of res.data.adjudications) {
+    if (a.index >= 0 && a.index < findings.length) {
+      out[a.index] = { by: judge.provider, verdict: a.verdict, reason: a.reason };
+    }
+  }
+  return out;
+}
+
+// Each provider's divergent findings are adjudicated by the OTHER provider (in
+// parallel). Returns adjudications aligned to the input `divergent` order.
+async function adjudicateDivergent(
+  divergent: { provider: ReviewProvider; finding: CrossFinding }[],
+  content: string,
+  primary: ReviewBackend,
+  secondary: ReviewBackend,
+): Promise<(Adjudication | undefined)[]> {
+  const byPrimary = divergent.filter((d) => d.provider === primary.provider);
+  const bySecondary = divergent.filter((d) => d.provider === secondary.provider);
+  const [secAdj, priAdj] = await Promise.all([
+    runAdjudicate(secondary, content, byPrimary.map((d) => d.finding)),
+    runAdjudicate(primary, content, bySecondary.map((d) => d.finding)),
+  ]);
+  const out: (Adjudication | undefined)[] = new Array(divergent.length).fill(undefined);
+  let si = 0;
+  let pi = 0;
+  for (let i = 0; i < divergent.length; i++) {
+    if (divergent[i].provider === primary.provider) out[i] = secAdj[si++];
+    else if (divergent[i].provider === secondary.provider) out[i] = priAdj[pi++];
+  }
+  return out;
+}
+
 async function deliberatePlan(
   primary: ReviewBackend,
   secondary: ReviewBackend,
   input: PlanReviewInput,
+  crossReview: boolean,
 ): Promise<Result<PlanReviewResult>> {
   // A resumed session belongs to one provider — can't deliberate it. Fall through
   // to failover (delegates to the primary; the cross-provider guard handles it).
@@ -236,7 +295,19 @@ async function deliberatePlan(
     primary.reviewPlan(input),
     secondary.reviewPlan({ ...input, model: undefined }),
   ]);
-  if (ra.ok && rb.ok) return ok(combinePlan(primary.provider, ra.data, secondary.provider, rb.data));
+  if (ra.ok && rb.ok) {
+    const combined = combinePlan(primary.provider, ra.data, secondary.provider, rb.data);
+    const dl = combined.deliberation;
+    if (!crossReview || !dl || dl.divergent.length === 0) return ok(combined);
+    const adjs = await adjudicateDivergent(dl.divergent, input.plan, primary, secondary);
+    return ok({
+      ...combined,
+      deliberation: {
+        ...dl,
+        divergent: dl.divergent.map((d, i) => (adjs[i] ? { ...d, adjudication: adjs[i] } : d)),
+      },
+    });
+  }
   if (ra.ok) return ok(degradePlan(primary.provider, ra.data, secondary.provider, errOf(rb)));
   if (rb.ok) return ok(degradePlan(secondary.provider, rb.data, primary.provider, errOf(ra)));
   return err<PlanReviewResult>(bothFailed(errOf(ra), secondary.provider, errOf(rb)));
@@ -246,6 +317,7 @@ async function deliberateCode(
   primary: ReviewBackend,
   secondary: ReviewBackend,
   input: CodeReviewInput,
+  crossReview: boolean,
 ): Promise<Result<CodeReviewResult>> {
   if (input.session_id) return withFailover(primary, secondary, input, (b, i) => b.reviewCode(i));
 
@@ -253,7 +325,19 @@ async function deliberateCode(
     primary.reviewCode(input),
     secondary.reviewCode({ ...input, model: undefined }),
   ]);
-  if (ra.ok && rb.ok) return ok(combineCode(primary.provider, ra.data, secondary.provider, rb.data));
+  if (ra.ok && rb.ok) {
+    const combined = combineCode(primary.provider, ra.data, secondary.provider, rb.data);
+    const dl = combined.deliberation;
+    if (!crossReview || !dl || dl.divergent.length === 0) return ok(combined);
+    const adjs = await adjudicateDivergent(dl.divergent, input.diff, primary, secondary);
+    return ok({
+      ...combined,
+      deliberation: {
+        ...dl,
+        divergent: dl.divergent.map((d, i) => (adjs[i] ? { ...d, adjudication: adjs[i] } : d)),
+      },
+    });
+  }
   if (ra.ok) return ok(degradeCode(primary.provider, ra.data, secondary.provider, errOf(rb)));
   if (rb.ok) return ok(degradeCode(secondary.provider, rb.data, primary.provider, errOf(ra)));
   return err<CodeReviewResult>(bothFailed(errOf(ra), secondary.provider, errOf(rb)));
@@ -262,14 +346,18 @@ async function deliberateCode(
 export function createDeliberationBackend(
   primary: ReviewBackend,
   secondary: ReviewBackend,
+  opts: { crossReview?: boolean } = {},
 ): ReviewBackend {
+  // deliberate-deep: after each provider reviews independently, the OTHER
+  // provider adjudicates its divergent findings (confirmed/disputed/unsure).
+  const crossReview = opts.crossReview ?? false;
   return {
     // Presents as the primary: resumes route to it, and the tool's cross-provider
     // guard + session_id/model gate key off these.
     provider: primary.provider,
     allowsModelOverrideOnResume: primary.allowsModelOverrideOnResume,
-    reviewPlan: (input: PlanReviewInput) => deliberatePlan(primary, secondary, input),
-    reviewCode: (input: CodeReviewInput) => deliberateCode(primary, secondary, input),
+    reviewPlan: (input: PlanReviewInput) => deliberatePlan(primary, secondary, input, crossReview),
+    reviewCode: (input: CodeReviewInput) => deliberateCode(primary, secondary, input, crossReview),
     // Precommit stays failover — it runs constantly and is latency-sensitive.
     reviewPrecommit: (input: PrecommitReviewInput) =>
       withFailover(primary, secondary, input, (b, i) => b.reviewPrecommit(i)),

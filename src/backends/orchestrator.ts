@@ -6,12 +6,14 @@ import {
   PlanReviewResultSchema,
   CodeReviewResultSchema,
   PrecommitResultSchema,
+  CrossReviewResultSchema,
   CodeFindingSeveritySchema,
 } from '../codex/types.js';
 import type {
   PlanReviewResult,
   CodeReviewResult,
   PrecommitResult,
+  CrossReviewResult,
   CodeFinding,
   CodeFindingSeverity,
 } from '../codex/types.js';
@@ -19,6 +21,7 @@ import {
   buildPlanReviewPrompt,
   buildCodeReviewPrompt,
   buildPrecommitPrompt,
+  buildCrossReviewPrompt,
 } from '../codex/prompts.js';
 import type { ReviewBridgeConfig } from '../config/types.js';
 import { chunkDiff, estimateTokens } from '../utils/chunking.js';
@@ -29,6 +32,7 @@ import type {
   PlanReviewInput,
   CodeReviewInput,
   PrecommitReviewInput,
+  CrossReviewInput,
 } from './backend.js';
 
 // Provider-agnostic review orchestration shared by every backend. Carries no
@@ -455,4 +459,24 @@ export async function runPrecommitReview(
 
   const finalSessionId = resumesAcrossChunks ? threaded : reviewSessionId;
   return ok(mergePrecommitResults(chunkResults, finalSessionId!));
+}
+
+// Cross-review (deliberate-deep): adjudicate another reviewer's findings in a
+// single stateless structured-output turn. Returns just the adjudications — the
+// session id the turn produces is irrelevant for a one-shot cross-review.
+export async function runCrossReview(
+  input: CrossReviewInput,
+  deps: ReviewFlowDeps,
+  turn: TurnRunner,
+): Promise<Result<CrossReviewResult>> {
+  const resolved = await resolveModelLogged(deps.resolveModel, input.model ?? deps.config.model);
+  const result = await turn<CrossReviewResult>({
+    prompt: buildCrossReviewPrompt(input),
+    responseSchema: CrossReviewResultSchema,
+    model: perTurnModel(resolved, undefined, deps.allowsModelOverrideOnResume),
+    resolvedModel: resolved,
+  });
+  if (!result.ok) return result;
+  const { session_id: _sessionId, ...data } = result.data;
+  return ok(data);
 }

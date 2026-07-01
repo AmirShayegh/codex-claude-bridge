@@ -223,6 +223,48 @@ export function buildCodeReviewPrompt(
   return sections.join('\n\n');
 }
 
+// Cross-review (deliberate-deep): ask a provider to adjudicate another reviewer's
+// findings against the same change — confirm real issues, dispute false positives.
+export function buildCrossReviewPrompt(input: {
+  content: string;
+  findings: { severity: string; category: string; file: string | null; line: number | null; description: string }[];
+}): string {
+  const sections: string[] = [
+    'You are a senior software engineer giving an independent second opinion. Another reviewer flagged ' +
+      'the findings below on this change. For EACH finding, judge whether it is a genuine issue in the ' +
+      'change shown — do not defer to the other reviewer.',
+  ];
+
+  const d = makeDelimiter('SUBJECT', input.content);
+  sections.push(`The change under review:\n${d.open}\n${input.content}\n${d.close}`);
+
+  const list = input.findings
+    .map(
+      (f, i) =>
+        `${i}. [${f.severity}] ${f.file ?? '(no file)'}:${f.line ?? '?'} (${f.category}) — ${f.description}`,
+    )
+    .join('\n');
+  sections.push(`Findings to adjudicate (referenced by index):\n${list}`);
+
+  sections.push(
+    'For each finding decide:\n' +
+      '- "confirmed": a real issue in this change.\n' +
+      '- "disputed": not a real issue here (a false positive) — say why.\n' +
+      '- "unsure": can\'t tell from the change shown.\n\n' +
+      'Respond with a JSON object:\n' +
+      '{\n' +
+      '  "adjudications": [{\n' +
+      '    "index": number,\n' +
+      '    "verdict": "confirmed" | "disputed" | "unsure",\n' +
+      '    "reason": "string"\n' +
+      '  }]\n' +
+      '}\n\n' +
+      'Return exactly one adjudication per finding, and respond with ONLY the JSON object.',
+  );
+
+  return sections.join('\n\n');
+}
+
 export function buildPrecommitPrompt(
   input: {
     diff: string;

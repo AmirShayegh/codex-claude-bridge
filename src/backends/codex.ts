@@ -2,7 +2,12 @@ import { Codex } from '@openai/codex-sdk';
 import { toJSONSchema } from 'zod';
 import { ok, err, ErrorCode } from '../utils/errors.js';
 import type { Result } from '../utils/errors.js';
-import type { PlanReviewResult, CodeReviewResult, PrecommitResult } from '../codex/types.js';
+import type {
+  PlanReviewResult,
+  CodeReviewResult,
+  PrecommitResult,
+  CrossReviewResult,
+} from '../codex/types.js';
 import type { ReviewBridgeConfig } from '../config/types.js';
 import { estimateTokens } from '../utils/chunking.js';
 import type { CopilotInstructions } from '../config/copilot-instructions.js';
@@ -11,6 +16,7 @@ import {
   runPlanReview,
   runCodeReview,
   runPrecommitReview,
+  runCrossReview,
   type TurnParams,
   type TurnRunner,
 } from './orchestrator.js';
@@ -207,6 +213,7 @@ export function createCodexBackend(
       reviewPlan: () => Promise.resolve(err<PlanReviewResult>(errorMsg)),
       reviewCode: () => Promise.resolve(err<CodeReviewResult>(errorMsg)),
       reviewPrecommit: () => Promise.resolve(err<PrecommitResult>(errorMsg)),
+      crossReview: () => Promise.resolve(err<CrossReviewResult>(errorMsg)),
     };
   }
 
@@ -234,5 +241,6 @@ export function createCodexBackend(
     reviewPlan: (input) => runPlanReview(input, deps, turn),
     reviewCode: (input) => runCodeReview(input, deps, turn),
     reviewPrecommit: (input) => runPrecommitReview(input, deps, turn),
+    crossReview: (input) => runCrossReview(input, deps, turn),
   };
 }

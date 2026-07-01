@@ -62,7 +62,21 @@ function deliberationSchema<F extends z.ZodTypeAny>(findingSchema: F) {
       verdicts: z.array(z.object({ provider: ReviewProviderEnum, verdict: z.string() })),
       agreement: z.enum(['agree', 'mixed', 'conflict']),
       agreed: z.array(findingSchema),
-      divergent: z.array(z.object({ provider: ReviewProviderEnum, finding: findingSchema })),
+      divergent: z.array(
+        z.object({
+          provider: ReviewProviderEnum,
+          finding: findingSchema,
+          // Present under `deliberate-deep`: the OTHER provider's adjudication of
+          // this one-sided finding after a cross-review round.
+          adjudication: z
+            .object({
+              by: ReviewProviderEnum,
+              verdict: z.enum(['confirmed', 'disputed', 'unsure']),
+              reason: z.string(),
+            })
+            .optional(),
+        }),
+      ),
       degraded: z.object({ failed: ReviewProviderEnum, reason: z.string() }).optional(),
     })
     .optional();
@@ -96,6 +110,18 @@ export const PrecommitResultSchema = z.object({
   provider: ServingProviderSchema,
 });
 
+// Cross-review (deliberate-deep): a provider's adjudication of another reviewer's
+// findings. `index` refers to the position of the finding in the input list.
+export const CrossReviewResultSchema = z.object({
+  adjudications: z.array(
+    z.object({
+      index: z.number().int(),
+      verdict: z.enum(['confirmed', 'disputed', 'unsure']),
+      reason: z.string(),
+    }),
+  ),
+});
+
 export const ReviewStatusSchema = z.object({
   status: z.enum(['in_progress', 'completed', 'failed', 'not_found']),
   session_id: z.string(),
@@ -126,6 +152,7 @@ export type ReviewFinding = z.infer<typeof ReviewFindingSchema>;
 export type PlanReviewResult = z.infer<typeof PlanReviewResultSchema>;
 export type CodeReviewResult = z.infer<typeof CodeReviewResultSchema>;
 export type PrecommitResult = z.infer<typeof PrecommitResultSchema>;
+export type CrossReviewResult = z.infer<typeof CrossReviewResultSchema>;
 export type ReviewStatus = z.infer<typeof ReviewStatusSchema>;
 export type Verdict = z.infer<typeof VerdictSchema>;
 export type ReviewHistoryEntry = z.infer<typeof ReviewHistoryEntrySchema>;

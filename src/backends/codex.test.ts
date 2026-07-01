@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createCodexBackend } from './codex.js';
 import { looksLikeDiff } from './orchestrator.js';
+import { ErrorCode } from '../utils/errors.js';
 import type { ReviewBridgeConfig } from '../config/types.js';
 import { DEFAULT_CONFIG } from '../config/types.js';
 
@@ -202,6 +203,32 @@ describe('codex binary override (codex_path)', () => {
   it('passes codexPathOverride: undefined (SDK uses its bundled binary) when neither is set', () => {
     createCodexBackend(config);
     expect(mockConstructorOptions).toEqual({ codexPathOverride: undefined });
+  });
+});
+
+describe('provider unavailable (binary missing / killed / quarantined)', () => {
+  it('classifies a constructor "unable to locate codex" as PROVIDER_UNAVAILABLE', async () => {
+    mockConstructorThrow = new Error('Unable to locate Codex CLI binaries. Ensure @openai/codex is installed.');
+    const res = await createCodexBackend(config).reviewPlan({ plan: 'x' });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain(ErrorCode.PROVIDER_UNAVAILABLE);
+  });
+
+  it('classifies a spawn ENOENT (binary trashed) as PROVIDER_UNAVAILABLE', async () => {
+    mockRun.mockRejectedValue(Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' }));
+    const res = await createCodexBackend(config).reviewPlan({ plan: 'x' });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain(ErrorCode.PROVIDER_UNAVAILABLE);
+  });
+
+  it('classifies a SIGKILL as PROVIDER_UNAVAILABLE, not REVIEW_TIMEOUT', async () => {
+    mockRun.mockRejectedValue(new Error('codex process was killed with signal SIGKILL'));
+    const res = await createCodexBackend(config).reviewPlan({ plan: 'x' });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error).toContain(ErrorCode.PROVIDER_UNAVAILABLE);
+      expect(res.error).not.toContain(ErrorCode.REVIEW_TIMEOUT);
+    }
   });
 });
 

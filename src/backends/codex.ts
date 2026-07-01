@@ -92,6 +92,27 @@ export function classifyError(
     };
   }
 
+  // Binary/process couldn't run: missing (ENOENT / "spawn codex" / findCodexPath's
+  // "Unable to locate Codex CLI binaries") or killed on spawn (SIGKILL/signal) —
+  // e.g. macOS XProtect quarantining the bundled binary. Not a model/auth/rate
+  // fault; the provider never started, so this is failover-eligible.
+  if (
+    lower.includes('enoent') ||
+    lower.includes('spawn codex') ||
+    lower.includes('unable to locate codex') ||
+    lower.includes('sigkill') ||
+    lower.includes('was killed') ||
+    lower.includes('killed with signal')
+  ) {
+    return {
+      code: ErrorCode.PROVIDER_UNAVAILABLE,
+      message:
+        'The codex binary could not be run — it is missing, was killed, or was quarantined ' +
+        '(macOS may flag it as malware and move it to Trash). Set "codex_path" (or the CODEX_PATH env) ' +
+        'to a working codex, reinstall it, or switch to the Gemini backend ("provider": "gemini").',
+    };
+  }
+
   // Network
   if (lower.includes('fetch failed') || lower.includes('econnrefused') || lower.includes('enotfound')) {
     return {

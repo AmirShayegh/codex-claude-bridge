@@ -10,6 +10,10 @@ export enum ErrorCode {
   MODEL_ERROR = 'MODEL_ERROR',
   RATE_LIMITED = 'RATE_LIMITED',
   NETWORK_ERROR = 'NETWORK_ERROR',
+  // The provider's binary/process couldn't run at all — missing, killed, or
+  // quarantined (e.g. macOS XProtect trashing the codex binary). Distinct from a
+  // model/auth/rate error: the provider never started, so it's failover-eligible.
+  PROVIDER_UNAVAILABLE = 'PROVIDER_UNAVAILABLE',
   INVALID_INPUT = 'INVALID_INPUT',
   UNKNOWN_ERROR = 'UNKNOWN_ERROR',
 }

@@ -21,6 +21,9 @@ const FAILOVER_ELIGIBLE: ErrorCode[] = [
   ErrorCode.RATE_LIMITED,
   ErrorCode.MODEL_ERROR,
   ErrorCode.AUTH_ERROR,
+  // The provider's binary couldn't run at all (missing/killed/quarantined) — the
+  // clearest case for trying the other provider instead of hard-failing.
+  ErrorCode.PROVIDER_UNAVAILABLE,
 ];
 
 export function isFailoverEligible(error: string): boolean {

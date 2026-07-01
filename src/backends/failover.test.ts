@@ -31,6 +31,8 @@ describe('isFailoverEligible', () => {
     expect(isFailoverEligible(`${ErrorCode.RATE_LIMITED}: x`)).toBe(true);
     expect(isFailoverEligible(`${ErrorCode.MODEL_ERROR}: x`)).toBe(true);
     expect(isFailoverEligible(`${ErrorCode.AUTH_ERROR}: x`)).toBe(true);
+    // A dead/missing/quarantined provider binary is the clearest failover case.
+    expect(isFailoverEligible(`${ErrorCode.PROVIDER_UNAVAILABLE}: x`)).toBe(true);
   });
 
   it('does not match codes where the model worked or the input was bad', () => {
@@ -52,6 +54,20 @@ describe('createFailoverBackend', () => {
 
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.data.provider).toBe('gemini');
+    expect(secReview).toHaveBeenCalledOnce();
+  });
+
+  it('fails over to the secondary when the primary binary is unavailable (killed/quarantined)', async () => {
+    const secReview = vi.fn().mockResolvedValue(ok(CODE_OK));
+    const primary = backend('codex', {
+      reviewCode: vi.fn().mockResolvedValue(err(`${ErrorCode.PROVIDER_UNAVAILABLE}: codex binary was killed`)),
+    });
+    const res = await createFailoverBackend(primary, backend('gemini', { reviewCode: secReview })).reviewCode({
+      diff: DIFF,
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.data.provider).toBe('gemini'); // degraded to the working provider
     expect(secReview).toHaveBeenCalledOnce();
   });
 

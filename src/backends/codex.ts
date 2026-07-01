@@ -107,25 +107,32 @@ export function classifyError(
 // is set. The backend owns this default — the config schema no longer supplies one.
 const CODEX_DEFAULT_MODEL = 'gpt-5.5';
 
-function threadOpts(config: ReviewBridgeConfig, modelOverride?: string) {
+// Thread options shared by the start and resume paths. The model is handled by
+// the two wrappers below: a fresh start always sets it (the orchestrator
+// resolves a concrete model for every start — see startThreadOpts), while the
+// resume path deliberately omits it. The SDK forwards `--model` to `codex exec`
+// unconditionally whenever the field is present (see
+// @openai/codex-sdk/dist/index.js:170), which would reassert a model on resume
+// and either break a thread created with an override or fail auth on
+// ChatGPT-tier Codex if the new model isn't available there. A resumed thread
+// keeps whatever model it was started with.
+function baseThreadOpts(config: ReviewBridgeConfig) {
   return {
-    model: modelOverride ?? config.model ?? CODEX_DEFAULT_MODEL,
     sandboxMode: 'read-only' as const,
     skipGitRepoCheck: true,
     modelReasoningEffort: config.reasoning_effort,
   };
 }
 
-// Resume-path options deliberately omit `model`. The SDK forwards `--model`
-// to `codex exec` unconditionally whenever the field is present (see
-// @openai/codex-sdk/dist/index.js:170), which would reassert a model on
-// resume and either break a thread that was created with an override or
-// fail auth on ChatGPT-tier Codex if the new model isn't available there.
-// The resumed thread keeps whatever model it was started with.
-// ESLint config permits `_`-prefixed unused vars (eslint.config.js).
+// A fresh thread always starts on a resolved model (the orchestrator resolves
+// one — an explicit pin, config.model, or CODEX_DEFAULT_MODEL — before every
+// start), so it's a required argument here rather than a defaulted fallback.
+function startThreadOpts(config: ReviewBridgeConfig, model: string) {
+  return { model, ...baseThreadOpts(config) };
+}
+
 function resumeThreadOpts(config: ReviewBridgeConfig) {
-  const { model: _model, ...rest } = threadOpts(config);
-  return rest;
+  return baseThreadOpts(config);
 }
 
 // Codex implementation of the orchestrator's TurnRunner: create or resume a
@@ -139,7 +146,7 @@ async function runReview<T extends Record<string, unknown>>(
   try {
     thread = sessionId
       ? codex.resumeThread(sessionId, resumeThreadOpts(config))
-      : codex.startThread(threadOpts(config, model));
+      : codex.startThread(startThreadOpts(config, model ?? resolvedModel));
   } catch (e: unknown) {
     if (sessionId) {
       const msg = e instanceof Error ? e.message : String(e);

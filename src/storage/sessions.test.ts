@@ -269,6 +269,31 @@ describe('provider provenance', () => {
     };
     expect(row.provider).toBeNull();
   });
+
+  it('backfills a POPULATED old-schema table: pre-existing rows survive with provider NULL', () => {
+    // The existing migration test adds the column to an empty table. This one
+    // proves the ADD COLUMN backfill also runs on a table that already holds
+    // rows (real upgrades migrate populated DBs, not fresh ones).
+    const oldDb = new Database(':memory:');
+    oldDb.exec(`
+      CREATE TABLE sessions (
+        session_id TEXT PRIMARY KEY,
+        status TEXT NOT NULL DEFAULT 'in_progress',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        completed_at TEXT
+      )
+    `);
+    oldDb.prepare("INSERT INTO sessions (session_id, status) VALUES (?, 'completed')").run('legacy-1');
+
+    expect(() => initSessionsDb(oldDb)).not.toThrow();
+
+    const row = oldDb
+      .prepare('SELECT session_id, status, provider FROM sessions WHERE session_id = ?')
+      .get('legacy-1') as { session_id: string; status: string; provider: string | null };
+    expect(row.session_id).toBe('legacy-1'); // row survived the migration
+    expect(row.status).toBe('completed'); // pre-existing data intact
+    expect(row.provider).toBeNull(); // new column backfilled to NULL
+  });
 });
 
 describe('getSession', () => {

@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import { z } from 'zod';
 import Database from 'better-sqlite3';
 import { initDb, saveReview, getReviewsBySession, getRecentReviews } from './reviews.js';
 import { initSessionsDb, getOrCreateSession } from './sessions.js';
+import { ReviewHistoryEntrySchema } from '../codex/types.js';
 
 let db: InstanceType<typeof Database>;
 
@@ -210,6 +212,40 @@ describe('provider provenance in history', () => {
     if (result.ok) {
       expect(result.data).toHaveLength(1);
       expect(result.data[0].provider).toBeNull();
+    }
+  });
+});
+
+// The history getters cast raw DB rows to ReviewHistoryEntry[] with no runtime
+// check. These tests assert the rows the queries actually return DO satisfy the
+// schema — a guard against the SELECT columns drifting from the type — across
+// both a provider-tagged row and a legacy NULL-provider row.
+describe('history rows satisfy ReviewHistoryEntrySchema', () => {
+  it('getRecentReviews returns rows that parse (tagged + legacy)', () => {
+    getOrCreateSession(db, 'thread_tagged', 'gemini');
+    saveReview(db, { session_id: 'thread_tagged', type: 'code', verdict: 'approve', summary: 'tagged', findings_json: '[]' });
+    // No session row → provider joins as NULL (legacy).
+    saveReview(db, { session_id: 'orphan', type: 'plan', verdict: 'approve', summary: 'legacy', findings_json: '[]' });
+
+    const result = getRecentReviews(db, 10);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const parsed = z.array(ReviewHistoryEntrySchema).safeParse(result.data);
+      expect(parsed.success).toBe(true);
+      const providers = result.data.map((r) => r.provider);
+      expect(providers).toContain('gemini'); // tagged row
+      expect(providers).toContain(null); // legacy row
+    }
+  });
+
+  it('getReviewsBySession returns rows that parse', () => {
+    getOrCreateSession(db, 'thread_s', 'codex');
+    saveReview(db, { session_id: 'thread_s', type: 'precommit', verdict: 'approve', summary: 's', findings_json: '[]' });
+
+    const result = getReviewsBySession(db, 'thread_s');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(z.array(ReviewHistoryEntrySchema).safeParse(result.data).success).toBe(true);
     }
   });
 });

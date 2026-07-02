@@ -14,9 +14,9 @@
   "relatedTickets": [
     "T-031"
   ],
-  "resolution": null,
-  "resolvedDate": null,
+  "resolution": "Resolved by T-031 (commit b434a4f). Audited every review_standards field against its consumers. (1) Removed review_standards.code_review.max_file_size — it had zero consumers anywhere; chunking (max_chunk_tokens) superseded it. Non-strict parsing means existing configs with the key still load. (2) Wired review_standards.precommit.auto_diff — the precommit tool now falls back to it (args.auto_diff ?? config.review_standards.precommit.auto_diff) and the CLI gained --auto-diff/--no-auto-diff (precedence explicit --diff > flag > config); effective default unchanged. (3) The loader now WARNS (stderr, never rejects, no .strict()) on unrecognized keys at every level via a guarded plain-object descent, so a stale field surfaces instead of being an invisible no-op. The full field->consumer audit table is in the commit message. All other fields confirmed consumed. 8 new tests; full gate green. (Housekeeping: the ticket commit said 'Resolves ISS-004' but the issue status was not flipped at the time — closing it now.)",
+  "resolvedDate": "2026-07-01",
   "severity": "medium",
-  "status": "open",
+  "status": "resolved",
   "title": "Config no-op fields: schema accepts settings that nothing reads"
 }

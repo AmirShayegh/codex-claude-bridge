@@ -197,8 +197,7 @@ Create `.reviewbridge.json` in your project root to customize review behavior:
     },
     "code_review": {
       "criteria": ["bugs", "security", "performance", "style"],
-      "require_tests": true,
-      "max_file_size": 500
+      "require_tests": true
     },
     "precommit": {
       "auto_diff": true,
@@ -215,6 +214,7 @@ All fields are optional. Missing fields use the defaults shown above. Large diff
 - **`mode`** — `"failover"` (default), `"single"`, `"deliberate"`, or `"deliberate-deep"`. Picks how the two providers combine; see [Provider failover](#provider-failover) and [Deliberation](#deliberation). When unset it's derived from `fallback`.
 - **`fallback`** — `true` (default) auto-fails-over to the other provider when the configured one is out of usage or unavailable. Set `false` (equivalently `"mode": "single"`) for strict single-provider behavior.
 - **`reasoning_effort`** — Codex only. Gemini's effort is baked into its model name (e.g. `"Gemini 3.5 Flash (High)"`), so the field is ignored for Gemini.
+- **`codex_path`** — absolute path to a codex binary for the Codex SDK to spawn (the `CODEX_PATH` env var works too; the config field wins). Normally unnecessary: when unset, the SDK uses its own bundled binary, and if that binary can't run the bridge **auto-discovers** a working system codex from your PATH and the usual install locations (`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`), retries, and logs the substitution on stderr. Set it explicitly to pin a specific binary — an explicit path disables auto-discovery entirely.
 
 ### Where the config is discovered
 
@@ -343,6 +343,7 @@ Error codes are provider-neutral. With `fallback` on (default), many of these au
 | `AUTH_ERROR: agy is not authenticated` (Gemini) | Run `agy` once to sign in with your Google account (AI Pro), then retry. |
 | `CONFIG_ERROR: 'agy' ... not found on PATH` (Gemini) | Install the Antigravity `agy` CLI and sign in, or set `"provider": "codex"`. |
 | `MODEL_ERROR: Model "X" is not supported` | Try a different model, switch `"provider"`, or (Codex) use API-key auth. For Gemini, run `agy models` for valid ids. |
+| `PROVIDER_UNAVAILABLE: The codex binary could not be run` | On macOS, XProtect can false-positively quarantine the SDK's **bundled** codex binary. The bridge auto-discovers a working system codex (PATH, `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`) and retries; the stderr log names the binary it picked. If nothing is found, install the Codex CLI (`codex login` machine) or set `"codex_path"` to a working binary. |
 | `RATE_LIMITED` (rate limit or usage cap) | Wait and retry, or rely on failover to the other provider. |
 | `NETWORK_ERROR` | Check your internet connection. |
 | `PROVIDER_MISMATCH` | The `session_id` was created by a different provider. Start a new session, or switch `"provider"` back to continue it. |

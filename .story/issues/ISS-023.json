@@ -1,0 +1,20 @@
+{
+  "components": [
+    "backends",
+    "composite"
+  ],
+  "discoveredDate": "2026-07-02",
+  "id": "ISS-023",
+  "impact": "Surfaced 2026-07-01 by the ISS-021 live probe: a single-mode CLI review returned JSON with review_mode:'single' but provider:undefined. The *ReviewResultSchema types declare provider (ServingProviderSchema) as required, but only the two-provider paths ever stamp it — failover/deliberation add it via tag()/combine, while withSingleMode (src/backends/composite.ts) stamps review_mode only, and the leaf's raw result cannot contain provider because the model-facing response schema deliberately omits it (backend-stamped field). Pre-existing: the pre-T-028 direct-leaf single path had the same gap. Impact is cosmetic-to-minor (in single mode the provider is unambiguous), but it is a type-vs-runtime mismatch: consumers reading result.provider (history tooling, formatters, downstream JSON consumers) see undefined in one mode only, and the sessions db recordSuccess falls back to the tracker's configured provider so storage is unaffected. FIX: have withSingleMode stamp provider: primary.provider onto results alongside review_mode (2 lines + a test), or stamp at the leaf. Verify review_history rows for single-mode reviews while at it.",
+  "location": [
+    "src/backends/composite.ts:64",
+    "src/backends/failover.ts"
+  ],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": null,
+  "resolvedDate": null,
+  "severity": "low",
+  "status": "open",
+  "title": "Single-mode results omit the `provider` field the result type declares required"
+}

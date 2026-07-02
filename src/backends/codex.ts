@@ -1,5 +1,6 @@
 import { Codex } from '@openai/codex-sdk';
 import { toJSONSchema } from 'zod';
+import { discoverCodexBinary } from './codex-binary.js';
 import { ok, err, ErrorCode } from '../utils/errors.js';
 import type { Result } from '../utils/errors.js';
 import type {
@@ -279,8 +280,49 @@ export function createCodexBackend(
     };
   }
 
-  const turn: TurnRunner = <T extends Record<string, unknown>>(params: TurnParams) =>
-    runReview<T>({ ...params, codex, config });
+  // ISS-021: the SDK spawns its OWN bundled codex binary, which macOS XProtect
+  // false-positively quarantines — so a fresh install fails PROVIDER_UNAVAILABLE
+  // even when a working system codex exists. When the caller set NO explicit
+  // override, discover that system binary once and retry through the SDK's
+  // codexPathOverride. An explicit codex_path/CODEX_PATH always wins and fully
+  // disables discovery — never second-guess the user's pin.
+  // Memoized as a shared promise so concurrent reviews that all hit the dead
+  // binary await ONE discovery and all benefit from the swap, instead of the
+  // losers bailing out while the winner recovers. Never rejects: any unexpected
+  // throw inside discovery resolves to 'not-found' so the Result contract holds.
+  let recovery: Promise<'recovered' | 'not-found'> | undefined;
+  const recoverWithSystemCodex = (): Promise<'recovered' | 'not-found' | 'skipped'> => {
+    if (codexPathOverride) return Promise.resolve('skipped');
+    recovery ??= (async () => {
+      try {
+        const found = await discoverCodexBinary();
+        if (!found) return 'not-found';
+        codex = new Codex({ codexPathOverride: found });
+        console.error(
+          `[codex-bridge] bundled codex binary is unusable (macOS XProtect may have quarantined it); ` +
+            `using discovered ${found}. Pin it explicitly with "codex_path" in .reviewbridge.json to silence this.`,
+        );
+        return 'recovered';
+      } catch {
+        return 'not-found';
+      }
+    })();
+    return recovery;
+  };
+
+  const turn: TurnRunner = async <T extends Record<string, unknown>>(params: TurnParams) => {
+    const result = await runReview<T>({ ...params, codex, config });
+    if (result.ok || !result.error.startsWith(ErrorCode.PROVIDER_UNAVAILABLE)) return result;
+    const outcome = await recoverWithSystemCodex();
+    // `codex` was rebound to the discovered binary — rebuild params from it.
+    if (outcome === 'recovered') return runReview<T>({ ...params, codex, config });
+    if (outcome === 'not-found') {
+      return err(
+        `${result.error} (auto-discovery: no working system codex found on PATH or in known install locations)`,
+      );
+    }
+    return result;
+  };
   // Codex's SDK reasserts --model on resume, so the model cannot change
   // mid-session: reject session_id + model and omit the model on resumed chunks.
   const deps = {

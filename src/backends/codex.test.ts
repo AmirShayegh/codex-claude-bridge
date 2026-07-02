@@ -50,6 +50,13 @@ vi.mock('@openai/codex-sdk', () => {
   return { Codex: MockCodex };
 });
 
+// ISS-021: binary discovery touches the real filesystem and spawns processes —
+// always mocked here so unit tests stay hermetic. Defaults to "nothing found"
+// (set per-test in the auto-discovery describe block).
+vi.mock('./codex-binary.js', () => ({ discoverCodexBinary: vi.fn() }));
+import { discoverCodexBinary } from './codex-binary.js';
+const mockDiscover = vi.mocked(discoverCodexBinary);
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockThreadId = 'thread_abc123';
@@ -59,6 +66,10 @@ beforeEach(() => {
   mockConstructorThrow = null;
   mockConstructorOptions = undefined;
   delete process.env.CODEX_PATH;
+  // mockReset (not just clear) so a per-test discovery path never leaks into
+  // the next test's implementation; default: no system codex found.
+  mockDiscover.mockReset();
+  mockDiscover.mockResolvedValue(null);
   // The flow narrates the resolved model on stderr for unpinned reviews; these
   // tests don't assert on it, so keep their output clean.
   vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -88,6 +99,154 @@ const validPrecommitResponse = {
   blockers: [],
   warnings: ['Large diff'],
 };
+
+// ISS-021: when the SDK's bundled codex binary can't run (macOS XProtect
+// quarantine) and no explicit override is set, the backend discovers a working
+// system codex once and retries through codexPathOverride. Discovery itself is
+// module-mocked above; these tests drive the recovery wiring.
+describe('codex binary auto-discovery (ISS-021)', () => {
+  // Classifies as PROVIDER_UNAVAILABLE ("spawn codex" + ENOENT).
+  const spawnFailure = () => new Error('spawn codex ENOENT');
+
+  it('discovers a system codex and retries once when the bundled binary cannot run', async () => {
+    mockDiscover.mockResolvedValue('/found/bin/codex');
+    mockRun
+      .mockRejectedValueOnce(spawnFailure())
+      .mockResolvedValueOnce({ finalResponse: JSON.stringify(validPlanResponse) });
+
+    const result = await createCodexBackend(config).reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(true);
+    expect(mockDiscover).toHaveBeenCalledTimes(1);
+    // The SDK client was rebuilt pointing at the discovered binary.
+    expect(mockConstructorOptions).toEqual({ codexPathOverride: '/found/bin/codex' });
+    expect(mockRun).toHaveBeenCalledTimes(2);
+  });
+
+  it('never discovers when config.codex_path is set (explicit pin wins)', async () => {
+    mockRun.mockRejectedValue(spawnFailure());
+    const pinned = { ...config, codex_path: '/pinned/codex' };
+
+    const result = await createCodexBackend(pinned).reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('PROVIDER_UNAVAILABLE');
+      expect(result.error).not.toContain('auto-discovery');
+    }
+    expect(mockDiscover).not.toHaveBeenCalled();
+  });
+
+  it('never discovers when the CODEX_PATH env is set', async () => {
+    process.env.CODEX_PATH = '/env/codex';
+    try {
+      mockRun.mockRejectedValue(spawnFailure());
+      const result = await createCodexBackend(config).reviewPlan({ plan: 'plan' });
+      expect(result.ok).toBe(false);
+      expect(mockDiscover).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.CODEX_PATH;
+    }
+  });
+
+  it('appends an auto-discovery note when no system codex is found', async () => {
+    mockDiscover.mockResolvedValue(null);
+    mockRun.mockRejectedValue(spawnFailure());
+
+    const result = await createCodexBackend(config).reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('PROVIDER_UNAVAILABLE');
+      expect(result.error).toContain('auto-discovery: no working system codex');
+    }
+  });
+
+  it('attempts discovery at most once per backend instance', async () => {
+    mockDiscover.mockResolvedValue(null);
+    mockRun.mockRejectedValue(spawnFailure());
+    const client = createCodexBackend(config);
+
+    await client.reviewPlan({ plan: 'plan' });
+    await client.reviewPlan({ plan: 'plan' });
+
+    expect(mockDiscover).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not trigger discovery for non-PROVIDER_UNAVAILABLE failures', async () => {
+    mockRun.mockRejectedValue(new Error('429 rate limit exceeded'));
+
+    const result = await createCodexBackend(config).reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain('RATE_LIMITED');
+    expect(mockDiscover).not.toHaveBeenCalled();
+  });
+
+  it('concurrent failing reviews share ONE discovery and both recover', async () => {
+    // Review-round finding: without memoization, the loser of the race got
+    // 'skipped' and failed while the winner recovered. State-based mock: every
+    // run fails until the SDK client is rebuilt on the discovered binary.
+    mockDiscover.mockResolvedValue('/found/bin/codex');
+    mockRun.mockImplementation(async () => {
+      if (mockConstructorOptions?.codexPathOverride === '/found/bin/codex') {
+        return { finalResponse: JSON.stringify(validPlanResponse) };
+      }
+      throw spawnFailure();
+    });
+    const client = createCodexBackend(config);
+
+    const [a, b] = await Promise.all([
+      client.reviewPlan({ plan: 'plan a' }),
+      client.reviewPlan({ plan: 'plan b' }),
+    ]);
+
+    expect(a.ok).toBe(true);
+    expect(b.ok).toBe(true);
+    expect(mockDiscover).toHaveBeenCalledTimes(1); // shared, not raced
+  });
+
+  it('contains a discovery throw as not-found instead of escaping the Result contract', async () => {
+    mockDiscover.mockRejectedValue(new Error('fs exploded'));
+    mockRun.mockRejectedValue(spawnFailure());
+
+    const result = await createCodexBackend(config).reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('PROVIDER_UNAVAILABLE');
+      expect(result.error).toContain('auto-discovery: no working system codex');
+    }
+  });
+
+  it('returns the failure when the retry with the discovered binary also fails (no loop)', async () => {
+    mockDiscover.mockResolvedValue('/found/bin/codex');
+    mockRun.mockRejectedValue(spawnFailure());
+
+    const result = await createCodexBackend(config).reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain('PROVIDER_UNAVAILABLE');
+    expect(mockDiscover).toHaveBeenCalledTimes(1); // once, never looped
+    expect(mockRun).toHaveBeenCalledTimes(2); // original + single retry
+  });
+
+  it('narrates the substitution on stderr and points at codex_path', async () => {
+    mockDiscover.mockResolvedValue('/found/bin/codex');
+    mockRun
+      .mockRejectedValueOnce(spawnFailure())
+      .mockResolvedValueOnce({ finalResponse: JSON.stringify(validPlanResponse) });
+    const errSpy = vi.spyOn(console, 'error');
+
+    await createCodexBackend(config).reviewPlan({ plan: 'plan' });
+
+    const narration = errSpy.mock.calls
+      .map((c) => String(c[0]))
+      .find((m) => m.includes('/found/bin/codex'));
+    expect(narration).toBeDefined();
+    expect(narration).toContain('codex_path');
+  });
+});
 
 describe('looksLikeDiff', () => {
   it('accepts standard git diff with headers and hunks', () => {

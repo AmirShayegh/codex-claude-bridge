@@ -27,23 +27,22 @@ export const RECOMMENDED_MODELS = {
 } as const satisfies Record<ReviewProvider, readonly string[]>;
 export type RecommendedModel = (typeof RECOMMENDED_MODELS)[ReviewProvider][number];
 
-const PlanReviewStandardsSchema = z.object({
+export const PlanReviewStandardsSchema = z.object({
   focus: z.array(z.string()).default(['architecture', 'feasibility']),
   depth: z.enum(['quick', 'thorough']).default('thorough'),
 });
 
-const CodeReviewStandardsSchema = z.object({
+export const CodeReviewStandardsSchema = z.object({
   criteria: z.array(z.string()).default(['bugs', 'security', 'performance', 'style']),
   require_tests: z.boolean().default(true),
-  max_file_size: z.number().int().positive().default(500),
 });
 
-const PrecommitStandardsSchema = z.object({
+export const PrecommitStandardsSchema = z.object({
   auto_diff: z.boolean().default(true),
   block_on: z.array(BlockOnSeveritySchema).default(['critical', 'major']),
 });
 
-const ReviewStandardsSchema = z.object({
+export const ReviewStandardsSchema = z.object({
   plan_review: PlanReviewStandardsSchema.default(() => PlanReviewStandardsSchema.parse({})),
   code_review: CodeReviewStandardsSchema.default(() => CodeReviewStandardsSchema.parse({})),
   precommit: PrecommitStandardsSchema.default(() => PrecommitStandardsSchema.parse({})),

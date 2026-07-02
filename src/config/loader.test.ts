@@ -410,3 +410,60 @@ describe('formatConfigSource', () => {
     );
   });
 });
+
+describe('loadConfig — unknown-key warnings (ISS-004)', () => {
+  it('warns on an unrecognized top-level key but still loads the config', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    applyLayout({
+      '/p/.reviewbridge.json': JSON.stringify({ model: 'gpt-5.4', bogus_field: 1 }),
+    });
+
+    const result = loadConfig('/p');
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.config.model).toBe('gpt-5.4'); // known key still applied
+    const warnings = spy.mock.calls.map((c) => String(c[0]));
+    expect(warnings.some((w) => w.includes('<root>') && w.includes('bogus_field'))).toBe(true);
+    spy.mockRestore();
+  });
+
+  it('warns on an unrecognized NESTED key (review_standards.code_review) — e.g. a leftover max_file_size', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    applyLayout({
+      '/p/.reviewbridge.json': JSON.stringify({
+        review_standards: { code_review: { require_tests: false, max_file_size: 500 } },
+      }),
+    });
+
+    const result = loadConfig('/p');
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.config.review_standards.code_review.require_tests).toBe(false);
+    const warnings = spy.mock.calls.map((c) => String(c[0]));
+    expect(warnings.some((w) => w.includes('review_standards.code_review') && w.includes('max_file_size'))).toBe(true);
+    spy.mockRestore();
+  });
+
+  it('emits no warning for a clean config', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    applyLayout({
+      '/p/.reviewbridge.json': JSON.stringify({ model: 'gpt-5.4', review_standards: { precommit: { auto_diff: false } } }),
+    });
+
+    const result = loadConfig('/p');
+
+    expect(result.ok).toBe(true);
+    const warnings = spy.mock.calls.map((c) => String(c[0])).filter((w) => w.includes('unrecognized config field'));
+    expect(warnings).toHaveLength(0);
+    spy.mockRestore();
+  });
+
+  it('does not throw when a nested section is a non-object', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // review_standards as a string — the schema rejects it, so this should error
+    // cleanly (not crash the unknown-key walk).
+    applyLayout({ '/p/.reviewbridge.json': JSON.stringify({ review_standards: 'nope' }) });
+    expect(() => loadConfig('/p')).not.toThrow();
+    spy.mockRestore();
+  });
+});

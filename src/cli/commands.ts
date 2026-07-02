@@ -6,6 +6,7 @@ import type Database from 'better-sqlite3';
 import { loadConfig, formatConfigSource } from '../config/loader.js';
 import { createBackend } from '../backends/index.js';
 import type { ReviewBackend } from '../backends/backend.js';
+import type { ReviewBridgeConfig } from '../config/types.js';
 import { openReviewDb, makeSessionProviderLookup } from '../storage/db.js';
 import { checkSessionProvider } from '../storage/session-tracker.js';
 import { loadCopilotInstructions } from '../config/copilot-instructions.js';
@@ -53,6 +54,8 @@ interface CliClient {
   // Read-only session db, or undefined when none is reachable. Used by the
   // cross-provider resume guard; the guard fails open when it's undefined.
   db: Database.Database | undefined;
+  // The resolved config — commands read defaults (e.g. precommit auto_diff) from it.
+  config: ReviewBridgeConfig;
 }
 
 function initClient(configDir: string | undefined, deps: CliDeps): CliClient | null {
@@ -85,7 +88,7 @@ function initClient(configDir: string | undefined, deps: CliDeps): CliClient | n
   const db = openReviewDb({ readonly: true });
   try {
     const client = createBackend(config, copilotInstr, makeSessionProviderLookup(db));
-    return { client, db };
+    return { client, db, config };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     deps.stderr.write(`Error: Failed to initialize the review backend: ${msg}\n`);
@@ -239,6 +242,8 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
     .option('--diff <path>', 'Override auto-capture (path or "-" for stdin)')
     .option('--session <id>', 'Resume session')
     .option('--model <name>', 'Override the configured default model (e.g., gpt-5.4)')
+    .option('--auto-diff', 'Force auto-capture of staged changes for this call')
+    .option('--no-auto-diff', 'Skip auto-capture for this call')
     .option('--config <path>', 'Path to .reviewbridge.json directory')
     .option('--json', 'Raw JSON output')
     .action(async (opts) => {
@@ -248,7 +253,7 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
 
       const init = initClient(opts.config, deps);
       if (!init) return;
-      const { client } = init;
+      const { client, config } = init;
       if (!guardSession(init, opts.session, io, deps)) return;
 
       // Read explicit diff if provided via file/stdin
@@ -263,11 +268,18 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
         explicitDiff = inputResult.data;
       }
 
+      // Precedence: an explicit --diff means "use this, don't auto-capture";
+      // otherwise the --auto-diff/--no-auto-diff flag wins; otherwise the config
+      // default (review_standards.precommit.auto_diff).
+      const autoDiff = opts.diff
+        ? false
+        : (opts.autoDiff ?? config.review_standards.precommit.auto_diff);
+
       const handler = createHandler<PrecommitResult>({
         execute: async () => {
           const diffResult = await resolvePrecommitDiff({
             diff: explicitDiff,
-            auto_diff: !opts.diff, // auto when no explicit diff
+            auto_diff: autoDiff,
           });
           if (!diffResult.ok) {
             return diffResult;

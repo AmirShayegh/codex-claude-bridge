@@ -978,7 +978,6 @@ describe('config flows to prompts', () => {
       code_review: {
         criteria: ['security', 'performance'],
         require_tests: true,
-        max_file_size: 500,
       },
       precommit: {
         auto_diff: true,

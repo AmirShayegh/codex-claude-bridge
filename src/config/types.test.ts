@@ -27,7 +27,6 @@ describe('ReviewBridgeConfigSchema', () => {
         'style',
       ]);
       expect(config.review_standards.code_review.require_tests).toBe(true);
-      expect(config.review_standards.code_review.max_file_size).toBe(500);
       expect(config.review_standards.precommit.auto_diff).toBe(true);
       expect(config.review_standards.precommit.block_on).toEqual(['critical', 'major']);
     }
@@ -61,8 +60,6 @@ describe('ReviewBridgeConfigSchema', () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.review_standards.code_review.require_tests).toBe(false);
-      // Other code_review defaults preserved
-      expect(result.data.review_standards.code_review.max_file_size).toBe(500);
       // Other review_standards defaults preserved
       expect(result.data.review_standards.plan_review.depth).toBe('thorough');
     }
@@ -124,7 +121,6 @@ describe('ReviewBridgeConfigSchema', () => {
         code_review: {
           criteria: ['bugs', 'security'],
           require_tests: false,
-          max_file_size: 1000,
         },
         precommit: {
           auto_diff: false,

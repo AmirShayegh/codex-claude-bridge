@@ -99,7 +99,7 @@ export function createServer(): McpServer {
 
     registerReviewPlanTool(server, client, db);
     registerReviewCodeTool(server, client, db);
-    registerReviewPrecommitTool(server, client, db);
+    registerReviewPrecommitTool(server, client, db, config);
     registerReviewHistoryTool(server, db);
     registerReviewStatusTool(server, db);
 

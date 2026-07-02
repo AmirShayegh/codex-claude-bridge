@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { registerReviewPrecommitTool } from './review-precommit.js';
 import type { ReviewBackend } from '../backends/backend.js';
+import { DEFAULT_CONFIG } from '../config/types.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { PrecommitResult } from '../review/types.js';
 import { ok, err } from '../utils/errors.js';
@@ -52,10 +53,20 @@ beforeEach(() => {
   mockServer = { registerTool: vi.fn() };
 });
 
-function setupHandler(db?: unknown) {
-  registerReviewPrecommitTool(mockServer as unknown as McpServer, mockClient, db as never);
-  handler = mockServer.registerTool.mock.calls[0][2] as HandlerFn;
+function setupHandler(db?: unknown, config = DEFAULT_CONFIG) {
+  registerReviewPrecommitTool(mockServer as unknown as McpServer, mockClient, db as never, config);
+  const calls = mockServer.registerTool.mock.calls;
+  handler = calls[calls.length - 1][2] as HandlerFn;
 }
+
+// A config whose precommit auto_diff default is flipped to `false`.
+const configAutoDiffFalse = {
+  ...DEFAULT_CONFIG,
+  review_standards: {
+    ...DEFAULT_CONFIG.review_standards,
+    precommit: { ...DEFAULT_CONFIG.review_standards.precommit, auto_diff: false },
+  },
+};
 
 describe('registerReviewPrecommitTool', () => {
   beforeEach(() => setupHandler());
@@ -78,6 +89,28 @@ describe('registerReviewPrecommitTool', () => {
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.ready_to_commit).toBe(true);
     expect(result.isError).toBeUndefined();
+  });
+
+  it('ISS-004: falls back to config precommit.auto_diff when no arg is passed (false → no capture)', async () => {
+    setupHandler(undefined, configAutoDiffFalse); // re-register with auto_diff:false
+    vi.mocked(getStagedDiff).mockResolvedValue(ok('staged diff content'));
+
+    const result = await handler({}, {}); // no auto_diff arg → config default (false)
+
+    expect(getStagedDiff).not.toHaveBeenCalled(); // auto-capture disabled by config
+    // With auto_diff off and no explicit diff, there's nothing to review.
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('auto_diff disabled and no diff provided');
+  });
+
+  it('ISS-004: an explicit auto_diff arg overrides the config default', async () => {
+    setupHandler(undefined, configAutoDiffFalse); // config says false...
+    vi.mocked(getStagedDiff).mockResolvedValue(ok('staged diff content'));
+    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(validResult));
+
+    await handler({ auto_diff: true }, {}); // ...but the explicit arg wins
+
+    expect(getStagedDiff).toHaveBeenCalledTimes(1);
   });
 
   it('rejects session_id + model when the backend disallows model override on resume (Codex)', async () => {

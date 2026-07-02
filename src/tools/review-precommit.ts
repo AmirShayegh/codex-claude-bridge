@@ -2,11 +2,17 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import type { ReviewBackend } from '../backends/backend.js';
+import type { ReviewBridgeConfig } from '../config/types.js';
 import { sessionModelConflictMessage } from '../backends/orchestrator.js';
 import { resolvePrecommitDiff, NO_STAGED_CHANGES } from '../utils/resolve-diff.js';
 import { createSessionTracker } from '../storage/session-tracker.js';
 
-export function registerReviewPrecommitTool(server: McpServer, client: ReviewBackend, db?: Database.Database): void {
+export function registerReviewPrecommitTool(
+  server: McpServer,
+  client: ReviewBackend,
+  db: Database.Database | undefined,
+  config: ReviewBridgeConfig,
+): void {
   server.registerTool(
     'review_precommit',
     {
@@ -15,7 +21,10 @@ export function registerReviewPrecommitTool(server: McpServer, client: ReviewBac
         'Call this after git add and before git commit to catch last-minute issues. ' +
         'Returns ready_to_commit (boolean), blockers that must be fixed, and warnings.',
       inputSchema: {
-        auto_diff: z.boolean().optional().default(true).describe('Auto-capture staged git changes'),
+        auto_diff: z
+          .boolean()
+          .optional()
+          .describe('Auto-capture staged git changes. Omit to use the project config default (review_standards.precommit.auto_diff).'),
         diff: z.string().optional().describe('Explicit diff to review instead of auto-capture'),
         session_id: z.string().optional().describe('Continue from previous review'),
         checklist: z.array(z.string()).optional().describe('Custom pre-commit checks'),
@@ -41,7 +50,11 @@ export function registerReviewPrecommitTool(server: McpServer, client: ReviewBac
       }
       const tracker = createSessionTracker(db, client.providers, client.provider);
       try {
-        const diffResult = await resolvePrecommitDiff({ diff: args.diff, auto_diff: args.auto_diff });
+        // An explicit auto_diff arg wins; otherwise fall back to the project
+        // config default (config is the validated ReviewBridgeConfig, so the
+        // field is always present — no optional chaining needed).
+        const autoDiff = args.auto_diff ?? config.review_standards.precommit.auto_diff;
+        const diffResult = await resolvePrecommitDiff({ diff: args.diff, auto_diff: autoDiff });
         if (!diffResult.ok) {
           // "No staged changes" is not an error — return structured response
           if (diffResult.error.startsWith(NO_STAGED_CHANGES)) {

@@ -11,11 +11,12 @@ vi.mock('../backends/index.js', () => ({
   }),
 }));
 
-// Mock config loader
+// Mock config loader. createBackend is mocked (see below), so only the config
+// fields the CLI reads directly matter here: review_standards.precommit.auto_diff.
 vi.mock('../config/loader.js', () => ({
   loadConfig: vi.fn().mockReturnValue({
     ok: true,
-    data: { config: {}, source: { kind: 'default' } },
+    data: { config: { review_standards: { precommit: { auto_diff: true } } }, source: { kind: 'default' } },
   }),
   formatConfigSource: vi.fn(() => 'default'),
 }));
@@ -210,6 +211,43 @@ describe('review-precommit command', () => {
     expect(mockResolveDiff).toHaveBeenCalledWith({ diff: undefined, auto_diff: true });
     expect(deps.stdoutBuf).toContain('OK TO COMMIT');
     expect(deps.exitCode).toBe(0);
+  });
+
+  const precommitClient = () => ({
+    provider: 'codex' as const,
+    providers: ['codex'] as const,
+    allowsModelOverrideOnResume: false,
+    reviewPlan: vi.fn(),
+    reviewCode: vi.fn(),
+    reviewPrecommit: vi.fn().mockResolvedValue({
+      ok: true,
+      data: { ready_to_commit: true, blockers: [], warnings: [], session_id: 's' },
+    }),
+  });
+
+  it('ISS-004: --no-auto-diff overrides a config auto_diff:true', async () => {
+    mockResolveDiff.mockResolvedValue({ ok: true, data: 'staged diff' });
+    mockCreateClient.mockReturnValue(precommitClient());
+
+    const deps = createDeps();
+    await runCli(['node', 'bridge', 'review-precommit', '--no-auto-diff'], deps);
+
+    expect(mockResolveDiff).toHaveBeenCalledWith({ diff: undefined, auto_diff: false });
+  });
+
+  it('ISS-004: --auto-diff overrides a config auto_diff:false', async () => {
+    const { loadConfig } = await import('../config/loader.js');
+    vi.mocked(loadConfig).mockReturnValueOnce({
+      ok: true,
+      data: { config: { review_standards: { precommit: { auto_diff: false } } }, source: { kind: 'default' } },
+    } as never);
+    mockResolveDiff.mockResolvedValue({ ok: true, data: 'staged diff' });
+    mockCreateClient.mockReturnValue(precommitClient());
+
+    const deps = createDeps();
+    await runCli(['node', 'bridge', 'review-precommit', '--auto-diff'], deps);
+
+    expect(mockResolveDiff).toHaveBeenCalledWith({ diff: undefined, auto_diff: true });
   });
 
   it('exits 2 when commit is blocked', async () => {

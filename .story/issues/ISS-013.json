@@ -17,9 +17,9 @@
     "T-025",
     "T-029"
   ],
-  "resolution": null,
-  "resolvedDate": null,
+  "resolution": "Fixed in T-029. computeAgreement (src/backends/deliberation.ts) previously matched cross-provider findings on exact `${file}:${line}:${category}`, so semantically-identical findings never landed in agreed[] (agreed structurally near-empty). Replaced with semantic matching informed by 3 live two-provider deliberate-deep runs on the N-001 planted-bug diff (data in note N-002): providers name the same defect with different category vocab (bugs/Bug/Incorrect logic/Logic Error; security/Security/Injection vulnerabilities) and line numbers drift 0-2. New algorithm: an exact-key intra-provider dedup pre-pass (dedupExact, preserves prior collapse-to-higher-severity behavior), then cross-provider matching via matchAllowed (same file; same NORMALIZED category within LINE_WINDOW=2, OR different category only at the exact same line Δ0 — so genuinely-distinct nearby defects never false-merge), resolved by a DETERMINISTIC greedy 1:1 pairing ranked by (category-equal, then closest line, then combined severity, then lexicographic indices). Keeps the higher-severity representative; keyless (null file/line) findings stay divergent; each finding merges at most once so nothing appears in both agreed and divergent. deduplicateFindings (same-provider chunk merge) left exact-key and untouched. W=2 chosen because observed drift never exceeded 2 and distinct planted bugs sat ≥3 lines apart. Tests: 7 new using REAL captured pairs. Live-verified: agreed[] went 0→2 on the probe diff (SQL injection + assignment bug), zero duplicates across agreed+divergent. NOTE: Step 1 (needs both providers live) was itself blocked by ISS-019, which was discovered and fixed as part of this ticket.",
+  "resolvedDate": "2026-07-01",
   "severity": "medium",
-  "status": "open",
+  "status": "resolved",
   "title": "Exact file:line:category agreement key makes 'agreed' near-empty and duplicates findings in the merged array"
 }

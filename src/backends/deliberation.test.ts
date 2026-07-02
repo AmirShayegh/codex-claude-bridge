@@ -76,6 +76,117 @@ describe('computeAgreement', () => {
     expect(agreed).toHaveLength(1);
     expect(divergent).toHaveLength(0);
   });
+
+  // ISS-013: the tests below use REAL cross-provider finding pairs captured from 3
+  // live deliberate-deep runs on the N-001 planted-bug diff (note N-002). Exact-key
+  // matching left agreed[] empty on all of them; semantic matching must merge them.
+  const norm = (c: string): string => c.trim().toLowerCase().replace(/\s+/g, ' ').replace(/s$/, '');
+
+  it('merges the same defect when providers use different category vocab on the same line', () => {
+    // run3 assignment bug: codex "Incorrect logic" @12, gemini "bug" @12 (Δ0).
+    const { agreed, divergent } = computeAgreement(
+      { provider: 'codex', findings: [f('payment.js', 12, 'Incorrect logic', 'major')] },
+      { provider: 'gemini', findings: [f('payment.js', 12, 'bug', 'critical')] },
+      rank,
+    );
+    expect(agreed).toHaveLength(1);
+    expect(agreed[0].severity).toBe('critical'); // higher-severity representative
+    expect(divergent).toHaveLength(0);
+  });
+
+  it('merges same-category findings across the observed line drift (Δ2)', () => {
+    // run2 assignment bug: codex "bugs" @10, gemini "Bug" @12 → normalized "bug" == "bug", Δ2 ≤ 2.
+    const { agreed, divergent } = computeAgreement(
+      { provider: 'codex', findings: [f('payment.js', 10, 'bugs', 'major')] },
+      { provider: 'gemini', findings: [f('payment.js', 12, 'Bug', 'critical')] },
+      rank,
+    );
+    expect(agreed).toHaveLength(1);
+    expect(agreed[0].severity).toBe('critical');
+    expect(divergent).toHaveLength(0);
+  });
+
+  it('disambiguates a same-line cluster by category preference, not by proximity alone', () => {
+    // run2/run4 cluster: codex flags BOTH security + error-handling at L17, gemini flags
+    // only security at L17. The SQL finding must pair with the SQL finding (category
+    // preference), leaving codex error-handling divergent — never a cross-mispair.
+    const { agreed, divergent } = computeAgreement(
+      {
+        provider: 'codex',
+        findings: [f('payment.js', 17, 'security', 'critical'), f('payment.js', 17, 'error handling', 'major')],
+      },
+      { provider: 'gemini', findings: [f('payment.js', 17, 'Security', 'critical')] },
+      rank,
+    );
+    expect(agreed).toHaveLength(1);
+    expect(norm(agreed[0].category)).toBe('security'); // SQL paired with SQL, not error-handling
+    expect(divergent).toHaveLength(1);
+    expect(divergent[0].provider).toBe('codex');
+    expect(norm(divergent[0].finding.category)).toBe('error handling');
+  });
+
+  it('merges both defects of a cluster when both providers flag both (no cross-mismatch)', () => {
+    // run3 cluster: both providers flag SQL and error-handling at L17. Category-preference
+    // pairs error-handling↔error-handling first, leaving injection↔security to pair.
+    const { agreed, divergent } = computeAgreement(
+      {
+        provider: 'codex',
+        findings: [
+          f('payment.js', 17, 'Injection vulnerabilities', 'critical'),
+          f('payment.js', 17, 'Error handling', 'major'),
+        ],
+      },
+      {
+        provider: 'gemini',
+        findings: [f('payment.js', 17, 'security', 'critical'), f('payment.js', 17, 'error handling', 'major')],
+      },
+      rank,
+    );
+    expect(agreed).toHaveLength(2);
+    expect(divergent).toHaveLength(0);
+    // Both defects present and correctly paired — one error-handling, one SQL/injection —
+    // i.e. no cross-mismatch (SQL did not pair with error-handling). Representatives keep
+    // codex's copy on the severity ties, so norm() of the injection category ends "...ie"
+    // (the normalizer strips a single trailing 's').
+    expect(agreed.map((x) => norm(x.category)).sort()).toEqual([
+      'error handling',
+      norm('Injection vulnerabilities'),
+    ]);
+  });
+
+  it('does NOT merge distinct defects that are more than the window apart (acceptance c)', () => {
+    // assignment bug @12 vs SQL injection @17 (Δ5): different defects, must stay divergent.
+    const { agreed, divergent } = computeAgreement(
+      { provider: 'codex', findings: [f('payment.js', 12, 'bugs', 'major')] },
+      { provider: 'gemini', findings: [f('payment.js', 17, 'Security', 'critical')] },
+      rank,
+    );
+    expect(agreed).toHaveLength(0);
+    expect(divergent).toHaveLength(2);
+  });
+
+  it('does NOT merge different-category findings within the window unless on the exact same line', () => {
+    // assignment "bugs" @12 vs validation "Null safety" @14 (Δ2, different category):
+    // a different-category match is only trusted at Δ0, so these stay divergent — guards
+    // against false-merging distinct nearby defects and silently discarding one.
+    const { agreed, divergent } = computeAgreement(
+      { provider: 'codex', findings: [f('payment.js', 12, 'bugs', 'major')] },
+      { provider: 'gemini', findings: [f('payment.js', 14, 'Null safety', 'major')] },
+      rank,
+    );
+    expect(agreed).toHaveLength(0);
+    expect(divergent).toHaveLength(2);
+  });
+
+  it('keeps keyless findings (null file/line) divergent even with identical category', () => {
+    const { agreed, divergent } = computeAgreement(
+      { provider: 'codex', findings: [f(null, null, 'bugs', 'major')] },
+      { provider: 'gemini', findings: [f(null, null, 'bugs', 'major')] },
+      rank,
+    );
+    expect(agreed).toHaveLength(0);
+    expect(divergent).toHaveLength(2);
+  });
 });
 
 describe('createDeliberationBackend', () => {

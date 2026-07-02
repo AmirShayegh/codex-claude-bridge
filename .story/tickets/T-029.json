@@ -2,14 +2,14 @@
   "blockedBy": [
     "T-028"
   ],
-  "completedDate": null,
+  "completedDate": "2026-07-01",
   "createdDate": "2026-07-02",
   "description": "## Problem (ISS-013)\nkeyOf (src/backends/deliberation.ts:29-31) matches findings across providers on exact `${file}:${line}:${category}`. Providers use different category vocabularies (\"sql-injection\" vs \"security\") and line numbers drift a few lines for the same defect, so semantically identical findings classify as divergent AND both copies land in the merged findings array (combineCode :127, combinePlan :158) — inflating finding counts and making agreed[] structurally near-empty (live probes 2026-07-01 never produced a non-empty agreed[]). NOTE: orchestrator.deduplicateFindings (src/backends/orchestrator.ts:66-83) uses the SAME key for same-provider chunk merging — that one is fine as-is (same provider = consistent vocabulary) and must NOT be loosened.\n\n## Step 1 — gather real data BEFORE designing (this is why the ticket is blocked on T-028)\nNeeds Codex usage headroom. Using probe kit note N-001: run 3+ fresh deliberate-deep reviews (CLI, --json) on the planted-bug diff with both providers live. From the outputs, tabulate for each same-meaning finding pair: file match? line delta? category strings? Save the table in this ticket (ticket update) or a note. If both providers being live is impossible for a whole session, STOP and hand back — do not design from guesses.\n\n## Step 2 — implement from the data\nExpected shape (adjust to data): a matching predicate for CROSS-PROVIDER merge — same file, |lineA - lineB| <= W (pick W from observed drift, likely 3), category-agnostic. Apply it in computeAgreement (deliberation.ts:48-85) so same-meaning pairs land in agreed[] (keep higher-severity representative, as now). Keyless findings (null file/line) stay divergent. Note computeAgreement currently uses a Map keyed by exact string — a line-window match cannot be a pure map key; a small O(n*m) pairwise match over per-file buckets is fine (finding lists are tens, not thousands).\n\n## Acceptance\n(a) Unit tests use REAL finding pairs captured in step 1 (not invented ones). (b) Same-meaning cross-provider findings merge: agreed[] non-empty on the probe diff, no duplicate in merged findings. (c) Genuinely different findings on the same file don't falsely merge (test with two distinct planted bugs in one file — the probe diff has assignment-bug and SQL-injection at different lines). (d) deduplicateFindings in orchestrator.ts unchanged. (e) A live deliberate-deep probe on the N-001 diff shows agreed[] populated. Resolve ISS-013.\n\n## House rules\nTDD; ESM .js suffixes; no `any`/`as`; Result<T>; full gate; no AI names in commits.",
   "displayId": "T-029",
   "id": "T-029",
   "order": 40,
   "phase": "hardening",
-  "status": "open",
+  "status": "complete",
   "title": "Semantic agreement matching: fuzzier merge key + dedup, informed by live two-provider data (ISS-013)",
   "type": "task"
 }

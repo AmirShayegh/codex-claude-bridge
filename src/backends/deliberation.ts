@@ -46,43 +46,115 @@ export interface Agreement<F> {
   divergent: { provider: ReviewProvider; finding: F }[];
 }
 
+// Cross-provider line drift observed 0–2 across 3 live deliberate-deep runs on the
+// N-001 planted-bug diff (note N-002 / ISS-013); genuinely-distinct defects sat ≥3
+// lines apart. A window of 2 therefore captures the real drift without bridging
+// separate defects. This governs the CROSS-provider merge only — deduplicateFindings
+// (same-provider chunk merge, orchestrator.ts) stays exact-key (ISS-013 acceptance d).
+const LINE_WINDOW = 2;
+
+// Providers name the same defect with different category vocab AND different
+// casing/plurals ("bugs"/"Bug", "security"/"Security", "Incorrect logic"/"bug").
+// Normalizing lets casing/plural variants compare equal; the raw vocab differences
+// are handled by only trusting a different-category match when it lands on the exact
+// same line (see matchAllowed).
+function normalizeCategory(c: string): string {
+  return c.trim().toLowerCase().replace(/\s+/g, ' ').replace(/s$/, '');
+}
+
+// Whether two keyable cross-provider findings on the SAME file may be merged. Same
+// normalized category tolerates the observed ≤2 line drift; a different category is
+// only trusted at the exact same line (Δ0), so genuinely-distinct nearby defects
+// (e.g. an assignment bug and a validation gap two lines apart) never false-merge.
+function matchAllowed(fa: AnyFinding, fb: AnyFinding): boolean {
+  if (fa.file !== fb.file || fa.line === null || fb.line === null) return false;
+  const dl = Math.abs(fa.line - fb.line);
+  return normalizeCategory(fa.category) === normalizeCategory(fb.category)
+    ? dl <= LINE_WINDOW
+    : dl === 0;
+}
+
+// Collapse one provider's findings by EXACT key (file:line:category), keeping the
+// higher-severity copy — mirrors deduplicateFindings so a provider that repeats a key
+// doesn't let the last copy silently win. Keyless findings (no file/line) can never be
+// line-matched, so they're separated out and go straight to divergent.
+function dedupExact<F extends AnyFinding>(
+  findings: F[],
+  rankOf: (severity: string) => number,
+): { keyable: F[]; keyless: F[] } {
+  const keyless: F[] = [];
+  const byKey = new Map<string, F>();
+  for (const f of findings) {
+    const k = keyOf(f);
+    if (k === null) {
+      keyless.push(f);
+      continue;
+    }
+    const existing = byKey.get(k);
+    if (!existing || rankOf(f.severity) > rankOf(existing.severity)) byKey.set(k, f);
+  }
+  return { keyable: [...byKey.values()], keyless };
+}
+
 // Split two providers' findings into those both flagged (agreed, keeping the
-// higher-severity representative) and those only one flagged (divergent).
+// higher-severity representative) and those only one flagged (divergent). Cross-
+// provider matching is semantic, not exact-key (ISS-013): a line window plus a
+// category-aware gate (matchAllowed), resolved by greedy 1:1 pairing so each finding
+// merges at most once — no finding appears in both agreed and divergent.
 export function computeAgreement<F extends AnyFinding>(
   a: { provider: ReviewProvider; findings: F[] },
   b: { provider: ReviewProvider; findings: F[] },
   rankOf: (severity: string) => number,
 ): Agreement<F> {
-  const map = new Map<string, { a?: F; b?: F }>();
+  const agreed: F[] = [];
   const divergent: { provider: ReviewProvider; finding: F }[] = [];
 
-  // Add one provider's findings to its side of the map. Keyless findings (no
-  // file/line) can't be matched → divergent. When a provider reports the same
-  // key twice, keep the higher-severity one (mirrors deduplicateFindings) rather
-  // than letting the last silently win.
-  const put = (side: 'a' | 'b', provider: ReviewProvider, findings: F[]): void => {
-    for (const f of findings) {
-      const k = keyOf(f);
-      if (k === null) {
-        divergent.push({ provider, finding: f });
-        continue;
-      }
-      const entry = map.get(k) ?? {};
-      const existing = entry[side];
-      if (!existing || rankOf(f.severity) > rankOf(existing.severity)) {
-        entry[side] = f;
-        map.set(k, entry);
-      }
-    }
-  };
-  put('a', a.provider, a.findings);
-  put('b', b.provider, b.findings);
+  const da = dedupExact(a.findings, rankOf);
+  const db = dedupExact(b.findings, rankOf);
+  for (const finding of da.keyless) divergent.push({ provider: a.provider, finding });
+  for (const finding of db.keyless) divergent.push({ provider: b.provider, finding });
+  const aKey = da.keyable;
+  const bKey = db.keyable;
 
-  const agreed: F[] = [];
-  for (const { a: fa, b: fb } of map.values()) {
-    if (fa && fb) agreed.push(rankOf(fa.severity) >= rankOf(fb.severity) ? fa : fb);
-    else if (fa) divergent.push({ provider: a.provider, finding: fa });
-    else if (fb) divergent.push({ provider: b.provider, finding: fb });
+  // Candidate cross-provider pairs, ranked so the greedy pass takes the strongest
+  // match first: category-equal before category-different, then closest line, then
+  // higher combined severity, then a stable (i, j) lexicographic tiebreak so the
+  // result is deterministic. aKey/bKey hold only findings with non-null file+line,
+  // so Math.abs on lines is never NaN.
+  const pairs: { i: number; j: number; catEq: number; dl: number; sev: number }[] = [];
+  for (let i = 0; i < aKey.length; i++) {
+    for (let j = 0; j < bKey.length; j++) {
+      const fa = aKey[i];
+      const fb = bKey[j];
+      if (!matchAllowed(fa, fb)) continue;
+      pairs.push({
+        i,
+        j,
+        catEq: normalizeCategory(fa.category) === normalizeCategory(fb.category) ? 1 : 0,
+        dl: Math.abs((fa.line as number) - (fb.line as number)),
+        sev: rankOf(fa.severity) + rankOf(fb.severity),
+      });
+    }
+  }
+  pairs.sort((x, y) => y.catEq - x.catEq || x.dl - y.dl || y.sev - x.sev || x.i - y.i || x.j - y.j);
+
+  const usedA = new Set<number>();
+  const usedB = new Set<number>();
+  for (const p of pairs) {
+    if (usedA.has(p.i) || usedB.has(p.j)) continue;
+    usedA.add(p.i);
+    usedB.add(p.j);
+    const fa = aKey[p.i];
+    const fb = bKey[p.j];
+    // Keep the higher-severity representative; a tie keeps a's (mirrors prior behavior).
+    agreed.push(rankOf(fa.severity) >= rankOf(fb.severity) ? fa : fb);
+  }
+
+  for (let i = 0; i < aKey.length; i++) {
+    if (!usedA.has(i)) divergent.push({ provider: a.provider, finding: aKey[i] });
+  }
+  for (let j = 0; j < bKey.length; j++) {
+    if (!usedB.has(j)) divergent.push({ provider: b.provider, finding: bKey[j] });
   }
   return { agreed, divergent };
 }

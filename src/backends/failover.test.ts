@@ -9,6 +9,7 @@ type Methods = Partial<Pick<ReviewBackend, 'reviewPlan' | 'reviewCode' | 'review
 function backend(provider: ReviewProvider, methods: Methods = {}): ReviewBackend {
   return {
     provider,
+    providers: [provider],
     allowsModelOverrideOnResume: provider === 'gemini',
     reviewPlan: methods.reviewPlan ?? vi.fn(),
     reviewCode: methods.reviewCode ?? vi.fn(),
@@ -181,5 +182,62 @@ describe('createFailoverBackend', () => {
 
     expect(p.ok && p.data.provider).toBe('gemini');
     expect(c.ok && c.data.provider).toBe('gemini');
+  });
+});
+
+// ISS-011: a resumed session must route to the leaf that OWNS it, not always the
+// primary. A session degraded to the secondary belongs to the secondary.
+describe('createFailoverBackend — resume ownership routing', () => {
+  const RESUME = { diff: DIFF, session_id: 'sess-1' };
+
+  it('routes a secondary-owned resume to the secondary (not the primary)', async () => {
+    const priReview = vi.fn().mockResolvedValue(ok({ ...CODE_OK, session_id: 'pri' }));
+    const secReview = vi.fn().mockResolvedValue(ok({ ...CODE_OK, session_id: 'sess-1' }));
+    const primary = backend('codex', { reviewCode: priReview });
+    const secondary = backend('gemini', { reviewCode: secReview });
+    const lookup = vi.fn().mockReturnValue('gemini');
+
+    const res = await createFailoverBackend(primary, secondary, lookup).reviewCode(RESUME);
+
+    expect(lookup).toHaveBeenCalledWith('sess-1');
+    expect(secReview).toHaveBeenCalledOnce();
+    expect(priReview).not.toHaveBeenCalled();
+    expect(res.ok && res.data.provider).toBe('gemini');
+  });
+
+  it('routes a primary-owned resume to the primary', async () => {
+    const priReview = vi.fn().mockResolvedValue(ok({ ...CODE_OK, session_id: 'sess-1' }));
+    const secReview = vi.fn();
+    const fb = createFailoverBackend(backend('codex', { reviewCode: priReview }), backend('gemini', { reviewCode: secReview }), vi.fn().mockReturnValue('codex'));
+
+    const res = await fb.reviewCode(RESUME);
+
+    expect(priReview).toHaveBeenCalledOnce();
+    expect(secReview).not.toHaveBeenCalled();
+    expect(res.ok && res.data.provider).toBe('codex');
+  });
+
+  it('routes to the primary when the owner is unknown (lookup returns null)', async () => {
+    const priReview = vi.fn().mockResolvedValue(ok({ ...CODE_OK, session_id: 'sess-1' }));
+    const secReview = vi.fn();
+    const fb = createFailoverBackend(backend('codex', { reviewCode: priReview }), backend('gemini', { reviewCode: secReview }), vi.fn().mockReturnValue(null));
+
+    const res = await fb.reviewCode(RESUME);
+
+    expect(priReview).toHaveBeenCalledOnce();
+    expect(secReview).not.toHaveBeenCalled();
+    expect(res.ok && res.data.provider).toBe('codex');
+  });
+
+  it('routes to the primary when no lookup is supplied (back-compat)', async () => {
+    const priReview = vi.fn().mockResolvedValue(ok({ ...CODE_OK, session_id: 'sess-1' }));
+    const secReview = vi.fn();
+    const fb = createFailoverBackend(backend('codex', { reviewCode: priReview }), backend('gemini', { reviewCode: secReview }));
+
+    const res = await fb.reviewCode(RESUME);
+
+    expect(priReview).toHaveBeenCalledOnce();
+    expect(secReview).not.toHaveBeenCalled();
+    expect(res.ok && res.data.provider).toBe('codex');
   });
 });

@@ -45,7 +45,7 @@ vi.mock('better-sqlite3', () => {
       shouldThrow = false;
       throw new Error('SQLITE_CANTOPEN');
     }
-    return { exec: vi.fn(), prepare: vi.fn(), close: vi.fn() };
+    return { exec: vi.fn(), prepare: vi.fn(), close: vi.fn(), pragma: vi.fn() };
   });
   return { default: MockDatabase };
 });

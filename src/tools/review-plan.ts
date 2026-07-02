@@ -43,7 +43,7 @@ export function registerReviewPlanTool(server: McpServer, client: ReviewBackend,
           isError: true,
         };
       }
-      const tracker = createSessionTracker(db, client.provider);
+      const tracker = createSessionTracker(db, client.providers, client.provider);
       try {
         const preflight = tracker.preflight(args.session_id);
         if (!preflight.ok) {

@@ -512,6 +512,7 @@ export function createGeminiBackend(
 
   return {
     provider: 'gemini',
+    providers: ['gemini'],
     allowsModelOverrideOnResume: deps.allowsModelOverrideOnResume,
     reviewPlan: (input) => runPlanReview(input, deps, turn),
     reviewCode: (input) => runCodeReview(input, deps, turn),

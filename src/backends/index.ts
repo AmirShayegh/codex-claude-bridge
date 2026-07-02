@@ -4,6 +4,7 @@ import type { ReviewBackend } from './backend.js';
 import { createCodexBackend } from './codex.js';
 import { createGeminiBackend } from './gemini.js';
 import { createFailoverBackend } from './failover.js';
+import type { SessionProviderLookup } from './failover.js';
 import { createDeliberationBackend } from './deliberation.js';
 
 export type { ReviewBackend } from './backend.js';
@@ -40,9 +41,11 @@ function createLeafBackend(
 export function createBackend(
   config: ReviewBridgeConfig,
   copilotInstructions?: CopilotInstructions,
+  lookupSessionProvider?: SessionProviderLookup,
 ): ReviewBackend {
   const mode = config.mode ?? (config.fallback ? 'failover' : 'single');
   const primary = createLeafBackend(config, copilotInstructions);
+  // Single provider: no resume routing needed (only one leaf owns everything).
   if (mode === 'single') return primary;
 
   const secondaryProvider: ReviewProvider = config.provider === 'codex' ? 'gemini' : 'codex';
@@ -53,7 +56,9 @@ export function createBackend(
     { ...config, provider: secondaryProvider, model: undefined },
     copilotInstructions,
   );
-  if (mode === 'deliberate') return createDeliberationBackend(primary, secondary);
-  if (mode === 'deliberate-deep') return createDeliberationBackend(primary, secondary, { crossReview: true });
-  return createFailoverBackend(primary, secondary);
+  if (mode === 'deliberate')
+    return createDeliberationBackend(primary, secondary, { lookup: lookupSessionProvider });
+  if (mode === 'deliberate-deep')
+    return createDeliberationBackend(primary, secondary, { crossReview: true, lookup: lookupSessionProvider });
+  return createFailoverBackend(primary, secondary, lookupSessionProvider);
 }

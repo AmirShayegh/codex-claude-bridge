@@ -28,10 +28,45 @@ const NULL_TRACKER: SessionTracker = {
   recordFailureBestEffort() {},
 };
 
-// provider tags new sessions and guards resumes: a session created by one
-// provider cannot be resumed under another (their thread/conversation ids are
-// not interchangeable).
-export function createSessionTracker(db: Database.Database | undefined, provider: string): SessionTracker {
+// Read-only cross-provider guard: a session created by one provider cannot be
+// resumed under a backend that doesn't serve that provider (their thread/
+// conversation ids are not interchangeable). Fails OPEN — returns ok when there
+// is no db, no session id, a read error, or an unknown/legacy-null owner — so a
+// guard we can't evaluate never blocks a review. Shared by the MCP tracker
+// (below) and the CLI, which has no tracker/recording of its own.
+export function checkSessionProvider(
+  db: Database.Database | undefined,
+  sessionId: string | undefined,
+  providers: readonly string[],
+): Result<void> {
+  if (!db || typeof sessionId !== 'string') return ok(undefined);
+  // getSession is already Result-safe, but guard against any future throw so the
+  // fail-open contract holds no matter what the read does.
+  let existing: ReturnType<typeof getSession>;
+  try {
+    existing = getSession(db, sessionId);
+  } catch {
+    return ok(undefined);
+  }
+  if (!existing.ok || !existing.data || !existing.data.provider) return ok(undefined);
+  const owner = existing.data.provider;
+  if (!providers.includes(owner)) {
+    return err(
+      `${ErrorCode.PROVIDER_MISMATCH}: session ${sessionId} was created by the '${owner}' provider, ` +
+        `which is not active (available: ${providers.join(', ')}). Start a new session, or configure ` +
+        `the '${owner}' provider to continue this one.`,
+    );
+  }
+  return ok(undefined);
+}
+
+// providers is the guard set (every provider this backend serves); taggingProvider
+// is the provider stamped on NEW sessions (a composite presents as its primary).
+export function createSessionTracker(
+  db: Database.Database | undefined,
+  providers: readonly string[],
+  taggingProvider: string,
+): SessionTracker {
   if (!db) return NULL_TRACKER;
 
   let preflightId: string | undefined;
@@ -40,17 +75,10 @@ export function createSessionTracker(db: Database.Database | undefined, provider
     preflight(sessionId) {
       if (typeof sessionId !== 'string') return ok(undefined);
       // Cross-provider guard runs before activateSession so a rejected resume
-      // never mutates the session's state. A null stored provider (legacy row)
-      // is allowed through — there's nothing to conflict with.
-      const existing = getSession(db, sessionId);
-      if (existing.ok && existing.data && existing.data.provider && existing.data.provider !== provider) {
-        return err(
-          `${ErrorCode.PROVIDER_MISMATCH}: session ${sessionId} was created by the '${existing.data.provider}' provider, ` +
-            `but the active provider is '${provider}'. Start a new session, or switch the provider back to ` +
-            `'${existing.data.provider}' to continue this one.`,
-        );
-      }
-      const result = activateSession(db, sessionId, provider);
+      // never mutates the session's state.
+      const guard = checkSessionProvider(db, sessionId, providers);
+      if (!guard.ok) return guard;
+      const result = activateSession(db, sessionId, taggingProvider);
       if (result.ok) {
         preflightId = sessionId;
       } else {
@@ -63,7 +91,7 @@ export function createSessionTracker(db: Database.Database | undefined, provider
       if (!preflightId) {
         // Fresh review: tag provenance with the provider that actually served
         // (failover may have switched it), defaulting to the configured one.
-        const sessionResult = getOrCreateSession(db, resultSessionId, servingProvider ?? provider);
+        const sessionResult = getOrCreateSession(db, resultSessionId, servingProvider ?? taggingProvider);
         if (!sessionResult.ok) {
           console.error(`Failed to track session: ${sessionResult.error}`);
         }
@@ -101,7 +129,7 @@ export function createSessionTracker(db: Database.Database | undefined, provider
       // that's missing the failed status.
       try {
         db.transaction(() => {
-          const sessionResult = getOrCreateSession(db, id, provider);
+          const sessionResult = getOrCreateSession(db, id, taggingProvider);
           if (!sessionResult.ok) throw new Error(sessionResult.error);
           const failResult = markSessionFailed(db, id);
           if (!failResult.ok) throw new Error(failResult.error);

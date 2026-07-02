@@ -38,6 +38,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockClient = {
     provider: 'codex',
+    providers: ['codex'],
     allowsModelOverrideOnResume: false,
     reviewPlan: vi.fn(),
     reviewCode: vi.fn(),

@@ -2,9 +2,12 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Command, Option } from 'commander';
+import type Database from 'better-sqlite3';
 import { loadConfig, formatConfigSource } from '../config/loader.js';
 import { createBackend } from '../backends/index.js';
 import type { ReviewBackend } from '../backends/backend.js';
+import { openReviewDb, makeSessionProviderLookup } from '../storage/db.js';
+import { checkSessionProvider } from '../storage/session-tracker.js';
 import { loadCopilotInstructions } from '../config/copilot-instructions.js';
 import type { CopilotInstructions } from '../config/copilot-instructions.js';
 import { readInput, resetStdinGuard } from './stdin.js';
@@ -45,7 +48,14 @@ function buildIO(deps: CliDeps, json: boolean): HandlerIO {
   };
 }
 
-function initClient(configDir: string | undefined, deps: CliDeps): ReviewBackend | null {
+interface CliClient {
+  client: ReviewBackend;
+  // Read-only session db, or undefined when none is reachable. Used by the
+  // cross-provider resume guard; the guard fails open when it's undefined.
+  db: Database.Database | undefined;
+}
+
+function initClient(configDir: string | undefined, deps: CliDeps): CliClient | null {
   const configResult = loadConfig(configDir);
   if (!configResult.ok) {
     deps.stderr.write(`Error: ${configResult.error}\n`);
@@ -70,14 +80,35 @@ function initClient(configDir: string | undefined, deps: CliDeps): ReviewBackend
     }
   }
 
+  // Read-only so the CLI never creates or writes the review db (no recording).
+  // Undefined when no shared db is reachable → resume routing + guard fail open.
+  const db = openReviewDb({ readonly: true });
   try {
-    return createBackend(config, copilotInstr);
+    const client = createBackend(config, copilotInstr, makeSessionProviderLookup(db));
+    return { client, db };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     deps.stderr.write(`Error: Failed to initialize the review backend: ${msg}\n`);
     deps.exit(1);
     return null;
   }
+}
+
+// Cross-provider resume guard, shared by all three CLI commands. Returns true to
+// proceed, false when a foreign session was rejected (message printed, exit set).
+function guardSession(
+  init: CliClient,
+  sessionId: string | undefined,
+  io: HandlerIO,
+  deps: CliDeps,
+): boolean {
+  const guard = checkSessionProvider(init.db, sessionId, init.client.providers);
+  if (!guard.ok) {
+    io.stderr.write(`Error: ${guard.error}\n`);
+    deps.exit(1);
+    return false;
+  }
+  return true;
 }
 
 async function readVersion(): Promise<string> {
@@ -125,8 +156,10 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
       const json = opts.json ?? false;
       const io = buildIO(deps, json);
 
-      const client = initClient(opts.config, deps);
-      if (!client) return;
+      const init = initClient(opts.config, deps);
+      if (!init) return;
+      const { client } = init;
+      if (!guardSession(init, opts.session, io, deps)) return;
 
       const inputResult = await readInput(opts.plan);
       if (!inputResult.ok) {
@@ -167,8 +200,10 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
       const json = opts.json ?? false;
       const io = buildIO(deps, json);
 
-      const client = initClient(opts.config, deps);
-      if (!client) return;
+      const init = initClient(opts.config, deps);
+      if (!init) return;
+      const { client } = init;
+      if (!guardSession(init, opts.session, io, deps)) return;
 
       const inputResult = await readInput(opts.diff);
       if (!inputResult.ok) {
@@ -205,8 +240,10 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
       const json = opts.json ?? false;
       const io = buildIO(deps, json);
 
-      const client = initClient(opts.config, deps);
-      if (!client) return;
+      const init = initClient(opts.config, deps);
+      if (!init) return;
+      const { client } = init;
+      if (!guardSession(init, opts.session, io, deps)) return;
 
       // Read explicit diff if provided via file/stdin
       let explicitDiff: string | undefined;

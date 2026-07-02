@@ -10,6 +10,7 @@ type Methods = Partial<
 function backend(provider: ReviewProvider, methods: Methods = {}): ReviewBackend {
   return {
     provider,
+    providers: [provider],
     allowsModelOverrideOnResume: provider === 'gemini',
     reviewPlan: methods.reviewPlan ?? vi.fn(),
     reviewCode: methods.reviewCode ?? vi.fn(),
@@ -180,6 +181,26 @@ describe('createDeliberationBackend', () => {
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.data.deliberation).toBeUndefined();
     expect(sReview).not.toHaveBeenCalled(); // no parallel second review on resume
+  });
+
+  it('routes a secondary-owned resume to the secondary via the lookup (ISS-011)', async () => {
+    // A prior review degraded to gemini; resuming that session must run on gemini,
+    // not the primary. Regression for the degraded-session-id-unusable bug.
+    const pReview = vi.fn();
+    const sReview = vi.fn().mockResolvedValue(ok(codeResult('approve', [])));
+    const primary = backend('codex', { reviewCode: pReview });
+    const secondary = backend('gemini', { reviewCode: sReview });
+    const lookup = vi.fn().mockReturnValue('gemini');
+
+    const res = await createDeliberationBackend(primary, secondary, { lookup }).reviewCode({
+      diff: DIFF,
+      session_id: 'gemini-sess',
+    });
+
+    expect(lookup).toHaveBeenCalledWith('gemini-sess');
+    expect(sReview).toHaveBeenCalledOnce();
+    expect(pReview).not.toHaveBeenCalled();
+    expect(res.ok && res.data.provider).toBe('gemini');
   });
 
   it('reviewPrecommit uses failover, not deliberation', async () => {

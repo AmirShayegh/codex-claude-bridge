@@ -19,9 +19,9 @@
     "T-024",
     "T-027"
   ],
-  "resolution": null,
-  "resolvedDate": null,
+  "resolution": "Fixed in T-027. Extracted a read-only checkSessionProvider guard shared by the MCP tracker and the CLI. The CLI now opens a read-only db (openReviewDb({readonly:true}), never creating/writing) and runs the guard before each review, so a foreign session_id gets the same PROVIDER_MISMATCH rejection (exit 1) as MCP. CLI records nothing (out of scope). Real-seeded-db CLI guard test in commands.test.ts. Note: the guard is cwd-dependent (fail-open otherwise) — tracked as ISS-018.",
+  "resolvedDate": "2026-07-01",
   "severity": "medium",
-  "status": "open",
+  "status": "resolved",
   "title": "CLI resume path has no cross-provider session guard — foreign session_id surfaces as raw provider error"
 }

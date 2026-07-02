@@ -57,6 +57,10 @@ export interface ReviewBackend {
   // Which provider this backend is. Lets the tool layer detect a cross-provider
   // session resume (e.g. a gemini session reopened under codex) before reviewing.
   provider: ReviewProvider;
+  // Every provider this backend can serve. A leaf lists just its own provider; a
+  // composite lists all of its children's. Used by the cross-provider guard
+  // (membership check) and by resume routing to find a session's owning leaf.
+  providers: readonly ReviewProvider[];
   // Whether a resumed session may change model. False for Codex (its SDK
   // reasserts --model on resume); true for Gemini. The tool layer gates the
   // session_id+model conflict rejection on this so it isn't a Codex-only rule

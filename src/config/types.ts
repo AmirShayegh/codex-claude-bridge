@@ -8,6 +8,13 @@ const BlockOnSeveritySchema = z.enum(['critical', 'major', 'minor', 'suggestion'
 const ProviderSchema = z.enum(['codex', 'gemini']);
 export type ReviewProvider = z.infer<typeof ProviderSchema>;
 
+// Narrow a raw provider string (e.g. the nullable sessions.provider column) to a
+// ReviewProvider, mapping unknown/legacy values to null instead of casting.
+export function toReviewProvider(value: string | null | undefined): ReviewProvider | null {
+  const parsed = ProviderSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
 // Models we officially document and recommend, per provider. Used for
 // error-message tips and README copy — NOT a blocking allowlist. Users who
 // pass a different model via .reviewbridge.json, the MCP `model` param, or the

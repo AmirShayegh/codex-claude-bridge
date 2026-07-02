@@ -20,9 +20,9 @@
     "T-024",
     "T-027"
   ],
-  "resolution": null,
-  "resolvedDate": null,
+  "resolution": "Fixed in T-027. withFailover now routes a resumed session to the leaf that OWNS it (via a sync lookupSessionProvider), instead of unconditionally to the primary. A degraded/failed-over session owned by the secondary now resumes on the secondary. Forwarded through all six composite closures (failover + deliberation plan/code/precommit). Regression test in deliberation.test.ts + failover.test.ts ownership-routing suite.",
+  "resolvedDate": "2026-07-01",
   "severity": "medium",
-  "status": "open",
+  "status": "resolved",
   "title": "Degraded deliberation returns a session_id the next call cannot continue"
 }

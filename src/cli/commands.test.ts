@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { runCli } from './commands.js';
 import type { CliDeps } from './commands.js';
 
@@ -39,7 +39,12 @@ vi.mock('../utils/resolve-diff.js', () => ({
   resolvePrecommitDiff: vi.fn(),
 }));
 
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { rmSync } from 'node:fs';
 import { createBackend } from '../backends/index.js';
+import { openReviewDb } from '../storage/db.js';
+import { getOrCreateSession } from '../storage/sessions.js';
 import { readInput } from './stdin.js';
 import { resolvePrecommitDiff } from '../utils/resolve-diff.js';
 
@@ -70,6 +75,7 @@ describe('review-plan command', () => {
     mockReadInput.mockResolvedValue({ ok: true, data: 'My plan content' });
     const mockClient = {
       provider: 'codex' as const,
+      providers: ['codex'] as const,
       allowsModelOverrideOnResume: false,
       reviewPlan: vi.fn().mockResolvedValue({
         ok: true,
@@ -95,6 +101,7 @@ describe('review-plan command', () => {
     mockReadInput.mockResolvedValue({ ok: true, data: 'plan' });
     const mockClient = {
       provider: 'codex' as const,
+      providers: ['codex'] as const,
       allowsModelOverrideOnResume: false,
       reviewPlan: vi.fn().mockResolvedValue({
         ok: true,
@@ -121,6 +128,7 @@ describe('review-plan command', () => {
     const data = { verdict: 'approve', summary: 'ok', findings: [], session_id: 's1' };
     const mockClient = {
       provider: 'codex' as const,
+      providers: ['codex'] as const,
       allowsModelOverrideOnResume: false,
       reviewPlan: vi.fn().mockResolvedValue({ ok: true, data }),
       reviewCode: vi.fn(),
@@ -138,6 +146,7 @@ describe('review-plan command', () => {
     mockReadInput.mockResolvedValue({ ok: false, error: 'ENOENT' });
     mockCreateClient.mockReturnValue({
       provider: 'codex',
+      providers: ['codex'] as const,
       allowsModelOverrideOnResume: false,
       reviewPlan: vi.fn(),
       reviewCode: vi.fn(),
@@ -157,6 +166,7 @@ describe('review-code command', () => {
     mockReadInput.mockResolvedValue({ ok: true, data: 'diff --git ...' });
     const mockClient = {
       provider: 'codex' as const,
+      providers: ['codex'] as const,
       allowsModelOverrideOnResume: false,
       reviewPlan: vi.fn(),
       reviewCode: vi.fn().mockResolvedValue({
@@ -183,6 +193,7 @@ describe('review-precommit command', () => {
     mockResolveDiff.mockResolvedValue({ ok: true, data: 'staged diff' });
     const mockClient = {
       provider: 'codex' as const,
+      providers: ['codex'] as const,
       allowsModelOverrideOnResume: false,
       reviewPlan: vi.fn(),
       reviewCode: vi.fn(),
@@ -205,6 +216,7 @@ describe('review-precommit command', () => {
     mockResolveDiff.mockResolvedValue({ ok: true, data: 'staged diff' });
     const mockClient = {
       provider: 'codex' as const,
+      providers: ['codex'] as const,
       allowsModelOverrideOnResume: false,
       reviewPlan: vi.fn(),
       reviewCode: vi.fn(),
@@ -227,6 +239,7 @@ describe('review-precommit command', () => {
     mockResolveDiff.mockResolvedValue({ ok: true, data: 'explicit diff' });
     const mockClient = {
       provider: 'codex' as const,
+      providers: ['codex'] as const,
       allowsModelOverrideOnResume: false,
       reviewPlan: vi.fn(),
       reviewCode: vi.fn(),
@@ -249,6 +262,7 @@ describe('review-precommit command', () => {
     mockResolveDiff.mockResolvedValue({ ok: false, error: 'GIT_ERROR: not a git repo' });
     mockCreateClient.mockReturnValue({
       provider: 'codex',
+      providers: ['codex'] as const,
       allowsModelOverrideOnResume: false,
       reviewPlan: vi.fn(),
       reviewCode: vi.fn(),
@@ -297,5 +311,69 @@ describe('--help and --version', () => {
 
     // Should output some version string
     expect(deps.stdoutBuf).toMatch(/\d+\.\d+\.\d+/);
+  });
+});
+
+// ISS-017: the cross-provider resume guard must also fire in the CLI, not just
+// the MCP tool layer. Uses a REAL seeded db (guard logic is unmocked here).
+describe('cross-provider resume guard (ISS-017)', () => {
+  const DIFF = 'diff --git a/f b/f\n@@ -1 +1 @@\n-a\n+b';
+  let dbPath: string;
+  let savedEnv: string | undefined;
+
+  beforeEach(() => {
+    savedEnv = process.env.REVIEW_BRIDGE_DB;
+    dbPath = join(tmpdir(), `bridge-guard-${process.pid}-${Date.now()}.db`);
+    process.env.REVIEW_BRIDGE_DB = dbPath;
+    const seed = openReviewDb();
+    getOrCreateSession(seed, 'g-sess', 'gemini'); // a gemini-owned session
+    seed.close();
+    mockReadInput.mockResolvedValue({ ok: true, data: DIFF });
+  });
+
+  afterEach(() => {
+    if (savedEnv === undefined) delete process.env.REVIEW_BRIDGE_DB;
+    else process.env.REVIEW_BRIDGE_DB = savedEnv;
+    for (const suffix of ['', '-wal', '-shm']) {
+      try { rmSync(dbPath + suffix); } catch { /* ignore */ }
+    }
+  });
+
+  it('rejects a gemini-owned session under a codex client (PROVIDER_MISMATCH, exit 1)', async () => {
+    mockCreateClient.mockReturnValue({
+      provider: 'codex',
+      providers: ['codex'],
+      allowsModelOverrideOnResume: false,
+      reviewPlan: vi.fn(),
+      reviewCode: vi.fn(),
+      reviewPrecommit: vi.fn(),
+    });
+
+    const deps = createDeps();
+    await runCli(['node', 'bridge', 'review-code', '--diff', '/tmp/d.diff', '--session', 'g-sess'], deps);
+
+    expect(deps.exitCode).toBe(1);
+    expect(deps.stderrBuf).toContain('PROVIDER_MISMATCH');
+  });
+
+  it('allows the session when the client serves that provider', async () => {
+    const reviewCode = vi.fn().mockResolvedValue({
+      ok: true,
+      data: { verdict: 'approve', summary: 's', findings: [], session_id: 'g-sess' },
+    });
+    mockCreateClient.mockReturnValue({
+      provider: 'gemini',
+      providers: ['gemini'],
+      allowsModelOverrideOnResume: true,
+      reviewPlan: vi.fn(),
+      reviewCode,
+      reviewPrecommit: vi.fn(),
+    });
+
+    const deps = createDeps();
+    await runCli(['node', 'bridge', 'review-code', '--diff', '/tmp/d.diff', '--session', 'g-sess'], deps);
+
+    expect(reviewCode).toHaveBeenCalled();
+    expect(deps.exitCode).not.toBe(1);
   });
 });

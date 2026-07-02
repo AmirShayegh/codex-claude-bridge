@@ -20,7 +20,7 @@ describe('createSessionTracker — recordSuccess atomicity (T-002)', () => {
   });
 
   it('does not mark session completed when saveReview fails (preflight path)', () => {
-    const tracker = createSessionTracker(db, 'codex');
+    const tracker = createSessionTracker(db, ['codex'], 'codex');
     tracker.preflight('sess_atomicity_preflight');
 
     tracker.recordSuccess('sess_atomicity_preflight', {
@@ -40,7 +40,7 @@ describe('createSessionTracker — recordSuccess atomicity (T-002)', () => {
   });
 
   it('does not mark session completed when saveReview fails (fresh path)', () => {
-    const tracker = createSessionTracker(db, 'codex');
+    const tracker = createSessionTracker(db, ['codex'], 'codex');
 
     tracker.recordSuccess('sess_atomicity_fresh', {
       session_id: 'sess_atomicity_fresh',
@@ -78,7 +78,7 @@ describe('createSessionTracker — cross-provider resume guard (T-017)', () => {
     const before = getSession(db, 'sess_cross');
     expect(before.ok && before.data?.status).toBe('in_progress');
 
-    const codexTracker = createSessionTracker(db, 'codex');
+    const codexTracker = createSessionTracker(db, ['codex'], 'codex');
     const result = codexTracker.preflight('sess_cross');
 
     expect(result.ok).toBe(false);
@@ -93,7 +93,7 @@ describe('createSessionTracker — cross-provider resume guard (T-017)', () => {
   it('allows resuming a gemini session under gemini', () => {
     getOrCreateSession(db, 'sess_same', 'gemini');
 
-    const result = createSessionTracker(db, 'gemini').preflight('sess_same');
+    const result = createSessionTracker(db, ['gemini'], 'gemini').preflight('sess_same');
 
     expect(result.ok).toBe(true);
   });
@@ -101,14 +101,14 @@ describe('createSessionTracker — cross-provider resume guard (T-017)', () => {
   it('preflight on a session not yet in the DB persists its provider, so the guard holds on the next resume (m1)', () => {
     // Backend session exists (in ~/.gemini) but no bridge row yet — the first
     // touch is a resume under gemini. Pre-fix this persisted provider=NULL.
-    const first = createSessionTracker(db, 'gemini').preflight('sess_new_resume');
+    const first = createSessionTracker(db, ['gemini'], 'gemini').preflight('sess_new_resume');
     expect(first.ok).toBe(true);
 
     const row = getSession(db, 'sess_new_resume');
     expect(row.ok && row.data?.provider).toBe('gemini');
 
     // A later resume of the same id under codex is now correctly rejected.
-    const second = createSessionTracker(db, 'codex').preflight('sess_new_resume');
+    const second = createSessionTracker(db, ['codex'], 'codex').preflight('sess_new_resume');
     expect(second.ok).toBe(false);
     if (!second.ok) expect(second.error).toContain('PROVIDER_MISMATCH');
   });

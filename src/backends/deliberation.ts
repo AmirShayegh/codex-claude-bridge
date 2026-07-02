@@ -7,6 +7,7 @@ import {
 } from '../review/types.js';
 import type { PlanReviewResult, CodeReviewResult } from '../review/types.js';
 import { withFailover } from './failover.js';
+import type { SessionProviderLookup } from './failover.js';
 import type {
   ReviewBackend,
   PlanReviewInput,
@@ -286,10 +287,11 @@ async function deliberatePlan(
   secondary: ReviewBackend,
   input: PlanReviewInput,
   crossReview: boolean,
+  lookup?: SessionProviderLookup,
 ): Promise<Result<PlanReviewResult>> {
   // A resumed session belongs to one provider — can't deliberate it. Fall through
-  // to failover (delegates to the primary; the cross-provider guard handles it).
-  if (input.session_id) return withFailover(primary, secondary, input, (b, i) => b.reviewPlan(i));
+  // to failover, which routes to the session's OWNING leaf via lookup (ISS-011).
+  if (input.session_id) return withFailover(primary, secondary, input, (b, i) => b.reviewPlan(i), lookup);
 
   const [ra, rb] = await Promise.all([
     primary.reviewPlan(input),
@@ -318,8 +320,9 @@ async function deliberateCode(
   secondary: ReviewBackend,
   input: CodeReviewInput,
   crossReview: boolean,
+  lookup?: SessionProviderLookup,
 ): Promise<Result<CodeReviewResult>> {
-  if (input.session_id) return withFailover(primary, secondary, input, (b, i) => b.reviewCode(i));
+  if (input.session_id) return withFailover(primary, secondary, input, (b, i) => b.reviewCode(i), lookup);
 
   const [ra, rb] = await Promise.all([
     primary.reviewCode(input),
@@ -346,20 +349,26 @@ async function deliberateCode(
 export function createDeliberationBackend(
   primary: ReviewBackend,
   secondary: ReviewBackend,
-  opts: { crossReview?: boolean } = {},
+  opts: { crossReview?: boolean; lookup?: SessionProviderLookup } = {},
 ): ReviewBackend {
   // deliberate-deep: after each provider reviews independently, the OTHER
   // provider adjudicates its divergent findings (confirmed/disputed/unsure).
   const crossReview = opts.crossReview ?? false;
+  const lookup = opts.lookup;
   return {
-    // Presents as the primary: resumes route to it, and the tool's cross-provider
-    // guard + session_id/model gate key off these.
+    // Presents as the primary for tagging + the session_id/model gate; but a
+    // resumed session routes to its OWNING leaf via lookup (ISS-011). The
+    // allowsModelOverrideOnResume gate stays the primary's conservative one — a
+    // secondary-owned resume combined with a model override may still be rejected;
+    // acceptable, out of scope for T-027.
     provider: primary.provider,
+    providers: [...primary.providers, ...secondary.providers],
     allowsModelOverrideOnResume: primary.allowsModelOverrideOnResume,
-    reviewPlan: (input: PlanReviewInput) => deliberatePlan(primary, secondary, input, crossReview),
-    reviewCode: (input: CodeReviewInput) => deliberateCode(primary, secondary, input, crossReview),
-    // Precommit stays failover — it runs constantly and is latency-sensitive.
+    reviewPlan: (input: PlanReviewInput) => deliberatePlan(primary, secondary, input, crossReview, lookup),
+    reviewCode: (input: CodeReviewInput) => deliberateCode(primary, secondary, input, crossReview, lookup),
+    // Precommit stays failover — it runs constantly and is latency-sensitive. It
+    // still routes resumes to the owning leaf via the same lookup.
     reviewPrecommit: (input: PrecommitReviewInput) =>
-      withFailover(primary, secondary, input, (b, i) => b.reviewPrecommit(i)),
+      withFailover(primary, secondary, input, (b, i) => b.reviewPrecommit(i), lookup),
   };
 }

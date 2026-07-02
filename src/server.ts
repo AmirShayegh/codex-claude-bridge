@@ -1,13 +1,11 @@
 import { dirname } from 'node:path';
 import { readFileSync } from 'node:fs';
-import Database from 'better-sqlite3';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { loadConfig, formatConfigSource } from './config/loader.js';
 import { createBackend } from './backends/index.js';
 import { loadCopilotInstructions } from './config/copilot-instructions.js';
 import type { CopilotInstructions } from './config/copilot-instructions.js';
-import { initDb } from './storage/reviews.js';
-import { initSessionsDb } from './storage/sessions.js';
+import { openReviewDb, makeSessionProviderLookup } from './storage/db.js';
 import { registerReviewPlanTool } from './tools/review-plan.js';
 import { registerReviewCodeTool } from './tools/review-code.js';
 import { registerReviewPrecommitTool } from './tools/review-precommit.js';
@@ -78,24 +76,11 @@ export function createServer(): McpServer {
     }
   }
 
-  const client = createBackend(config, copilotInstr);
-
-  const dbPath = process.env.REVIEW_BRIDGE_DB ?? 'reviews.db';
-  let db: InstanceType<typeof Database>;
-  try {
-    db = new Database(dbPath);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    console.error(`Database open failed (${dbPath}), falling back to in-memory: ${msg}`);
-    db = new Database(':memory:');
-  }
-  try {
-    initDb(db);
-    initSessionsDb(db);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    console.error(`Database table initialization failed: ${msg}`);
-  }
+  // Open the db before building the backend so resume routing can consult session
+  // ownership. The read-write open always returns a usable db (in-memory on
+  // failure); the tools and lookup accept an optional db regardless.
+  const db = openReviewDb();
+  const client = createBackend(config, copilotInstr, makeSessionProviderLookup(db));
 
   try {
     const server = new McpServer(

@@ -52,7 +52,7 @@ describe('createBackend — failover (default)', () => {
     const backend = createBackend({ ...DEFAULT_CONFIG, provider: 'codex' });
     expect(createCodexBackend).toHaveBeenCalledOnce();
     expect(createGeminiBackend).toHaveBeenCalledOnce();
-    expect(createFailoverBackend).toHaveBeenCalledWith(codexStub, geminiStub);
+    expect(createFailoverBackend).toHaveBeenCalledWith(codexStub, geminiStub, undefined);
     expect(createDeliberationBackend).not.toHaveBeenCalled();
     expect(backend).toBe(failoverStub);
   });
@@ -71,7 +71,7 @@ describe('createBackend — deliberate', () => {
     const backend = createBackend({ ...DEFAULT_CONFIG, provider: 'codex', mode: 'deliberate' });
     expect(createCodexBackend).toHaveBeenCalledOnce();
     expect(createGeminiBackend).toHaveBeenCalledOnce();
-    expect(createDeliberationBackend).toHaveBeenCalledWith(codexStub, geminiStub);
+    expect(createDeliberationBackend).toHaveBeenCalledWith(codexStub, geminiStub, { lookup: undefined });
     expect(createFailoverBackend).not.toHaveBeenCalled();
     expect(backend).toBe(deliberationStub);
   });
@@ -87,7 +87,10 @@ describe('createBackend — deliberate', () => {
 
   it("mode 'deliberate-deep' turns on the cross-review round via the composite opts", () => {
     const backend = createBackend({ ...DEFAULT_CONFIG, provider: 'codex', mode: 'deliberate-deep' });
-    expect(createDeliberationBackend).toHaveBeenCalledWith(codexStub, geminiStub, { crossReview: true });
+    expect(createDeliberationBackend).toHaveBeenCalledWith(codexStub, geminiStub, {
+      crossReview: true,
+      lookup: undefined,
+    });
     expect(createFailoverBackend).not.toHaveBeenCalled();
     expect(backend).toBe(deliberationStub);
   });

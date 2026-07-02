@@ -43,6 +43,10 @@ function tag<R extends { provider?: ReviewProvider }>(
 
 type FailoverInput = { session_id?: string; model?: string };
 
+// Resolve a session id to the provider that owns it (from the sessions table).
+// Sync — better-sqlite3 is synchronous. Returns null when unknown/unresolvable.
+export type SessionProviderLookup = (sessionId: string) => ReviewProvider | null;
+
 // Exported for reuse by the deliberation composite, whose precommit path (and
 // resumed-session path) is plain failover, not deliberation.
 export async function withFailover<I extends FailoverInput, R extends { provider?: ReviewProvider }>(
@@ -50,10 +54,18 @@ export async function withFailover<I extends FailoverInput, R extends { provider
   secondary: ReviewBackend,
   input: I,
   run: (backend: ReviewBackend, input: I) => Promise<Result<R>>,
+  lookup?: SessionProviderLookup,
 ): Promise<Result<R>> {
-  // A resumed session lives in the primary's own conversation store; the
-  // secondary can't continue it. Delegate to the primary with no failover.
-  if (input.session_id) return tag(primary.provider, await run(primary, input));
+  // A resumed session lives in ONE provider's conversation store. Route it to the
+  // leaf that owns it (a degraded/failed-over session belongs to the secondary,
+  // not the primary — ISS-011). Route by membership so this composes even if a
+  // backend ever serves >1 provider. Unknown owner (no lookup / not found) →
+  // primary, the historical default.
+  if (input.session_id) {
+    const owner = lookup?.(input.session_id) ?? null;
+    const target = owner && secondary.providers.includes(owner) ? secondary : primary;
+    return tag(target.provider, await run(target, input));
+  }
 
   const first = await run(primary, input);
   if (first.ok || !isFailoverEligible(first.error)) return tag(primary.provider, first);
@@ -77,17 +89,20 @@ export async function withFailover<I extends FailoverInput, R extends { provider
 export function createFailoverBackend(
   primary: ReviewBackend,
   secondary: ReviewBackend,
+  lookup?: SessionProviderLookup,
 ): ReviewBackend {
   return {
-    // The composite presents as the primary: resumes route to the primary, and
-    // the tool's cross-provider guard + session_id/model gate key off these.
+    // The composite presents as the primary for tagging new sessions + the
+    // session_id/model gate. Resumes route to the OWNING leaf via `lookup`, not
+    // unconditionally to the primary.
     provider: primary.provider,
+    providers: [...primary.providers, ...secondary.providers],
     allowsModelOverrideOnResume: primary.allowsModelOverrideOnResume,
     reviewPlan: (input: PlanReviewInput) =>
-      withFailover(primary, secondary, input, (b, i) => b.reviewPlan(i)),
+      withFailover(primary, secondary, input, (b, i) => b.reviewPlan(i), lookup),
     reviewCode: (input: CodeReviewInput) =>
-      withFailover(primary, secondary, input, (b, i) => b.reviewCode(i)),
+      withFailover(primary, secondary, input, (b, i) => b.reviewCode(i), lookup),
     reviewPrecommit: (input: PrecommitReviewInput) =>
-      withFailover(primary, secondary, input, (b, i) => b.reviewPrecommit(i)),
+      withFailover(primary, secondary, input, (b, i) => b.reviewPrecommit(i), lookup),
   };
 }

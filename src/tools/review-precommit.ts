@@ -39,7 +39,7 @@ export function registerReviewPrecommitTool(server: McpServer, client: ReviewBac
           isError: true,
         };
       }
-      const tracker = createSessionTracker(db, client.provider);
+      const tracker = createSessionTracker(db, client.providers, client.provider);
       try {
         const diffResult = await resolvePrecommitDiff({ diff: args.diff, auto_diff: args.auto_diff });
         if (!diffResult.ok) {

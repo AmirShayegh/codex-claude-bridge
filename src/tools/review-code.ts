@@ -49,7 +49,7 @@ export function registerReviewCodeTool(server: McpServer, client: ReviewBackend,
           isError: true,
         };
       }
-      const tracker = createSessionTracker(db, client.provider);
+      const tracker = createSessionTracker(db, client.providers, client.provider);
       try {
         // Resolve diff (auto-capture or explicit)
         const diffResult = await resolveCodeDiff({ diff: args.diff, auto_diff: args.auto_diff });

@@ -20,7 +20,7 @@ dist/
 .reviewbridge.json
 
 # SQLite database
-reviews.db
+reviews.db*
 
 # Coverage
 coverage/

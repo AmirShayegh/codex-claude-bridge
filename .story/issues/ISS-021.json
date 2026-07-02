@@ -1,0 +1,20 @@
+{
+  "components": [
+    "codex",
+    "backends",
+    "onboarding"
+  ],
+  "discoveredDate": "2026-07-02",
+  "id": "ISS-021",
+  "impact": "Confirmed 2026-07-01 by a fresh-session dogfood of the published 1.5.0 MCP server (exactly what a new user gets from `npx codex-claude-bridge@latest`): the very first deliberate review degraded to Gemini-only with degraded.failed=codex, PROVIDER_UNAVAILABLE — macOS XProtect had quarantined the @openai/codex-sdk's bundled codex binary (known false-positive; see the codex-binary-xprotect memory and the v1.4.0 handover). Consequences for a real macOS user with no config: deliberate/failover modes silently run single-provider (Gemini), and single-codex mode fails outright. The 1.4.0 escape hatch (config codex_path / CODEX_PATH env) works but is manual and only discoverable by reading the error text — while a perfectly good system codex often already exists (this machine: ~/.local/bin/codex, v0.142.5).\n\nPROPOSED FIX (auto-discovery fallback, config always wins): in createCodexBackend (src/backends/codex.ts:242, the `config.codex_path ?? process.env.CODEX_PATH` chain), when NO explicit override is set, preflight the bundled binary (cheap spawn, e.g. `codex --version`, or reuse the existing PROVIDER_UNAVAILABLE classification on first failure); on failure, probe in order: `which codex` on PATH, then well-known locations (~/.local/bin/codex, /opt/homebrew/bin/codex, /usr/local/bin/codex). Use the first that runs, and narrate the substitution on stderr ([codex-bridge] bundled codex unusable, using /path/to/codex) so the behavior is transparent. An explicit codex_path/CODEX_PATH must still win unconditionally and never be second-guessed. Consider caching the probe result per-process to avoid re-probing per review. Alternative/simpler variant: keep the failure but extend the PROVIDER_UNAVAILABLE tip to name any discovered system codex path ready to paste into codex_path.\n\nValidation for the fix: the degraded marker from T-028 made this diagnosable in one read (degraded.failed + reason) — keep that behavior for the no-binary-found case.",
+  "location": [
+    "src/backends/codex.ts:242"
+  ],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": null,
+  "resolvedDate": null,
+  "severity": "high",
+  "status": "open",
+  "title": "Out-of-box Codex is broken on macOS: XProtect quarantines the SDK's bundled binary; add auto-discovery fallback to a system codex"
+}

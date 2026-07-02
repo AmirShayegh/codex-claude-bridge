@@ -3,13 +3,16 @@
     "backends/deliberation"
   ],
   "discoveredDate": "2026-07-02",
+  "displayId": "ISS-024",
   "id": "ISS-024",
   "impact": "computeAgreement keys matching on non-null file+line; plan findings have neither, so every plan finding lands in `keyless` → divergent. Live probe (deliberate-deep plan review of an ISS-022 fix plan): 0 agreed / 11 divergent even though both providers independently flagged the same three concerns (mtime granularity, composite-rebuild lifecycle, failure-policy gaps) in near-identical words. The agreed/divergent split — the core value of deliberation for plans — is meaningless for review_plan; every plan deliberation degrades to a cross-review-only signal. Fix needs a plan-specific match key (e.g. normalized-category + text similarity, or provider-side finding topic tags), ideally informed by live two-provider plan data the way T-029 was for code.",
   "location": [
     "src/backends/deliberation.ts"
   ],
   "phase": null,
-  "relatedTickets": [],
+  "relatedTickets": [
+    "T-033"
+  ],
   "resolution": null,
   "resolvedDate": null,
   "severity": "medium",

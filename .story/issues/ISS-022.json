@@ -4,16 +4,20 @@
     "config"
   ],
   "discoveredDate": "2026-07-02",
+  "displayId": "ISS-022",
   "id": "ISS-022",
-  "impact": "createServer() calls loadConfig() exactly once (src/server.ts:67) and builds the backend from it, so the running MCP server keeps the config as it was when Claude Code spawned it. Editing .reviewbridge.json (e.g. adding codex_path or changing model) has NO effect on MCP tool calls until the client restarts or reconnects the server — with no indication that the on-disk config is being ignored. This bit a real dogfood session on 2026-07-01: the user fixed codex_path + model in the config, but MCP review_* calls kept using the stale spawn-time values (and the trashed bundled codex binary); only the CLI (fresh process per invocation) picked up the fix. Known MCP-wide behavior (lesson L-013 covers dist hot-reload), but config is different from code: users are TOLD to edit .reviewbridge.json for tuning, so silent staleness is a UX trap during exactly the setup/troubleshooting flows where config changes happen.\n\nPROPOSED: re-resolve config per tool call — loadConfig is a cheap file read + zod parse; rebuild the backend when the loaded config differs from the previous one (deep-equal or mtime check on the resolved config path), keeping the db handle and session tracker as-is. Alternatively, at minimum log a divergence warning: if the config file's mtime is newer than server start, emit a one-time stderr note that a restart is needed. Keep CLI behavior unchanged (already per-invocation).",
+  "impact": "createServer() calls loadConfig() exactly once (src/server.ts:67) and builds the backend from it, so the running MCP server keeps the config as it was when Claude Code spawned it. Editing .reviewbridge.json (e.g. adding codex_path or changing model) has NO effect on MCP tool calls until the client restarts or reconnects the server — with no indication that the on-disk config is being ignored. This bit a real dogfood session on 2026-07-01: the user fixed codex_path + model in the config, but MCP review_* calls kept using the stale spawn-time values; only the CLI (fresh process per invocation) picked up the fix. Users are TOLD to edit .reviewbridge.json for tuning, so silent staleness is a UX trap during exactly the setup/troubleshooting flows where config changes happen. TRIAGED 2026-07-02 (severity low → medium: bit two dogfood sessions, sits in the install/troubleshoot path): SPLIT into two tickets. (a) Cheap divergence warning — stat the config file at tool-call time; if mtime > server start, emit a one-time stderr note that a restart is needed (~20 lines, no behavior change). (b) Full per-call reload — MUST satisfy the requirements from the 2026-07-02 deliberate-deep plan review: define composite rebuild lifecycle for in-flight reviews, don't rely solely on mtime (1s granularity + same-mtime edits), failure policy for missing/unreadable/validation-fail (not just invalid JSON), treat runtime-reloadable codex_path as a security surface, define effective-config equality, include a test strategy for timing-sensitive paths.",
   "location": [
     "src/server.ts:67"
   ],
   "phase": null,
-  "relatedTickets": [],
+  "relatedTickets": [
+    "T-034",
+    "T-035"
+  ],
   "resolution": null,
   "resolvedDate": null,
-  "severity": "low",
+  "severity": "medium",
   "status": "open",
   "title": "MCP server captures .reviewbridge.json at spawn; config edits silently ignored until client restart — consider per-call reload"
 }

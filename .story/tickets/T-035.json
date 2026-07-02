@@ -1,0 +1,14 @@
+{
+  "blockedBy": [
+    "T-034"
+  ],
+  "completedDate": null,
+  "createdDate": "2026-07-02",
+  "description": "Full half of the ISS-022 split: re-resolve config per tool call and rebuild the backend when the effective config changes. MUST satisfy the requirements from the 2026-07-02 deliberate-deep plan review (both providers: revise): (1) composite rebuild lifecycle — in-flight reviews must complete on the old composite; define disposal/draining so nothing leaks; (2) don't rely solely on mtime (1s granularity, same-mtime edits) — pair with size/content hash; (3) failure policy for ALL modes: missing file, unreadable, invalid JSON, Zod validation failure — keep last-good config and warn once per bad state; (4) runtime-reloadable codex_path is a security surface — decide whether to honor path changes without restart or exclude exec-path fields from hot reload; (5) define effective-config equality (which fields participate, path normalization); (6) synchronization for concurrent tool calls (single reload in flight); (7) test strategy for the timing-sensitive paths. CLI unchanged (already per-invocation). Resolves ISS-022 together with T-034.",
+  "id": "T-035",
+  "order": 30,
+  "phase": "backlog2",
+  "status": "open",
+  "title": "Per-call config reload in the MCP server, per the reviewed requirements (ISS-022b)",
+  "type": "feature"
+}

@@ -1,0 +1,12 @@
+{
+  "blockedBy": [],
+  "completedDate": null,
+  "createdDate": "2026-07-02",
+  "description": "Cheap half of the ISS-022 split: at tool-call time, stat the config file the server loaded at spawn (track its resolved path + mtime from loadConfig); if the file's mtime is newer than the captured one, emit a ONE-TIME stderr warning that the on-disk config differs from the running config and a client restart/reconnect is needed to apply it. No reload, no behavior change — just kills the silent-staleness trap. Handle: config that came from defaults (no file — also cover the file APPEARING after spawn), env RB_CONFIG_PATH source, stat errors (stay quiet). ~20 lines + tests. Does not resolve ISS-022 by itself (the reload half remains).",
+  "id": "T-034",
+  "order": 20,
+  "phase": "backlog2",
+  "status": "open",
+  "title": "Warn when .reviewbridge.json changed on disk after MCP server spawn (ISS-022a)",
+  "type": "task"
+}

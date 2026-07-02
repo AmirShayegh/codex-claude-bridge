@@ -1,0 +1,12 @@
+{
+  "blockedBy": [],
+  "completedDate": null,
+  "createdDate": "2026-07-02",
+  "description": "computeAgreement keys on non-null file+line, so plan findings (which have neither) all route keyless → divergent: plan deliberation is structurally incapable of agreement (live probe: 0 agreed / 11 divergent with three concerns flagged by both providers in near-identical words). Follow the T-029 method: (1) run 3+ live deliberate plan reviews on real plans, save both providers' raw findings, and characterize how same-concern findings differ (category vocab, wording, ordering); (2) design a plan-specific match key from that data — candidates: normalized category + text similarity, or provider-emitted topic tags in the plan response schema (schema change must keep every property required per L-014); (3) implement in computeAgreement with a plan-findings path + tests; (4) live-verify agreed[] is non-empty on a plan both providers genuinely agree about. Resolves ISS-024.",
+  "id": "T-033",
+  "order": 10,
+  "phase": "backlog2",
+  "status": "open",
+  "title": "Plan-finding agreement matching: gather live two-provider plan data, then a plan-specific match key (ISS-024)",
+  "type": "task"
+}

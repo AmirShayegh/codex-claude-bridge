@@ -5,6 +5,7 @@
     "storage/sessions"
   ],
   "discoveredDate": "2026-07-02",
+  "displayId": "ISS-018",
   "id": "ISS-018",
   "impact": "Surfaced during T-027 plan review. The session DB defaults to a cwd-relative path (REVIEW_BRIDGE_DB ?? 'reviews.db'). The MCP server opens it in the project root (its spawn cwd); the CLI runs from arbitrary directories. When cwds differ, the CLI's read-only open finds no db and fails open, so the ISS-017 cross-provider guard silently does nothing. T-027 mitigates by resolving to an absolute path, documenting that the guard is effective from the project root or with an absolute REVIEW_BRIDGE_DB, and enabling WAL + busy timeout, but does NOT relocate the db. A stable per-project or global (app-data/home) db location would make the guard cwd-independent, but that is a product decision with migration implications for existing project-local review_history — deferred here. Options: XDG/app-data dir, or walk-up to the project root to anchor the db consistently for both server and CLI.",
   "location": [
@@ -13,7 +14,8 @@
   ],
   "phase": null,
   "relatedTickets": [
-    "T-027"
+    "T-027",
+    "T-036"
   ],
   "resolution": null,
   "resolvedDate": null,

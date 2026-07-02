@@ -73,6 +73,13 @@
       "summary": "Issue-backlog drain: diff validation, deliberation session semantics + visibility, agreement quality, config audit"
     },
     {
+      "description": "Second issue-backlog drain, from the 2026-07-02 triage: plan-review agreement matching (ISS-024), config staleness warning + per-call reload (ISS-022), stable reviews.db location (ISS-018), cross-chunk review context (ISS-020).",
+      "id": "backlog2",
+      "label": "PHASE 12",
+      "name": "Review Quality &amp; Config Backlog",
+      "summary": "Backlog drain: plan agreement, config reload, db location, chunk context"
+    },
+    {
       "description": "Make the review loop useful for teams reviewing GitHub PRs. Adds a sixth MCP tool (review_pr) and a fourth CLI subcommand (review-pr). Fetches PR diff and metadata via `gh pr diff` and `gh pr view --json`, feeds PR title + description + diff to a PR-specific prompt, and returns scope-match and description-match as regular findings (not top-level fields, to keep the result type consistent with review_code). No storage changes needed.",
       "id": "team-integration",
       "label": "PHASE 6",

@@ -1,0 +1,12 @@
+{
+  "blockedBy": [],
+  "completedDate": null,
+  "createdDate": "2026-07-02",
+  "description": "Make the cross-provider guard cwd-independent by moving reviews.db from a cwd-relative default to a stable per-user data dir. Fold in the reviewed fix-plan findings from note N-003 (both providers: revise): (1) CRITICAL — the db runs WAL, so migration MUST use sqlite itself (VACUUM INTO / backup API, or checkpoint first), never a bare file copy, or committed transactions in reviews.db-wal are lost; (2) mkdir -p the data dir parent before open/copy; (3) cover win32 (%APPDATA%) or document unsupported; (4) architecture decision FIRST: project-keyed subdir (hash of project root) under the data dir, not one flat user-global db — avoids cross-project session collisions and keeps history project-scoped; (5) restrictive permissions (0700 dir / 0600 file — the db holds diffs and review content); (6) handle zero-byte/corrupt existing target and preserve the ':memory:' REVIEW_BRIDGE_DB special case. REVIEW_BRIDGE_DB env continues to override everything. Resolves ISS-018.",
+  "id": "T-036",
+  "order": 40,
+  "phase": "backlog2",
+  "status": "open",
+  "title": "Stable per-user reviews.db location with project-keyed scoping and safe migration (ISS-018)",
+  "type": "task"
+}

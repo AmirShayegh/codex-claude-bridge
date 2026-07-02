@@ -1,0 +1,12 @@
+{
+  "blockedBy": [],
+  "completedDate": null,
+  "createdDate": "2026-07-02",
+  "description": "Chunked reviews are blind across chunks: a call site and its implementation land in different chunks, so reviewers assert cross-file claims they cannot see (live: 10/10 findings on a 5-chunk prod diff were false positives, several of this shape; both providers wrong the same way, so agreement matching cannot catch it). EXPERIMENTAL ticket — evaluate mitigations against a reference chunked diff with known-good ground truth before committing to one: (a) per-chunk manifest of the other chunks' file list + changed symbols/signatures injected into each chunk prompt (token cost vs accuracy tradeoff); (b) prompt instruction to mark cross-file claims as needs-verification instead of asserting; (c) post-merge downgrade pass for findings referencing files present in the submitted diff but absent from the finding's chunk. Measure false-positive rate before/after on the recorded Hardening-phase diff. Resolves ISS-020.",
+  "id": "T-037",
+  "order": 50,
+  "phase": "backlog2",
+  "status": "open",
+  "title": "Cross-chunk review context: stop plausible-but-wrong cross-file findings on chunked diffs (ISS-020)",
+  "type": "feature"
+}

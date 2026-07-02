@@ -1,0 +1,21 @@
+{
+  "components": [
+    "orchestrator",
+    "chunking",
+    "review-quality"
+  ],
+  "discoveredDate": "2026-07-02",
+  "id": "ISS-020",
+  "impact": "Observed 2026-07-01 while reviewing the full Hardening-phase prod diff (1,664 lines, 5 chunks, gemini): the reviewer reported as MAJOR that sliceDiffToFiles \"is called unconditionally, even when the wanted set is empty ... passing an empty string to the judge\" (call site in src/backends/deliberation.ts), when the guard `if (wanted.size === 0) return diff;` is the literal first line of the implementation in src/utils/diff-files.ts. Both files were in the SAME submitted diff but land in DIFFERENT chunks (chunking splits on file boundaries), so the chunk containing the call site cannot see the implementation. Result: plausible-but-wrong cross-file findings survive to the merged result. In the same review, 10/10 findings (7 major) were verified false positives or documented design choices — several were cross-file claims of this shape (e.g. \"providers may be undefined\" when the interface declares it required in backend.ts; \"config needs optional chaining\" when it is the Zod-validated type from config/loader.ts). Possible mitigations to explore (not prescribing): include a compact cross-chunk manifest (file list + exported signatures of the other chunks) in each chunk's prompt; instruct the reviewer to mark cross-file claims as needs-verification instead of asserting them; or a post-merge dedup/downgrade pass for findings referencing symbols defined in another chunk. Relates to the chunking design in orchestrator.ts and the finding-quality work done for ISS-013 (agreement matching cannot fix findings that are wrong for the same reason on both providers).",
+  "location": [
+    "src/utils/chunking.ts",
+    "src/backends/orchestrator.ts"
+  ],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": null,
+  "resolvedDate": null,
+  "severity": "low",
+  "status": "open",
+  "title": "Chunked reviews are blind across chunks: call site and implementation split into different chunks yields false-positive findings"
+}

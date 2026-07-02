@@ -1,0 +1,13 @@
+{
+  "content": "A draft ISS-018 fix plan (stable per-user db location + one-time legacy migration) was run through the bridge itself (dist @ cdd1776, per-call --deliberate, codex gpt-5.5 + gemini live, agreement 'mixed', both verdicts 'revise'). Key findings to address when the ticket is written:\n\n1. CRITICAL (migration correctness): copying only reviews.db ignores WAL sidecars (reviews.db-wal / reviews.db-shm). The db runs WAL, so recent committed transactions live in -wal; a naive file copy can lose them or corrupt. Migrate via sqlite (VACUUM INTO / backup API) or checkpoint first — never a bare file copy.\n2. MAJOR (crash): stable path's parent directory (~/Library/Application Support/codex-claude-bridge or XDG) may not exist — mkdir -p before open/copy or the server crashes at startup.\n3. MAJOR (platform): plan omitted win32 (%APPDATA%). Cover or explicitly document unsupported.\n4. MAJOR (architecture, decide first): global per-user db changes session history/guard scoping from per-project to user-global — cross-project session collisions and global review history. Strong case for a project-keyed subdir (hash of project root) under the stable data dir instead of one flat db.\n5. MAJOR (security): the db contains diffs/prompts/review content; moving it to a long-lived shared location broadens exposure — set restrictive permissions (0600/0700 dir).\n6. MINOR: migration condition should handle a zero-byte/corrupt existing stable file, and preserve the ':memory:' special case in REVIEW_BRIDGE_DB handling.\n\nBoth providers converged on revise; the WAL-sidecar and mkdir findings were independently flagged. Full JSON was in session scratchpad (ephemeral); this note is the durable copy.",
+  "createdDate": "2026-07-02",
+  "id": "N-003",
+  "status": "active",
+  "tags": [
+    "iss-018",
+    "plan-review",
+    "deliberation"
+  ],
+  "title": "ISS-018 fix-plan review findings (deliberate, both providers) — fold into the ticket",
+  "updatedDate": "2026-07-02"
+}

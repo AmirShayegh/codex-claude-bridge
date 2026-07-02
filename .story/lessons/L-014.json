@@ -1,0 +1,20 @@
+{
+  "content": "Any Zod schema handed to Codex/OpenAI as a structured-output response_format must have EVERY property in its `required` array, recursively — an `.optional()` field makes OpenAI reject the request with invalid_json_schema. Never leave a backend-stamped optional field (review_mode, provider, deliberation, session_id) in a model-facing *ResponseSchema; omit it. Because unit tests mock the SDK and the Gemini backend doesn't enforce this, such a break is INVISIBLE without a live Codex probe — verify structured-output schema changes against a real Codex call, and rely on the recursive required-covers-properties lock test in orchestrator.test.ts.",
+  "context": "ISS-019 (fixed in T-029, commit badf79b): T-028 added review_mode (optional) to the *ResultSchema; the model-facing *ResponseSchema in orchestrator.ts omits backend-stamped fields but forgot review_mode, so toJSONSchema emitted it as non-required and OpenAI rejected every live Codex structured review (plan/code/precommit, single + deliberate). Masked all session because tests mock the SDK, Gemini doesn't enforce it (reviews degraded silently to Gemini-only), and Codex was rate-limited when T-028 landed. Discovered via a live deliberate-deep probe during T-029 Step 1. Probe-loop taxonomy: cross-layer trust violation + environment mismatch (correct vs mocked SDK, broken vs real validator).",
+  "createdDate": "2026-07-02",
+  "id": "L-014",
+  "lastValidated": "2026-07-02",
+  "reinforcements": 0,
+  "source": "postmortem",
+  "status": "active",
+  "supersedes": null,
+  "tags": [
+    "codex",
+    "schema",
+    "structured-outputs",
+    "testing",
+    "probe-loop"
+  ],
+  "title": "Model-facing response schemas must have every property required (OpenAI structured outputs)",
+  "updatedDate": "2026-07-02"
+}

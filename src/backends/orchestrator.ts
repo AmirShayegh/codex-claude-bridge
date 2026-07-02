@@ -136,22 +136,43 @@ export function mergePrecommitResults(
 // Response schemas omit fields the reviewer doesn't produce — session_id and
 // chunks_reviewed are set by the backend/flow, and provider is set authoritatively
 // by the backend (never trusted from the model's JSON, which could mis-tag).
+// review_mode MUST be omitted too: like provider/deliberation it is stamped by the
+// backend after the model responds, never produced by the model. It is optional in
+// the Result schema, so leaving it in the model-facing schema makes toJSONSchema emit
+// it as a non-required property — which OpenAI structured outputs reject outright
+// ("'required' ... must include every key in properties. Missing 'review_mode'"),
+// breaking every live Codex review. Tests mock the SDK and Gemini does not enforce
+// this, so the break is invisible without a live Codex call (ISS-019).
 const PlanReviewResponseSchema = PlanReviewResultSchema.omit({
   session_id: true,
   provider: true,
+  review_mode: true,
   deliberation: true,
 });
 const CodeReviewResponseSchema = CodeReviewResultSchema.omit({
   session_id: true,
   chunks_reviewed: true,
   provider: true,
+  review_mode: true,
   deliberation: true,
 });
 const PrecommitResponseSchema = PrecommitResultSchema.omit({
   session_id: true,
   chunks_reviewed: true,
   provider: true,
+  review_mode: true,
 });
+
+// The exact model-facing schemas handed to the provider SDKs (via toJSONSchema in
+// codex.ts). Exported so a regression test can assert every property is `required`
+// at every level — OpenAI structured outputs reject any schema whose `required`
+// omits a property, and that rejection is only visible against a live provider
+// (ISS-019), never against the mocked SDK in unit tests.
+export const RESPONSE_SCHEMAS = {
+  plan: PlanReviewResponseSchema,
+  code: CodeReviewResponseSchema,
+  precommit: PrecommitResponseSchema,
+} as const;
 
 export function sessionModelConflictMessage(): string {
   return (

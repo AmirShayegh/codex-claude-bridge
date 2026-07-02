@@ -1,0 +1,27 @@
+{
+  "components": [
+    "codex",
+    "backends",
+    "review-schema"
+  ],
+  "discoveredDate": "2026-07-02",
+  "displayId": "ISS-019",
+  "id": "ISS-019",
+  "impact": "Discovered 2026-07-01 via a live two-provider probe-loop run (N-001 probe kit, T-029 Step 1). Every live Codex structured review (plan, code, precommit — single AND deliberate modes) fails with an OpenAI structured-outputs error: invalid_json_schema, \"'required' ... must include every key in properties. Missing 'review_mode'\".\n\nROOT CAUSE: The model-facing response schemas in orchestrator.ts (PlanReviewResponseSchema / CodeReviewResponseSchema / PrecommitResponseSchema) are built by .omit()-ing the fields the backend stamps itself (session_id, provider, deliberation, chunks_reviewed) from the *ResultSchema — but they did NOT omit review_mode, added to the Result schemas in T-028. review_mode is z.enum([...]).optional() (review/types.ts:105-107), so toJSONSchema(responseSchema) emits it as a property NOT in `required`. OpenAI structured outputs (strict mode) reject any schema whose `required` omits a property. review_mode, like provider/deliberation, is stamped by the composite/single-mode decorator AFTER the model responds — it must never be in the model-facing schema.\n\nWHY INVISIBLE: (a) all tests mock the Codex SDK's thread.run, so the real OpenAI validator never runs; (b) Gemini does not enforce required-includes-all-properties, so Gemini reviews kept working and masked the break; (c) Codex was rate-limited the whole session T-028 landed in, so no live Codex review ran until the T-029 probe.\n\nIMPACT: On current main (post-T-028; NOT in the published 1.4.0), Codex is fully broken for structured reviews. In deliberate/deliberate-deep the review silently degrades to Gemini-only (agreement='degraded', providers=['gemini']); in single/failover Codex mode it errors outright. This also BLOCKED T-029 Step 1 (needs both providers live).\n\nFIX (landing with T-029 as its unblock prerequisite): add review_mode:true to the .omit() of all three response schemas. LOCK: a class-level regression test asserting, for each response schema, that toJSONSchema(schema).required includes every key in properties (guards the whole category, not just review_mode). Taxonomy: cross-layer trust violation + environment mismatch.",
+  "location": [
+    "src/backends/orchestrator.ts:139",
+    "src/backends/orchestrator.ts:144",
+    "src/backends/orchestrator.ts:150",
+    "src/review/types.ts:105"
+  ],
+  "phase": null,
+  "relatedTickets": [
+    "T-028",
+    "T-029"
+  ],
+  "resolution": "Fixed in T-029 (discovered as its unblock prerequisite). review_mode (added to the *ResultSchema in T-028, z.enum(...).optional()) leaked into the model-facing *ResponseSchema in src/backends/orchestrator.ts because the .omit() lists dropped session_id/provider/deliberation/chunks_reviewed but not review_mode. toJSONSchema then emitted review_mode as a non-required property, which OpenAI structured outputs reject (invalid_json_schema, \"Missing 'review_mode'\"), breaking every live Codex structured review (plan/code/precommit, single and deliberate). FIX: add review_mode:true to all three .omit() lists — like provider/deliberation it is stamped by the backend after the model responds and must never be in the model-facing schema. LOCK: exported RESPONSE_SCHEMAS and added a RECURSIVE regression test (src/backends/orchestrator.test.ts) asserting, for each response schema, that toJSONSchema(schema).required covers every property at every nesting level (guards the whole category, not just review_mode). Live-verified: after the fix, deliberate-deep runs BOTH providers with no degradation (previously degraded to Gemini-only). Taxonomy: cross-layer trust violation (schema layer added a field; the Codex backend's omit-list wasn't updated; each layer passed its own mocked tests) + environment mismatch (correct vs the mocked SDK, broken vs the real OpenAI validator). Not in the published 1.4.0 — the regression lived only on unreleased main.",
+  "resolvedDate": "2026-07-01",
+  "severity": "critical",
+  "status": "resolved",
+  "title": "review_mode leaks into Codex response schema → every live Codex structured review fails (invalid_json_schema)"
+}

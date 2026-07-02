@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { toJSONSchema } from 'zod';
 import { ok } from '../utils/errors.js';
 import { DEFAULT_CONFIG } from '../config/types.js';
 import {
@@ -8,6 +9,7 @@ import {
   deduplicateFindings,
   mergeCodeResults,
   mergePrecommitResults,
+  RESPONSE_SCHEMAS,
   type TurnParams,
   type TurnRunner,
   type ReviewFlowDeps,
@@ -334,5 +336,40 @@ describe('merge helpers', () => {
       expect(merged.warnings).toEqual(['slow test', 'todo left']);
       expect(merged.chunks_reviewed).toBe(2);
     });
+  });
+
+  // ISS-019: OpenAI structured outputs reject any schema whose `required` omits a
+  // property — and that rejection only fires against a live provider, never against
+  // the mocked SDK in unit tests. review_mode (an optional field the backend stamps
+  // itself) leaked into the model-facing response schemas and broke every live Codex
+  // review. This locks the whole category, recursively, so any future optional field
+  // that leaks into a model-facing schema fails here instead of in production.
+  describe('model-facing response schemas — required covers all properties (ISS-019)', () => {
+    // Every object node in the JSON Schema must list every one of its properties in
+    // `required`. Descend into properties, array items, and anyOf/allOf/oneOf branches.
+    const assertRequiredCoversProps = (node: unknown, path: string): void => {
+      if (!node || typeof node !== 'object') return;
+      const n = node as Record<string, unknown>;
+      if (n.type === 'object' && n.properties && typeof n.properties === 'object') {
+        const props = Object.keys(n.properties as Record<string, unknown>);
+        const required = Array.isArray(n.required) ? (n.required as string[]) : [];
+        expect(new Set(required), `${path}: required must cover every property`).toEqual(new Set(props));
+        for (const [k, v] of Object.entries(n.properties as Record<string, unknown>)) {
+          assertRequiredCoversProps(v, `${path}.${k}`);
+        }
+      }
+      if (n.items) assertRequiredCoversProps(n.items, `${path}[]`);
+      for (const key of ['anyOf', 'allOf', 'oneOf'] as const) {
+        if (Array.isArray(n[key])) {
+          (n[key] as unknown[]).forEach((child, idx) => assertRequiredCoversProps(child, `${path}.${key}[${idx}]`));
+        }
+      }
+    };
+
+    for (const [name, schema] of Object.entries(RESPONSE_SCHEMAS)) {
+      it(`${name} response schema: every property is required at every level`, () => {
+        assertRequiredCoversProps(toJSONSchema(schema), name);
+      });
+    }
   });
 });

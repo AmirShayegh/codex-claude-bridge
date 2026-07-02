@@ -43,7 +43,13 @@ ACTING ON RESULTS:
 TIPS:
 - review_code auto-captures working changes (git diff HEAD) — pass diff explicitly only for PR or branch diffs.
 - review_precommit auto-captures staged changes — no need to pass a diff manually.
-- You do not need to review every change. Use your judgement on when a review adds value.`;
+- You do not need to review every change. Use your judgement on when a review adds value.
+- review_plan and review_code accept a 'deliberate' boolean that overrides the configured mode for
+  one call: true = both providers review (deliberation), false = single provider with failover.
+  Requires a two-provider setup. review_precommit is always failover.
+- Every result carries a 'review_mode' field (single/failover/deliberate/deliberate-deep) naming the
+  composition that ran, so you can tell whether deliberation actually happened even without a
+  'deliberation' block.`;
 
 // Read the package version once at module load so the MCP server advertises
 // the same version as the published package, instead of drifting from a

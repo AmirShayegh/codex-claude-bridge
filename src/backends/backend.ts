@@ -16,6 +16,10 @@ export interface PlanReviewInput {
   depth?: 'quick' | 'thorough';
   session_id?: string;
   model?: string;
+  // Per-call override of the configured review mode: true forces deliberation
+  // (both providers), false forces failover (one provider). Undefined = config
+  // default. Ignored by leaf backends; honored by the composite.
+  deliberate?: boolean;
 }
 
 export interface CodeReviewInput {
@@ -24,6 +28,8 @@ export interface CodeReviewInput {
   criteria?: string[];
   session_id?: string;
   model?: string;
+  // See PlanReviewInput.deliberate.
+  deliberate?: boolean;
 }
 
 export interface PrecommitReviewInput {

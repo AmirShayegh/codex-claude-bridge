@@ -59,8 +59,17 @@ function deliberationSchema<F extends z.ZodTypeAny>(findingSchema: F) {
   return z
     .object({
       providers: z.array(ReviewProviderEnum),
-      verdicts: z.array(z.object({ provider: ReviewProviderEnum, verdict: z.string() })),
-      agreement: z.enum(['agree', 'mixed', 'conflict']),
+      // Each provider's verdict, with the chunk count it reviewed (code only).
+      verdicts: z.array(
+        z.object({
+          provider: ReviewProviderEnum,
+          verdict: z.string(),
+          chunks_reviewed: z.number().int().positive().optional(),
+        }),
+      ),
+      // 'degraded' means only one provider could review (the other failed); the
+      // `degraded` marker names the failed provider and reason.
+      agreement: z.enum(['agree', 'mixed', 'conflict', 'degraded']),
       agreed: z.array(findingSchema),
       divergent: z.array(
         z.object({
@@ -78,9 +87,24 @@ function deliberationSchema<F extends z.ZodTypeAny>(findingSchema: F) {
         }),
       ),
       degraded: z.object({ failed: ReviewProviderEnum, reason: z.string() }).optional(),
+      // Present under `deliberate-deep` when a cross-review adjudication turn
+      // itself failed (e.g. the judge errored). Distinguishes "adjudication ran
+      // and found nothing" from "adjudication could not run". Both judges can
+      // fail independently, so this is an array.
+      cross_review_failures: z
+        .array(z.object({ by: ReviewProviderEnum, reason: z.string() }))
+        .optional(),
     })
     .optional();
 }
+
+// Which composition actually served a review. Additive/optional: leaf results
+// never set it; the composite and the single-mode decorator stamp it so the
+// caller can tell single/failover/deliberate apart even when no deliberation
+// block is present.
+const ReviewModeSchema = z
+  .enum(['single', 'failover', 'deliberate', 'deliberate-deep'])
+  .optional();
 
 export const PlanReviewResultSchema = z.object({
   verdict: z.enum(['approve', 'revise', 'reject']),
@@ -88,6 +112,7 @@ export const PlanReviewResultSchema = z.object({
   findings: z.array(PlanFindingSchema),
   session_id: z.string(),
   provider: ServingProviderSchema,
+  review_mode: ReviewModeSchema,
   deliberation: deliberationSchema(PlanFindingSchema),
 });
 
@@ -98,6 +123,7 @@ export const CodeReviewResultSchema = z.object({
   session_id: z.string(),
   chunks_reviewed: z.number().int().positive().optional(),
   provider: ServingProviderSchema,
+  review_mode: ReviewModeSchema,
   deliberation: deliberationSchema(CodeFindingSchema),
 });
 
@@ -108,6 +134,7 @@ export const PrecommitResultSchema = z.object({
   session_id: z.string(),
   chunks_reviewed: z.number().int().positive().optional(),
   provider: ServingProviderSchema,
+  review_mode: ReviewModeSchema,
 });
 
 // Cross-review (deliberate-deep): a provider's adjudication of another reviewer's

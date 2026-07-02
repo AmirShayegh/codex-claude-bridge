@@ -323,6 +323,34 @@ describe('CodeReviewResultSchema', () => {
     const result = CodeReviewResultSchema.safeParse({ ...validCodeResult, chunks_reviewed: 0 });
     expect(result.success).toBe(false);
   });
+
+  // T-028: additive visibility fields.
+  it('accepts review_mode on the result', () => {
+    for (const mode of ['single', 'failover', 'deliberate', 'deliberate-deep']) {
+      expect(CodeReviewResultSchema.safeParse({ ...validCodeResult, review_mode: mode }).success).toBe(true);
+    }
+    expect(CodeReviewResultSchema.safeParse({ ...validCodeResult, review_mode: 'bogus' }).success).toBe(false);
+  });
+
+  it('accepts a deliberation block with agreement:degraded, per-verdict chunks, and cross_review_failures', () => {
+    const withDeliberation = {
+      ...validCodeResult,
+      review_mode: 'deliberate-deep',
+      deliberation: {
+        providers: ['codex', 'gemini'],
+        verdicts: [
+          { provider: 'codex', verdict: 'approve', chunks_reviewed: 2 },
+          { provider: 'gemini', verdict: 'reject' },
+        ],
+        agreement: 'degraded',
+        agreed: [],
+        divergent: [],
+        cross_review_failures: [{ by: 'gemini', reason: 'RATE_LIMITED: out of usage' }],
+      },
+    };
+    const result = CodeReviewResultSchema.safeParse(withDeliberation);
+    expect(result.success).toBe(true);
+  });
 });
 
 describe('PrecommitResultSchema', () => {

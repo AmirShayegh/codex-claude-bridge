@@ -3,6 +3,7 @@ import { DEFAULT_CONFIG } from '../config/types.js';
 
 const leaf = (provider: 'codex' | 'gemini') => ({
   provider,
+  providers: [provider] as const,
   allowsModelOverrideOnResume: provider === 'gemini',
   reviewPlan: vi.fn(),
   reviewCode: vi.fn(),
@@ -10,51 +11,58 @@ const leaf = (provider: 'codex' | 'gemini') => ({
 });
 const codexStub = leaf('codex');
 const geminiStub = leaf('gemini');
-const failoverStub = { ...leaf('codex'), kind: 'failover' };
-const deliberationStub = { ...leaf('codex'), kind: 'deliberation' };
+const singleStub = { ...leaf('codex'), kind: 'single' };
+const compositeStub = { ...leaf('codex'), kind: 'composite' };
 
-// Mock the leaf factories and both composite factories so we can assert which
-// composition createBackend picks for each mode.
+// Mock the leaf factories and the composite/single decorators so we can assert
+// which composition createBackend picks. Per-mode dispatch (failover vs
+// deliberate) now lives INSIDE the composite (tested in composite.test.ts); here
+// we only assert single → withSingleMode and any two-provider mode → composite.
 vi.mock('./codex.js', () => ({ createCodexBackend: vi.fn(() => codexStub) }));
 vi.mock('./gemini.js', () => ({ createGeminiBackend: vi.fn(() => geminiStub) }));
-vi.mock('./failover.js', () => ({ createFailoverBackend: vi.fn(() => failoverStub) }));
-vi.mock('./deliberation.js', () => ({ createDeliberationBackend: vi.fn(() => deliberationStub) }));
+vi.mock('./composite.js', () => ({
+  createCompositeBackend: vi.fn(() => compositeStub),
+  withSingleMode: vi.fn(() => singleStub),
+}));
 
 import { createBackend } from './index.js';
 import { createCodexBackend } from './codex.js';
 import { createGeminiBackend } from './gemini.js';
-import { createFailoverBackend } from './failover.js';
-import { createDeliberationBackend } from './deliberation.js';
+import { createCompositeBackend, withSingleMode } from './composite.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
 describe('createBackend — single provider', () => {
-  it("mode 'single' returns the bare configured leaf, no other provider constructed", () => {
+  it("mode 'single' wraps the bare leaf in the single-mode decorator, no other provider constructed", () => {
     const backend = createBackend({ ...DEFAULT_CONFIG, provider: 'codex', mode: 'single' });
     expect(createCodexBackend).toHaveBeenCalledOnce();
     expect(createGeminiBackend).not.toHaveBeenCalled();
-    expect(createFailoverBackend).not.toHaveBeenCalled();
-    expect(backend).toBe(codexStub);
+    expect(withSingleMode).toHaveBeenCalledWith(codexStub);
+    expect(createCompositeBackend).not.toHaveBeenCalled();
+    expect(backend).toBe(singleStub);
   });
 
   it('fallback:false (no mode) still maps to single — back-compat', () => {
     const backend = createBackend({ ...DEFAULT_CONFIG, provider: 'gemini', fallback: false });
     expect(createGeminiBackend).toHaveBeenCalledOnce();
     expect(createCodexBackend).not.toHaveBeenCalled();
-    expect(backend).toBe(geminiStub);
+    expect(withSingleMode).toHaveBeenCalledWith(geminiStub);
+    expect(backend).toBe(singleStub);
   });
 });
 
-describe('createBackend — failover (default)', () => {
-  it('default (fallback on, no mode) builds both leaves and the failover composite', () => {
-    const backend = createBackend({ ...DEFAULT_CONFIG, provider: 'codex' });
+describe('createBackend — two-provider composite', () => {
+  it('default (fallback on, no mode) builds both leaves and the composite, passing config + lookup', () => {
+    const lookup = vi.fn();
+    const config = { ...DEFAULT_CONFIG, provider: 'codex' as const };
+    const backend = createBackend(config, undefined, lookup);
     expect(createCodexBackend).toHaveBeenCalledOnce();
     expect(createGeminiBackend).toHaveBeenCalledOnce();
-    expect(createFailoverBackend).toHaveBeenCalledWith(codexStub, geminiStub, undefined);
-    expect(createDeliberationBackend).not.toHaveBeenCalled();
-    expect(backend).toBe(failoverStub);
+    expect(createCompositeBackend).toHaveBeenCalledWith(codexStub, geminiStub, config, lookup);
+    expect(withSingleMode).not.toHaveBeenCalled();
+    expect(backend).toBe(compositeStub);
   });
 
   it('builds the secondary leaf with the other provider and a cleared model pin', () => {
@@ -64,34 +72,21 @@ describe('createBackend — failover (default)', () => {
       undefined,
     );
   });
-});
 
-describe('createBackend — deliberate', () => {
-  it("mode 'deliberate' builds both leaves and the deliberation composite", () => {
-    const backend = createBackend({ ...DEFAULT_CONFIG, provider: 'codex', mode: 'deliberate' });
-    expect(createCodexBackend).toHaveBeenCalledOnce();
-    expect(createGeminiBackend).toHaveBeenCalledOnce();
-    expect(createDeliberationBackend).toHaveBeenCalledWith(codexStub, geminiStub, { lookup: undefined });
-    expect(createFailoverBackend).not.toHaveBeenCalled();
-    expect(backend).toBe(deliberationStub);
+  it('deliberate/deliberate-deep also build the composite (per-call dispatch lives inside it)', () => {
+    createBackend({ ...DEFAULT_CONFIG, provider: 'codex', mode: 'deliberate' });
+    expect(createCompositeBackend).toHaveBeenCalledOnce();
+    vi.clearAllMocks();
+    createBackend({ ...DEFAULT_CONFIG, provider: 'codex', mode: 'deliberate-deep' });
+    expect(createCompositeBackend).toHaveBeenCalledOnce();
   });
 
-  it('deliberate from gemini wraps codex as the secondary', () => {
+  it('from gemini primary, wraps codex as the secondary', () => {
     createBackend({ ...DEFAULT_CONFIG, provider: 'gemini', mode: 'deliberate' });
     expect(createGeminiBackend).toHaveBeenCalledOnce(); // primary
     expect(createCodexBackend).toHaveBeenCalledWith(
       expect.objectContaining({ provider: 'codex', model: undefined }),
       undefined,
     );
-  });
-
-  it("mode 'deliberate-deep' turns on the cross-review round via the composite opts", () => {
-    const backend = createBackend({ ...DEFAULT_CONFIG, provider: 'codex', mode: 'deliberate-deep' });
-    expect(createDeliberationBackend).toHaveBeenCalledWith(codexStub, geminiStub, {
-      crossReview: true,
-      lookup: undefined,
-    });
-    expect(createFailoverBackend).not.toHaveBeenCalled();
-    expect(backend).toBe(deliberationStub);
   });
 });

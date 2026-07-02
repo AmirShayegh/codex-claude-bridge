@@ -149,6 +149,8 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
     .addOption(new Option('--depth <level>', 'Review depth').choices(['quick', 'thorough']))
     .option('--session <id>', 'Resume session')
     .option('--model <name>', 'Override the configured default model (e.g., gpt-5.4)')
+    .option('--deliberate', 'Force deliberation (both providers) for this call')
+    .option('--no-deliberate', 'Force single-provider failover for this call')
     .option('--config <path>', 'Path to .reviewbridge.json directory')
     .option('--json', 'Raw JSON output')
     .action(async (opts) => {
@@ -178,6 +180,7 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
             // Normalize empty string to undefined so the client picks config
             // default (matches MCP's z.string().min(1) behavior).
             model: opts.model?.trim() || undefined,
+            deliberate: opts.deliberate,
           }),
         format: formatPlanResult,
         exitCode: () => 0,
@@ -193,6 +196,8 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
     .option('--focus <items>', 'Comma-separated review criteria')
     .option('--session <id>', 'Resume session')
     .option('--model <name>', 'Override the configured default model (e.g., gpt-5.4)')
+    .option('--deliberate', 'Force deliberation (both providers) for this call')
+    .option('--no-deliberate', 'Force single-provider failover for this call')
     .option('--config <path>', 'Path to .reviewbridge.json directory')
     .option('--json', 'Raw JSON output')
     .action(async (opts) => {
@@ -219,6 +224,7 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
             criteria: opts.focus ? opts.focus.split(',').map((s: string) => s.trim()).filter(Boolean) : undefined,
             session_id: opts.session,
             model: opts.model?.trim() || undefined,
+            deliberate: opts.deliberate,
           }),
         format: formatCodeResult,
         exitCode: () => 0,

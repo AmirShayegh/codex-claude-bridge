@@ -3,9 +3,8 @@ import type { CopilotInstructions } from '../config/copilot-instructions.js';
 import type { ReviewBackend } from './backend.js';
 import { createCodexBackend } from './codex.js';
 import { createGeminiBackend } from './gemini.js';
-import { createFailoverBackend } from './failover.js';
 import type { SessionProviderLookup } from './failover.js';
-import { createDeliberationBackend } from './deliberation.js';
+import { createCompositeBackend, withSingleMode } from './composite.js';
 
 export type { ReviewBackend } from './backend.js';
 
@@ -31,13 +30,15 @@ function createLeafBackend(
   return createCodexBackend(config, copilotInstructions);
 }
 
-// Build the review backend the config selects. `mode` picks the composition:
-// 'single' = the configured provider only; 'failover' (default) = fall back to
-// the other provider when the primary is out of usage; 'deliberate' = both
-// providers review (plan + code) and the bridge surfaces the agreement map;
-// 'deliberate-deep' = deliberate plus a cross-review round where each provider
-// adjudicates the other's divergent findings. When `mode` is unset it's derived
-// from the 1.1.0 `fallback` flag for back-compat.
+// Build the review backend the config selects. `mode` picks the base composition:
+// 'single' = the configured provider only; 'failover' (default) = fall back to the
+// other provider when the primary is out of usage; 'deliberate' = both providers
+// review and the bridge surfaces the agreement map; 'deliberate-deep' = deliberate
+// plus a cross-review round. When `mode` is unset it's derived from the 1.1.0
+// `fallback` flag for back-compat. For any two-provider mode a single composite is
+// returned that picks failover vs deliberation PER CALL from the `deliberate`
+// toggle (T-028); single mode returns a decorator that stamps review_mode:'single'
+// and rejects a per-call deliberate request.
 export function createBackend(
   config: ReviewBridgeConfig,
   copilotInstructions?: CopilotInstructions,
@@ -45,8 +46,7 @@ export function createBackend(
 ): ReviewBackend {
   const mode = config.mode ?? (config.fallback ? 'failover' : 'single');
   const primary = createLeafBackend(config, copilotInstructions);
-  // Single provider: no resume routing needed (only one leaf owns everything).
-  if (mode === 'single') return primary;
+  if (mode === 'single') return withSingleMode(primary);
 
   const secondaryProvider: ReviewProvider = config.provider === 'codex' ? 'gemini' : 'codex';
   // Build the secondary leaf directly (NOT via createBackend — that would recurse
@@ -56,9 +56,5 @@ export function createBackend(
     { ...config, provider: secondaryProvider, model: undefined },
     copilotInstructions,
   );
-  if (mode === 'deliberate')
-    return createDeliberationBackend(primary, secondary, { lookup: lookupSessionProvider });
-  if (mode === 'deliberate-deep')
-    return createDeliberationBackend(primary, secondary, { crossReview: true, lookup: lookupSessionProvider });
-  return createFailoverBackend(primary, secondary, lookupSessionProvider);
+  return createCompositeBackend(primary, secondary, config, lookupSessionProvider);
 }

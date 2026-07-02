@@ -16,9 +16,9 @@
     "T-025",
     "T-028"
   ],
-  "resolution": null,
-  "resolvedDate": null,
+  "resolution": "Fixed in T-028. Two-pronged: (1) deliberate-on-resume — a resumed review in deliberate mode now resumes the owning leaf (T-027 routing) while the other leaf reviews fresh, then combines, so plan→code lifecycles keep deliberating instead of silently going single-provider; the combined result keeps the resumed owner's session id. (2) review_mode is stamped on every result (single/failover/deliberate/deliberate-deep), so the absence of a deliberation block is never ambiguous. Plus a per-call `deliberate` toggle (MCP + CLI). Regression tests in deliberation.test.ts + composite.test.ts.",
+  "resolvedDate": "2026-07-01",
   "severity": "high",
-  "status": "open",
+  "status": "resolved",
   "title": "Deliberation silently disabled on resumed sessions — recommended session_id workflow defeats the feature"
 }

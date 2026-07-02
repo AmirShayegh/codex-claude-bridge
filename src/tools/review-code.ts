@@ -38,6 +38,14 @@ export function registerReviewCodeTool(server: McpServer, client: ReviewBackend,
               'With the Codex provider this cannot be combined with session_id (a resumed thread ' +
               'keeps its model); the Gemini provider allows changing model on a resumed session.',
           ),
+        deliberate: z
+          .boolean()
+          .optional()
+          .describe(
+            'Per-call override of the configured review mode: true = both providers review (deliberation); ' +
+              'false = single provider with failover. Omit to use the configured mode. Requires a two-provider ' +
+              'setup; requesting deliberation under a single-provider config returns an error.',
+          ),
       },
     },
     async (args) => {

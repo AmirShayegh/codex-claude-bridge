@@ -155,6 +155,8 @@ describe('createDeliberationBackend', () => {
       expect(res.data.verdict).toBe('reject');
       expect(res.data.deliberation?.degraded).toEqual({ failed: 'codex', reason: expect.stringContaining('RATE_LIMITED') });
       expect(res.data.deliberation?.providers).toEqual(['gemini']);
+      // ISS-016: a single-provider degraded result must NOT claim 'agree'.
+      expect(res.data.deliberation?.agreement).toBe('degraded');
     }
   });
 
@@ -171,23 +173,35 @@ describe('createDeliberationBackend', () => {
     }
   });
 
-  it('a resumed session does NOT deliberate (delegates to the primary, no deliberation block)', async () => {
-    const sReview = vi.fn();
-    const primary = backend('codex', { reviewCode: vi.fn().mockResolvedValue(ok(codeResult('approve', []))) });
-    const res = await createDeliberationBackend(primary, backend('gemini', { reviewCode: sReview })).reviewCode({
+  it('deliberates on resume: the owning leaf resumes, the other reviews fresh (ISS-010)', async () => {
+    // No lookup → owner defaults to the primary (codex). Primary resumes its
+    // session; secondary reviews fresh (session_id stripped). Both run → the
+    // resumed review now DELIBERATES instead of silently going single-provider.
+    const pReview = vi.fn().mockResolvedValue(ok(codeResult('approve', [], 'codex-sess')));
+    const sReview = vi.fn().mockResolvedValue(ok(codeResult('approve', [], 'gem-fresh')));
+    const primary = backend('codex', { reviewCode: pReview });
+    const secondary = backend('gemini', { reviewCode: sReview });
+
+    const res = await createDeliberationBackend(primary, secondary).reviewCode({
       diff: DIFF,
       session_id: 'codex-sess',
     });
+
     expect(res.ok).toBe(true);
-    if (res.ok) expect(res.data.deliberation).toBeUndefined();
-    expect(sReview).not.toHaveBeenCalled(); // no parallel second review on resume
+    if (!res.ok) return;
+    expect(res.data.deliberation).toBeDefined();
+    expect(res.data.deliberation?.providers).toEqual(['codex', 'gemini']);
+    expect(pReview).toHaveBeenCalledWith(expect.objectContaining({ session_id: 'codex-sess' })); // owner resumes
+    expect(sReview).toHaveBeenCalledWith(expect.objectContaining({ session_id: undefined })); // other fresh
+    expect(res.data.session_id).toBe('codex-sess'); // combined keeps the resumed owner session
   });
 
-  it('routes a secondary-owned resume to the secondary via the lookup (ISS-011)', async () => {
-    // A prior review degraded to gemini; resuming that session must run on gemini,
-    // not the primary. Regression for the degraded-session-id-unusable bug.
-    const pReview = vi.fn();
-    const sReview = vi.fn().mockResolvedValue(ok(codeResult('approve', [])));
+  it('deliberate-on-resume routes the OWNING (secondary) leaf to resume + primary fresh (ISS-011)', async () => {
+    // A prior review degraded to gemini; resuming that session must resume on
+    // gemini (the owner) while codex reviews fresh — and the combined result keeps
+    // the resumed gemini session id, not a fresh one.
+    const pReview = vi.fn().mockResolvedValue(ok(codeResult('approve', [], 'cdx-fresh')));
+    const sReview = vi.fn().mockResolvedValue(ok(codeResult('approve', [], 'gemini-sess')));
     const primary = backend('codex', { reviewCode: pReview });
     const secondary = backend('gemini', { reviewCode: sReview });
     const lookup = vi.fn().mockReturnValue('gemini');
@@ -198,9 +212,48 @@ describe('createDeliberationBackend', () => {
     });
 
     expect(lookup).toHaveBeenCalledWith('gemini-sess');
-    expect(sReview).toHaveBeenCalledOnce();
-    expect(pReview).not.toHaveBeenCalled();
-    expect(res.ok && res.data.provider).toBe('gemini');
+    expect(sReview).toHaveBeenCalledWith(expect.objectContaining({ session_id: 'gemini-sess' })); // owner resumes
+    expect(pReview).toHaveBeenCalledWith(expect.objectContaining({ session_id: undefined })); // primary fresh
+    expect(res.ok && res.data.provider).toBe('codex'); // composite presents as primary
+    expect(res.ok && res.data.session_id).toBe('gemini-sess'); // combined = resumed owner session
+    expect(res.ok && res.data.deliberation).toBeDefined();
+  });
+
+  it('deliberate-on-resume: if the owner fails, degrade to the fresh other leaf with its NEW session id', async () => {
+    // No lookup → owner is primary (codex). Its resume fails; the fresh secondary
+    // survives. The degraded result carries the secondary's NEW session id — the
+    // old (owner) session couldn't be served this round.
+    const pReview = vi.fn().mockResolvedValue(err(`${ErrorCode.RATE_LIMITED}: out of usage`));
+    const sReview = vi.fn().mockResolvedValue(ok(codeResult('approve', [], 'gem-fresh')));
+    const primary = backend('codex', { reviewCode: pReview });
+    const secondary = backend('gemini', { reviewCode: sReview });
+
+    const res = await createDeliberationBackend(primary, secondary).reviewCode({ diff: DIFF, session_id: 'codex-sess' });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.provider).toBe('gemini'); // survivor
+    expect(res.data.session_id).toBe('gem-fresh'); // fresh NEW session, not the dead 'codex-sess'
+    expect(res.data.deliberation?.degraded).toEqual({ failed: 'codex', reason: expect.stringContaining('RATE_LIMITED') });
+    expect(res.data.deliberation?.agreement).toBe('degraded');
+  });
+
+  it('deliberate-on-resume: both legs fail → error leads with the PRIMARY error, names the secondary', async () => {
+    // Owner is the secondary (gemini) via lookup; both fail. The combined error
+    // must still be primary-led and name gemini as the "also failed" side — not
+    // swap them by owner/other order.
+    const primary = backend('codex', { reviewCode: vi.fn().mockResolvedValue(err(`${ErrorCode.AUTH_ERROR}: codex not signed in`)) });
+    const secondary = backend('gemini', { reviewCode: vi.fn().mockResolvedValue(err(`${ErrorCode.RATE_LIMITED}: gemini out of usage`)) });
+    const lookup = vi.fn().mockReturnValue('gemini');
+
+    const res = await createDeliberationBackend(primary, secondary, { lookup }).reviewCode({ diff: DIFF, session_id: 'gemini-sess' });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error).toContain('AUTH_ERROR'); // primary (codex) error leads
+      expect(res.error).toContain('gemini also failed'); // secondary named correctly
+      expect(res.error).toContain('RATE_LIMITED');
+    }
   });
 
   it('reviewPrecommit uses failover, not deliberation', async () => {
@@ -296,7 +349,7 @@ describe('createDeliberationBackend — deliberate-deep (cross-review round)', (
     expect(div[1].adjudication).toEqual({ by: 'codex', verdict: 'confirmed', reason: 'real' });
   });
 
-  it('is best-effort: a failed crossReview call leaves those findings un-adjudicated', async () => {
+  it('surfaces a failed crossReview call as cross_review_failures, not silently (ISS-012)', async () => {
     const secReview = vi.fn().mockResolvedValue(err(`${ErrorCode.RATE_LIMITED}: out of usage`));
     const priReview = vi.fn().mockResolvedValue(ok(cross('confirmed', 'real')));
     const { primary, secondary } = mixedPair({ crossReview: priReview }, { crossReview: secReview });
@@ -306,8 +359,12 @@ describe('createDeliberationBackend — deliberate-deep (cross-review round)', (
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     const div = res.data.deliberation?.divergent ?? [];
-    expect(div[0].adjudication).toBeUndefined(); // gemini's call failed
+    expect(div[0].adjudication).toBeUndefined(); // gemini's call failed → no adjudication
     expect(div[1].adjudication).toEqual({ by: 'codex', verdict: 'confirmed', reason: 'real' });
+    // The failure is now visible, distinguishing "could not run" from "ran, found nothing".
+    expect(res.data.deliberation?.cross_review_failures).toEqual([
+      { by: 'gemini', reason: expect.stringContaining('RATE_LIMITED') },
+    ]);
   });
 
   it('skips cross-review entirely when there are no divergent findings', async () => {

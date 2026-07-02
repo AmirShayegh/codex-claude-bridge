@@ -292,8 +292,10 @@ The result keeps the usual shape (a merged `verdict`/`findings`, worst-verdict w
 
 Notes:
 - **Cost/egress:** deliberation always runs both providers and sends the diff to both vendors — best for high-stakes reviews, not every precommit. `review_precommit` stays failover under this mode.
-- **Degrades gracefully:** if one provider is out of usage, you get the other's review with `deliberation.degraded` set (it subsumes failover).
-- Resumed sessions (`session_id`) don't deliberate — they continue on the original provider.
+- **Degrades gracefully:** if one provider is out of usage, you get the other's review with `deliberation.degraded` set and `deliberation.agreement: "degraded"` (it subsumes failover).
+- **Resumed sessions deliberate too:** passing a `session_id` resumes the review on the provider that owns that session while the *other* provider reviews fresh, then the two are combined — so plan→code lifecycles keep deliberating instead of silently dropping to one provider. The combined result keeps the resumed session's id.
+- **Per-call toggle:** `review_plan`/`review_code` accept a `deliberate` boolean (CLI: `--deliberate` / `--no-deliberate`) that overrides the configured mode for a single call — `true` forces deliberation, `false` forces single-provider failover. Requesting `deliberate: true` under `"mode": "single"` returns an error (no second provider).
+- **`review_mode` on every result:** every review result carries a `review_mode` field (`single` / `failover` / `deliberate` / `deliberate-deep`) naming the composition that actually ran, so the absence of a `deliberation` block is never ambiguous.
 
 ### Deliberate-deep (cross-review round)
 

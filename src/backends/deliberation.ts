@@ -115,6 +115,9 @@ function combineCode(
   ra: CodeReviewResult,
   s: ReviewProvider,
   rb: CodeReviewResult,
+  // Session id of the combined result. Defaults to the primary's; the resume
+  // path passes the RESUMED owner's session id so the caller can continue it.
+  sessionId?: string,
 ): CodeReviewResult {
   const { agreed, divergent } = computeAgreement(
     { provider: p, findings: ra.findings },
@@ -126,13 +129,15 @@ function combineCode(
     verdict,
     summary: joinSummaries(ra.summary, rb.summary),
     findings: [...agreed, ...divergent.map((d) => d.finding)],
-    session_id: ra.session_id,
+    session_id: sessionId ?? ra.session_id,
     provider: p,
+    // Surface the primary's chunk count at top level (the presented result).
+    ...(ra.chunks_reviewed !== undefined ? { chunks_reviewed: ra.chunks_reviewed } : {}),
     deliberation: {
       providers: [p, s],
       verdicts: [
-        { provider: p, verdict: ra.verdict },
-        { provider: s, verdict: rb.verdict },
+        { provider: p, verdict: ra.verdict, ...(ra.chunks_reviewed !== undefined ? { chunks_reviewed: ra.chunks_reviewed } : {}) },
+        { provider: s, verdict: rb.verdict, ...(rb.chunks_reviewed !== undefined ? { chunks_reviewed: rb.chunks_reviewed } : {}) },
       ],
       agreement: agreementLabel(ra.verdict, rb.verdict, divergent.length),
       agreed,
@@ -146,6 +151,7 @@ function combinePlan(
   ra: PlanReviewResult,
   s: ReviewProvider,
   rb: PlanReviewResult,
+  sessionId?: string,
 ): PlanReviewResult {
   const { agreed, divergent } = computeAgreement(
     { provider: p, findings: ra.findings },
@@ -157,10 +163,11 @@ function combinePlan(
     verdict,
     summary: joinSummaries(ra.summary, rb.summary),
     findings: [...agreed, ...divergent.map((d) => d.finding)],
-    session_id: ra.session_id,
+    session_id: sessionId ?? ra.session_id,
     provider: p,
     deliberation: {
       providers: [p, s],
+      // Plan reviews are not chunked, so no chunks_reviewed on verdicts.
       verdicts: [
         { provider: p, verdict: ra.verdict },
         { provider: s, verdict: rb.verdict },
@@ -186,7 +193,7 @@ function degradeCode(
     deliberation: {
       providers: [served],
       verdicts: [{ provider: served, verdict: data.verdict }],
-      agreement: 'agree',
+      agreement: 'degraded',
       agreed: [],
       divergent: [],
       degraded: { failed, reason },
@@ -206,7 +213,7 @@ function degradePlan(
     deliberation: {
       providers: [served],
       verdicts: [{ provider: served, verdict: data.verdict }],
-      agreement: 'agree',
+      agreement: 'degraded',
       agreed: [],
       divergent: [],
       degraded: { failed, reason },
@@ -228,17 +235,21 @@ function errOf<T>(r: Result<T>): string {
 
 type Adjudication = { by: ReviewProvider; verdict: 'confirmed' | 'disputed' | 'unsure'; reason: string };
 type CrossFinding = AnyFinding & { description: string };
+type CrossReviewFailure = { by: ReviewProvider; reason: string };
+type AdjudicateResult = { adjudications: (Adjudication | undefined)[]; failure?: CrossReviewFailure };
 
 // Ask `judge` to adjudicate `findings` (from the other provider) against the
-// change. Returns adjudications aligned to `findings` (undefined where none).
-// Best-effort: a missing capability or a failed call leaves findings un-adjudicated.
+// change. Returns adjudications aligned to `findings` (undefined where none),
+// plus a `failure` when the judge could not run (errored) — distinct from
+// "ran and returned no adjudication". A judge with no crossReview capability is
+// not a failure (it simply can't adjudicate).
 async function runAdjudicate(
   judge: ReviewBackend,
   content: string,
   findings: CrossFinding[],
-): Promise<(Adjudication | undefined)[]> {
+): Promise<AdjudicateResult> {
   const out: (Adjudication | undefined)[] = new Array(findings.length).fill(undefined);
-  if (findings.length === 0 || !judge.crossReview) return out;
+  if (findings.length === 0 || !judge.crossReview) return { adjudications: out };
   const res = await judge.crossReview({
     content,
     findings: findings.map((f) => ({
@@ -249,23 +260,24 @@ async function runAdjudicate(
       description: f.description,
     })),
   });
-  if (!res.ok) return out;
+  if (!res.ok) return { adjudications: out, failure: { by: judge.provider, reason: res.error } };
   for (const a of res.data.adjudications) {
     if (a.index >= 0 && a.index < findings.length) {
       out[a.index] = { by: judge.provider, verdict: a.verdict, reason: a.reason };
     }
   }
-  return out;
+  return { adjudications: out };
 }
 
 // Each provider's divergent findings are adjudicated by the OTHER provider (in
-// parallel). Returns adjudications aligned to the input `divergent` order.
+// parallel). Returns adjudications aligned to the input `divergent` order, plus
+// any per-judge failures (both judges can fail independently).
 async function adjudicateDivergent(
   divergent: { provider: ReviewProvider; finding: CrossFinding }[],
   content: string,
   primary: ReviewBackend,
   secondary: ReviewBackend,
-): Promise<(Adjudication | undefined)[]> {
+): Promise<{ adjudications: (Adjudication | undefined)[]; failures: CrossReviewFailure[] }> {
   const byPrimary = divergent.filter((d) => d.provider === primary.provider);
   const bySecondary = divergent.filter((d) => d.provider === secondary.provider);
   const [secAdj, priAdj] = await Promise.all([
@@ -276,22 +288,99 @@ async function adjudicateDivergent(
   let si = 0;
   let pi = 0;
   for (let i = 0; i < divergent.length; i++) {
-    if (divergent[i].provider === primary.provider) out[i] = secAdj[si++];
-    else if (divergent[i].provider === secondary.provider) out[i] = priAdj[pi++];
+    if (divergent[i].provider === primary.provider) out[i] = secAdj.adjudications[si++];
+    else if (divergent[i].provider === secondary.provider) out[i] = priAdj.adjudications[pi++];
   }
-  return out;
+  const failures: CrossReviewFailure[] = [];
+  if (secAdj.failure) failures.push(secAdj.failure);
+  if (priAdj.failure) failures.push(priAdj.failure);
+  return { adjudications: out, failures };
 }
 
-async function deliberatePlan(
+// deliberate-deep tail, shared by the fresh and resume paths: if cross-review is
+// on and there are divergent findings, adjudicate them and attach each one-sided
+// finding's adjudication (plus any judge failures) to the combined result.
+// Returns the combined data unchanged when cross-review is off or nothing diverged.
+async function maybeAdjudicateCode(
+  combined: CodeReviewResult,
+  subject: string,
+  primary: ReviewBackend,
+  secondary: ReviewBackend,
+  crossReview: boolean,
+): Promise<CodeReviewResult> {
+  const dl = combined.deliberation;
+  if (!crossReview || !dl || dl.divergent.length === 0) return combined;
+  const { adjudications, failures } = await adjudicateDivergent(dl.divergent, subject, primary, secondary);
+  return {
+    ...combined,
+    deliberation: {
+      ...dl,
+      divergent: dl.divergent.map((d, i) => (adjudications[i] ? { ...d, adjudication: adjudications[i] } : d)),
+      ...(failures.length > 0 ? { cross_review_failures: failures } : {}),
+    },
+  };
+}
+
+async function maybeAdjudicatePlan(
+  combined: PlanReviewResult,
+  subject: string,
+  primary: ReviewBackend,
+  secondary: ReviewBackend,
+  crossReview: boolean,
+): Promise<PlanReviewResult> {
+  const dl = combined.deliberation;
+  if (!crossReview || !dl || dl.divergent.length === 0) return combined;
+  const { adjudications, failures } = await adjudicateDivergent(dl.divergent, subject, primary, secondary);
+  return {
+    ...combined,
+    deliberation: {
+      ...dl,
+      divergent: dl.divergent.map((d, i) => (adjudications[i] ? { ...d, adjudication: adjudications[i] } : d)),
+      ...(failures.length > 0 ? { cross_review_failures: failures } : {}),
+    },
+  };
+}
+
+// Resolve which leaf owns a resumed session. Unknown owner → primary (T-027's
+// fail-open default: legacy/untagged sessions resume on the primary).
+function ownerLeafFor(
+  sessionId: string,
+  primary: ReviewBackend,
+  secondary: ReviewBackend,
+  lookup?: SessionProviderLookup,
+): { ownerLeaf: ReviewBackend; otherLeaf: ReviewBackend } {
+  const owner = lookup?.(sessionId) ?? null;
+  const ownerLeaf = owner && secondary.providers.includes(owner) ? secondary : primary;
+  return { ownerLeaf, otherLeaf: ownerLeaf === primary ? secondary : primary };
+}
+
+export async function deliberatePlan(
   primary: ReviewBackend,
   secondary: ReviewBackend,
   input: PlanReviewInput,
   crossReview: boolean,
   lookup?: SessionProviderLookup,
 ): Promise<Result<PlanReviewResult>> {
-  // A resumed session belongs to one provider — can't deliberate it. Fall through
-  // to failover, which routes to the session's OWNING leaf via lookup (ISS-011).
-  if (input.session_id) return withFailover(primary, secondary, input, (b, i) => b.reviewPlan(i), lookup);
+  if (input.session_id) {
+    // Deliberate-on-resume (ISS-010): the OWNER resumes its session; the other
+    // leaf reviews fresh. Each leaf gets input.model only if it is the primary.
+    const { ownerLeaf, otherLeaf } = ownerLeafFor(input.session_id, primary, secondary, lookup);
+    const [ownerRes, otherRes] = await Promise.all([
+      ownerLeaf.reviewPlan({ ...input, model: ownerLeaf === primary ? input.model : undefined }),
+      otherLeaf.reviewPlan({ ...input, session_id: undefined, model: otherLeaf === primary ? input.model : undefined }),
+    ]);
+    // Map owner/other back to primary/secondary Results (used for both the combine
+    // and the primary-led bothFailed message).
+    const primaryRes = ownerLeaf === primary ? ownerRes : otherRes;
+    const secondaryRes = ownerLeaf === primary ? otherRes : ownerRes;
+    if (ownerRes.ok && otherRes.ok && primaryRes.ok && secondaryRes.ok) {
+      const combined = combinePlan(primary.provider, primaryRes.data, secondary.provider, secondaryRes.data, ownerRes.data.session_id);
+      return ok(await maybeAdjudicatePlan(combined, input.plan, primary, secondary, crossReview));
+    }
+    if (ownerRes.ok) return ok(degradePlan(ownerLeaf.provider, ownerRes.data, otherLeaf.provider, errOf(otherRes)));
+    if (otherRes.ok) return ok(degradePlan(otherLeaf.provider, otherRes.data, ownerLeaf.provider, errOf(ownerRes)));
+    return err<PlanReviewResult>(bothFailed(errOf(primaryRes), secondary.provider, errOf(secondaryRes)));
+  }
 
   const [ra, rb] = await Promise.all([
     primary.reviewPlan(input),
@@ -299,30 +388,36 @@ async function deliberatePlan(
   ]);
   if (ra.ok && rb.ok) {
     const combined = combinePlan(primary.provider, ra.data, secondary.provider, rb.data);
-    const dl = combined.deliberation;
-    if (!crossReview || !dl || dl.divergent.length === 0) return ok(combined);
-    const adjs = await adjudicateDivergent(dl.divergent, input.plan, primary, secondary);
-    return ok({
-      ...combined,
-      deliberation: {
-        ...dl,
-        divergent: dl.divergent.map((d, i) => (adjs[i] ? { ...d, adjudication: adjs[i] } : d)),
-      },
-    });
+    return ok(await maybeAdjudicatePlan(combined, input.plan, primary, secondary, crossReview));
   }
   if (ra.ok) return ok(degradePlan(primary.provider, ra.data, secondary.provider, errOf(rb)));
   if (rb.ok) return ok(degradePlan(secondary.provider, rb.data, primary.provider, errOf(ra)));
   return err<PlanReviewResult>(bothFailed(errOf(ra), secondary.provider, errOf(rb)));
 }
 
-async function deliberateCode(
+export async function deliberateCode(
   primary: ReviewBackend,
   secondary: ReviewBackend,
   input: CodeReviewInput,
   crossReview: boolean,
   lookup?: SessionProviderLookup,
 ): Promise<Result<CodeReviewResult>> {
-  if (input.session_id) return withFailover(primary, secondary, input, (b, i) => b.reviewCode(i), lookup);
+  if (input.session_id) {
+    const { ownerLeaf, otherLeaf } = ownerLeafFor(input.session_id, primary, secondary, lookup);
+    const [ownerRes, otherRes] = await Promise.all([
+      ownerLeaf.reviewCode({ ...input, model: ownerLeaf === primary ? input.model : undefined }),
+      otherLeaf.reviewCode({ ...input, session_id: undefined, model: otherLeaf === primary ? input.model : undefined }),
+    ]);
+    const primaryRes = ownerLeaf === primary ? ownerRes : otherRes;
+    const secondaryRes = ownerLeaf === primary ? otherRes : ownerRes;
+    if (ownerRes.ok && otherRes.ok && primaryRes.ok && secondaryRes.ok) {
+      const combined = combineCode(primary.provider, primaryRes.data, secondary.provider, secondaryRes.data, ownerRes.data.session_id);
+      return ok(await maybeAdjudicateCode(combined, input.diff, primary, secondary, crossReview));
+    }
+    if (ownerRes.ok) return ok(degradeCode(ownerLeaf.provider, ownerRes.data, otherLeaf.provider, errOf(otherRes)));
+    if (otherRes.ok) return ok(degradeCode(otherLeaf.provider, otherRes.data, ownerLeaf.provider, errOf(ownerRes)));
+    return err<CodeReviewResult>(bothFailed(errOf(primaryRes), secondary.provider, errOf(secondaryRes)));
+  }
 
   const [ra, rb] = await Promise.all([
     primary.reviewCode(input),
@@ -330,16 +425,7 @@ async function deliberateCode(
   ]);
   if (ra.ok && rb.ok) {
     const combined = combineCode(primary.provider, ra.data, secondary.provider, rb.data);
-    const dl = combined.deliberation;
-    if (!crossReview || !dl || dl.divergent.length === 0) return ok(combined);
-    const adjs = await adjudicateDivergent(dl.divergent, input.diff, primary, secondary);
-    return ok({
-      ...combined,
-      deliberation: {
-        ...dl,
-        divergent: dl.divergent.map((d, i) => (adjs[i] ? { ...d, adjudication: adjs[i] } : d)),
-      },
-    });
+    return ok(await maybeAdjudicateCode(combined, input.diff, primary, secondary, crossReview));
   }
   if (ra.ok) return ok(degradeCode(primary.provider, ra.data, secondary.provider, errOf(rb)));
   if (rb.ok) return ok(degradeCode(secondary.provider, rb.data, primary.provider, errOf(ra)));

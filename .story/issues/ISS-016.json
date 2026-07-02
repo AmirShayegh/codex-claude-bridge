@@ -16,9 +16,9 @@
     "T-024",
     "T-028"
   ],
-  "resolution": null,
-  "resolvedDate": null,
+  "resolution": "Fixed in T-028. (1) Degraded results now set deliberation.agreement:'degraded' (a new enum value) instead of 'agree', so a single-provider degraded result no longer reads as consensus. (2) chunks_reviewed is propagated: each verdict entry carries its own provider's count and the top-level chunks_reviewed carries the primary's. Tests assert both.",
+  "resolvedDate": "2026-07-01",
   "severity": "low",
-  "status": "open",
+  "status": "resolved",
   "title": "Deliberation polish: degraded results claim agreement 'agree'; chunks_reviewed dropped from combined result"
 }

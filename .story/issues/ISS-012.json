@@ -6,7 +6,7 @@
   "discoveredDate": "2026-07-01",
   "displayId": "ISS-012",
   "id": "ISS-012",
-  "impact": "runCrossReview sends the entire diff in one turn — a diff large enough to need chunking in the main review will likely fail the adjudication turn. runAdjudicate swallows any failure into all-undefined adjudications, so \"deliberate-deep ran but adjudication failed\" is indistinguishable from findings that were never adjudicated. Cheap fix: add a crossReviewFailed { by, reason } marker to the deliberation block; larger fix: chunk or truncate the cross-review subject.",
+  "impact": "runCrossReview sends the entire diff in one turn — a diff large enough to need chunking in the main review will likely fail the adjudication turn. runAdjudicate swallows any failure into all-undefined adjudications, so \"deliberate-deep ran but adjudication failed\" is indistinguishable from findings that were never adjudicated. MARKER HALF DONE (T-028): runAdjudicate/adjudicateDivergent now surface per-judge failures as deliberation.cross_review_failures[], distinguishing \"could not run\" from \"ran, found nothing\". REMAINING (T-030): chunk/slice the cross-review subject so a large diff doesn't blow the adjudication turn.",
   "location": [
     "src/backends/deliberation.ts:234-258",
     "src/backends/orchestrator.ts:470-485"

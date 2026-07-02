@@ -3,6 +3,7 @@
     "repo-hygiene"
   ],
   "discoveredDate": "2026-04-23",
+  "displayId": "ISS-002",
   "id": "ISS-002",
   "impact": "temp/ was used ad-hoc for scratch files (most recently the GPT-5.5 announcement PDF referenced during the v0.3.0 release). Now gitignored as of commit 98eedf5. Confirmation issue only — nothing sensitive has been committed, but worth noting as a convention so future contributors use temp/ for throwaway reference material rather than the project root.",
   "location": [
@@ -11,9 +12,9 @@
   ],
   "phase": null,
   "relatedTickets": [],
-  "resolution": null,
-  "resolvedDate": null,
+  "resolution": "Already addressed: temp/ gitignored in commit 98eedf5; the issue itself notes it was a confirmation/convention note only and nothing sensitive was committed. Convention (use temp/ for throwaway reference material) is established practice. Closed during 2026-07-01 triage — no code change needed.",
+  "resolvedDate": "2026-07-01",
   "severity": "low",
-  "status": "open",
+  "status": "resolved",
   "title": "temp/ working folder housekeeping"
 }

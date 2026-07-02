@@ -1,0 +1,28 @@
+{
+  "components": [
+    "backends/deliberation",
+    "backends/failover",
+    "storage/session-tracker"
+  ],
+  "discoveredDate": "2026-07-01",
+  "displayId": "ISS-011",
+  "id": "ISS-011",
+  "impact": "When the primary fails and the secondary serves (degradeCode/degradePlan), the result's session_id belongs to the secondary and is recorded under that provider, but the composite presents as the primary. The next call passing that session_id is rejected — correct guard in MCP, broken workflow: degraded review → unusable session_id. Fix: warn in the degraded result, or route resumes to whichever leaf owns the session instead of always the primary. Same applies to plain failover mode.\n\nLIVE-CONFIRMED 2026-07-01 (probe loop, CLI against dist 1.4.0): with codex primary pointing at a dead binary (codex_path=/nonexistent), deliberate review degraded to Gemini and returned session 045f02a1…; the immediate next `review-code --session <that id>` hard-failed with PROVIDER_UNAVAILABLE — resume routed to the dead primary with no failover, even though Gemini (the session owner) was healthy and could have continued it. Bug category: cross-layer trust violation (composite assumes primary owns every session; degrade path violates that).",
+  "location": [
+    "src/backends/deliberation.ts:176-214",
+    "src/backends/deliberation.ts:311-312",
+    "src/backends/deliberation.ts:341-342",
+    "src/backends/failover.ts:56",
+    "src/backends/failover.ts:67-68"
+  ],
+  "phase": null,
+  "relatedTickets": [
+    "T-024",
+    "T-027"
+  ],
+  "resolution": null,
+  "resolvedDate": null,
+  "severity": "medium",
+  "status": "open",
+  "title": "Degraded deliberation returns a session_id the next call cannot continue"
+}

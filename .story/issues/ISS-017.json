@@ -1,0 +1,27 @@
+{
+  "components": [
+    "cli",
+    "backends/deliberation",
+    "backends/failover",
+    "storage/session-tracker"
+  ],
+  "discoveredDate": "2026-07-01",
+  "displayId": "ISS-017",
+  "id": "ISS-017",
+  "impact": "The cross-provider resume guard (session tracker preflight comparing the session's recorded provider to the active backend) lives only in the MCP tool layer (src/tools/* via createSessionTracker). The CLI (src/cli/commands.ts) calls the backend directly with no tracker, so `--session` with a session owned by the other provider is never rejected cleanly — it routes to the primary, which either hard-fails (dead binary: PROVIDER_UNAVAILABLE, observed live 2026-07-01) or would produce a confusing thread-not-found/new-thread behavior from the wrong provider's SDK. Cross-layer trust violation: the guard is assumed to exist below the surface layers, but only one of the two surface layers has it. Fix: move the guard into the backend/composite seam (or share the tracker preflight with CLI handlers) so both surfaces get the same clean rejection.",
+  "location": [
+    "src/cli/commands.ts:144",
+    "src/cli/commands.ts:182-185",
+    "src/tools/review-code.ts:76-79"
+  ],
+  "phase": null,
+  "relatedTickets": [
+    "T-024",
+    "T-027"
+  ],
+  "resolution": null,
+  "resolvedDate": null,
+  "severity": "medium",
+  "status": "open",
+  "title": "CLI resume path has no cross-provider session guard — foreign session_id surfaces as raw provider error"
+}

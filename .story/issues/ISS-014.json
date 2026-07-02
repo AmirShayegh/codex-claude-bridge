@@ -1,0 +1,24 @@
+{
+  "components": [
+    "backends/deliberation"
+  ],
+  "discoveredDate": "2026-07-01",
+  "displayId": "ISS-014",
+  "id": "ISS-014",
+  "impact": "input.model is forwarded to the primary's review, but runAdjudicate calls judge.crossReview({ content, findings }) with no model, so the primary's cross-review adjudication silently runs on the config default instead of the caller's per-call override. Inconsistent model usage within a single deliberate-deep call. Fix: thread the (primary-only) model override into adjudicateDivergent/runAdjudicate for the primary judge.",
+  "location": [
+    "src/backends/deliberation.ts:241-250",
+    "src/backends/deliberation.ts:302",
+    "src/backends/deliberation.ts:332"
+  ],
+  "phase": null,
+  "relatedTickets": [
+    "T-025",
+    "T-030"
+  ],
+  "resolution": null,
+  "resolvedDate": null,
+  "severity": "low",
+  "status": "open",
+  "title": "Per-call model override not forwarded to the primary's adjudication turn"
+}

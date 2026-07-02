@@ -1,0 +1,13 @@
+{
+  "content": "Self-contained repro for the 2026-07-01 probe loop against dist 1.4.0. Recreate anywhere:\n\n**Planted-bug file** (payment.js, commit a base version without refund(), then add):\n```js\nfunction refund(customer, amount) {\n  if (amount = 0) {            // assignment-instead-of-comparison\n    return null;\n  }\n  const balance = customer.balance;\n  customer.balance = balance + amount;   // no negative-amount validation\n  db.query(`UPDATE customers SET balance = ${customer.balance} WHERE id = '${customer.id}'`);  // SQL injection\n  return customer.balance;\n}\n```\n`git diff > probe.diff` (base file also carries a string-concat INSERT injection in chargeCustomer for two-provider agreement testing).\n\n**Configs** (.reviewbridge.json variants):\n- Normal deliberate-deep: `{\"provider\":\"codex\",\"codex_path\":\"/Users/amirshayegh/.local/bin/codex\",\"mode\":\"deliberate-deep\"}`\n- Forced-degraded: `{\"provider\":\"codex\",\"codex_path\":\"/nonexistent/codex-binary-gone\",\"mode\":\"deliberate\"}`\n- Gemini-primary: `{\"provider\":\"gemini\",\"mode\":\"deliberate\"}`\n\n**Probe sequence** (CLI = node dist/index.js, all with --json):\n1. `review-code --diff probe.diff --config <degraded-cfg>` → expect deliberation.degraded={failed:codex, PROVIDER_UNAVAILABLE}, providers=[gemini], agreement='agree' (the ISS-016 mislabel), capture session_id.\n2. `review-code --diff probe.diff --session <id> --config <degraded-cfg>` → ISS-011: hard PROVIDER_UNAVAILABLE, no failover to the healthy session owner.\n3. `review-code --diff probe.diff --session <id> --config <gemini-cfg>` → ISS-010: succeeds, same session, deliberation block entirely absent.\n4. Fresh deliberate-deep with BOTH providers live (needs Codex usage headroom) → ISS-013 data: compare agreed[] vs divergent[] on the planted bugs; capture category/line drift between providers.\n\nCLI has no cross-provider guard (ISS-017) — probes 2/3 exercise the backend seam directly; the MCP path would reject at tracker preflight instead.\n\nObserved 2026-07-01: Codex RATE_LIMITED (real usage limit, reset 5:27 PM) also produced a correct degraded marker — unplanned probe of failover eligibility, clean.",
+  "createdDate": "2026-07-02",
+  "id": "N-001",
+  "status": "active",
+  "tags": [
+    "probe",
+    "deliberation",
+    "repro"
+  ],
+  "title": "Deliberation probe kit (repro for ISS-010/011/013/016/017 live probes)",
+  "updatedDate": "2026-07-02"
+}

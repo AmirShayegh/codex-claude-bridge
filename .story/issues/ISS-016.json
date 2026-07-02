@@ -1,0 +1,24 @@
+{
+  "components": [
+    "backends/deliberation"
+  ],
+  "discoveredDate": "2026-07-01",
+  "displayId": "ISS-016",
+  "id": "ISS-016",
+  "impact": "Two nitpicks: (1) degradeCode/degradePlan set agreement: 'agree', which reads as \"both providers agreed\" unless the consumer checks the degraded marker first — a distinct label (e.g. 'degraded') or omitting agreement would be clearer. (2) combineCode drops chunks_reviewed from both sides, losing chunking telemetry whenever deliberation runs.\n\nLIVE-CONFIRMED 2026-07-01 for (1): two real degraded reviews (one RATE_LIMITED, one PROVIDER_UNAVAILABLE on the codex side) both returned deliberation.agreement='agree' with providers=[gemini] — a single-provider result labeled as agreement.",
+  "location": [
+    "src/backends/deliberation.ts:188",
+    "src/backends/deliberation.ts:208",
+    "src/backends/deliberation.ts:124-141"
+  ],
+  "phase": null,
+  "relatedTickets": [
+    "T-024",
+    "T-028"
+  ],
+  "resolution": null,
+  "resolvedDate": null,
+  "severity": "low",
+  "status": "open",
+  "title": "Deliberation polish: degraded results claim agreement 'agree'; chunks_reviewed dropped from combined result"
+}

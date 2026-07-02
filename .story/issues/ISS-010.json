@@ -1,0 +1,24 @@
+{
+  "components": [
+    "backends/deliberation"
+  ],
+  "discoveredDate": "2026-07-01",
+  "displayId": "ISS-010",
+  "id": "ISS-010",
+  "impact": "deliberatePlan/deliberateCode fall through to plain failover whenever session_id is present, but the MCP server instructions tell callers to always pass session_id from review_plan into review_code. So in deliberate/deliberate-deep mode only the first review of a lifecycle deliberates; plan→code and every re-review after fixes runs single-provider with no indication (deliberation block simply absent). Fix options: attach a deliberation skipped marker (e.g. { skipped: 'resumed_session' }), or deliberate anyway (resume primary's thread, fresh secondary review). Natural to bundle with the open per-call deliberation toggle / mode-surfacing item from the v1.4.0 handover.\n\nLIVE-CONFIRMED 2026-07-01 (probe loop, real Gemini via CLI against dist 1.4.0): fresh review created session 045f02a1…; `review-code --session <id>` with mode=deliberate returned a successful result with NO deliberation block and no marker — silently single-provider. Repro: .reviewbridge.json {provider: gemini, mode: deliberate}, run review-code fresh, then again with --session. Bug category: silent no-op (of the deliberation layer) / swallowed signal.",
+  "location": [
+    "src/backends/deliberation.ts:292",
+    "src/backends/deliberation.ts:322"
+  ],
+  "phase": null,
+  "relatedTickets": [
+    "T-024",
+    "T-025",
+    "T-028"
+  ],
+  "resolution": null,
+  "resolvedDate": null,
+  "severity": "high",
+  "status": "open",
+  "title": "Deliberation silently disabled on resumed sessions — recommended session_id workflow defeats the feature"
+}

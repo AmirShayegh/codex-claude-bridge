@@ -1,0 +1,25 @@
+{
+  "components": [
+    "backends/deliberation"
+  ],
+  "discoveredDate": "2026-07-01",
+  "displayId": "ISS-013",
+  "id": "ISS-013",
+  "impact": "keyOf matches only on exact file:line:category. Providers use different category vocabularies and line numbers drift ±1-2, so semantically identical findings classify as divergent and appear twice in the merged findings array (both providers' phrasings of the same bug), inflating counts in both deliberate and deliberate-deep modes. Deliberate-deep's adjudication mitigates classification but not the duplication. Consider a fuzzier merge key (file + line-window, category-agnostic) for dedup even if agreed-classification stays strict.",
+  "location": [
+    "src/backends/deliberation.ts:29-31",
+    "src/backends/deliberation.ts:127",
+    "src/backends/deliberation.ts:158"
+  ],
+  "phase": null,
+  "relatedTickets": [
+    "T-024",
+    "T-025",
+    "T-029"
+  ],
+  "resolution": null,
+  "resolvedDate": null,
+  "severity": "medium",
+  "status": "open",
+  "title": "Exact file:line:category agreement key makes 'agreed' near-empty and duplicates findings in the merged array"
+}

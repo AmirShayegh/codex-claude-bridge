@@ -1,0 +1,24 @@
+{
+  "components": [
+    "backends/deliberation"
+  ],
+  "discoveredDate": "2026-07-01",
+  "displayId": "ISS-015",
+  "id": "ISS-015",
+  "impact": "Worst-verdict-wins is computed from the two raw verdicts before the cross-review round, so if one provider's harsher verdict rests entirely on findings the other provider disputes as false positives, the merged verdict stays harsh. Deliberate design (Claude synthesizes downstream) but undocumented — a caller reading only verdict gets the pre-adjudication picture. At minimum document this in README/tool description; optionally soften verdict when all of the harsher provider's exclusive findings are disputed.",
+  "location": [
+    "src/backends/deliberation.ts:123",
+    "src/backends/deliberation.ts:154"
+  ],
+  "phase": null,
+  "relatedTickets": [
+    "T-024",
+    "T-025",
+    "T-030"
+  ],
+  "resolution": null,
+  "resolvedDate": null,
+  "severity": "low",
+  "status": "open",
+  "title": "Merged verdict computed before cross-review — adjudication never feeds back into verdict"
+}

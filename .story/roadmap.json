@@ -66,6 +66,13 @@
       "summary": "Both providers review in parallel; bridge surfaces agree/diverge; Claude synthesizes"
     },
     {
+      "description": "Drain the open issue backlog in dependency order: fix diff validation (ISS-005), fix deliberation session semantics at the backend seam (ISS-011/017), make deliberation visible and honest in results (ISS-010/016/012-marker), redesign agreement matching with live two-provider data (ISS-013), deliberate-deep polish (ISS-012-chunking/014/015), config no-op audit (ISS-004), MODEL_ERROR tip refinement (ISS-003). Sequenced so shared-root-cause issues fix together, seam changes land before features built on them, and data-dependent design waits for live probe data.",
+      "id": "hardening",
+      "label": "PHASE 11",
+      "name": "Hardening",
+      "summary": "Issue-backlog drain: diff validation, deliberation session semantics + visibility, agreement quality, config audit"
+    },
+    {
       "description": "Make the review loop useful for teams reviewing GitHub PRs. Adds a sixth MCP tool (review_pr) and a fourth CLI subcommand (review-pr). Fetches PR diff and metadata via `gh pr diff` and `gh pr view --json`, feeds PR title + description + diff to a PR-specific prompt, and returns scope-match and description-match as regular findings (not top-level fields, to keep the result type consistent with review_code). No storage changes needed.",
       "id": "team-integration",
       "label": "PHASE 6",

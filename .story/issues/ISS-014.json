@@ -16,9 +16,9 @@
     "T-025",
     "T-030"
   ],
-  "resolution": null,
-  "resolvedDate": null,
+  "resolution": "Fixed in T-030. The caller's per-call model override is now forwarded to the PRIMARY provider's cross-review adjudication turn (via adjudicateDivergent(primaryModel) → runAdjudicate(model) → crossReview input); the secondary judge continues to resolve its own default, matching the review convention. Threaded through all four adjudication paths (deliberatePlan/Code × fresh/resume). Tests assert the primary judge receives the model and the secondary does not, for both code and plan.",
+  "resolvedDate": "2026-07-01",
   "severity": "low",
-  "status": "open",
+  "status": "resolved",
   "title": "Per-call model override not forwarded to the primary's adjudication turn"
 }

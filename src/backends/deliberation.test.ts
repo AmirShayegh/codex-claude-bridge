@@ -320,6 +320,55 @@ describe('createDeliberationBackend — deliberate-deep (cross-review round)', (
     expect(priReview).toHaveBeenCalledWith(expect.objectContaining({ content: DIFF, findings: [expect.objectContaining({ file: 'b.ts', line: 2 })] }));
   });
 
+  it('ISS-014: forwards the caller model to the PRIMARY judge only', async () => {
+    const secReview = vi.fn().mockResolvedValue(ok(cross('confirmed', 'r'))); // gemini judge
+    const priReview = vi.fn().mockResolvedValue(ok(cross('disputed', 'r'))); // codex judge
+    const { primary, secondary } = mixedPair({ crossReview: priReview }, { crossReview: secReview });
+
+    await createDeliberationBackend(primary, secondary, { crossReview: true }).reviewCode({ diff: DIFF, model: 'gpt-5.4' });
+
+    // codex is the primary → its adjudication turn gets the override; gemini resolves its own default.
+    expect(priReview).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-5.4' }));
+    expect(secReview).toHaveBeenCalledWith(expect.objectContaining({ model: undefined }));
+  });
+
+  it('ISS-012: slices the cross-review subject to the files each finding touches', async () => {
+    const twoFile =
+      'diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-a\n+A\n' +
+      'diff --git a/b.ts b/b.ts\n--- a/b.ts\n+++ b/b.ts\n@@ -1 +1 @@\n-b\n+B';
+    const secReview = vi.fn().mockResolvedValue(ok(cross('confirmed', 'r'))); // judges codex's a.ts finding
+    const priReview = vi.fn().mockResolvedValue(ok(cross('disputed', 'r'))); // judges gemini's b.ts finding
+    const { primary, secondary } = mixedPair({ crossReview: priReview }, { crossReview: secReview });
+
+    await createDeliberationBackend(primary, secondary, { crossReview: true }).reviewCode({ diff: twoFile });
+
+    // gemini judges the a.ts finding → subject sliced to the a.ts section only.
+    const secArg = secReview.mock.calls[0][0];
+    expect(secArg.content).toContain('a/a.ts');
+    expect(secArg.content).not.toContain('b/b.ts');
+    // codex judges the b.ts finding → subject sliced to the b.ts section only.
+    const priArg = priReview.mock.calls[0][0];
+    expect(priArg.content).toContain('a/b.ts');
+    expect(priArg.content).not.toContain('a/a.ts');
+  });
+
+  it('ISS-012: an over-budget cross-review subject fails cleanly (cross_review_failures, no judge call)', async () => {
+    const secReview = vi.fn().mockResolvedValue(ok(cross('confirmed', 'r')));
+    const priReview = vi.fn().mockResolvedValue(ok(cross('disputed', 'r')));
+    const { primary, secondary } = mixedPair({ crossReview: priReview }, { crossReview: secReview });
+
+    // maxChunkTokens:1 → any subject blows the budget → both judges skipped.
+    const res = await createDeliberationBackend(primary, secondary, { crossReview: true, maxChunkTokens: 1 }).reviewCode({ diff: DIFF });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(secReview).not.toHaveBeenCalled();
+    expect(priReview).not.toHaveBeenCalled();
+    const failures = res.data.deliberation?.cross_review_failures ?? [];
+    expect(failures.map((x) => x.by).sort()).toEqual(['codex', 'gemini']);
+    expect(failures[0].reason).toContain('max_chunk_tokens');
+  });
+
   it('does not cross-review by default (plain deliberate leaves divergent un-adjudicated)', async () => {
     const secReview = vi.fn();
     const priReview = vi.fn();
@@ -400,5 +449,20 @@ describe('createDeliberationBackend — deliberate-deep (cross-review round)', (
     expect(div[0].adjudication).toEqual({ by: 'gemini', verdict: 'confirmed', reason: 'agreed' });
     expect(div[1].adjudication).toEqual({ by: 'codex', verdict: 'unsure', reason: 'cannot tell' });
     expect(secReview).toHaveBeenCalledWith(expect.objectContaining({ content: 'do a thing' }));
+  });
+
+  it('ISS-014: a FRESH plan review also forwards the model to the primary judge only', async () => {
+    // Regression: the fresh deliberatePlan path must thread input.model too.
+    const planA = { verdict: 'revise', summary: 's', findings: [f('p.ts', 1, 'feasibility', 'major')], session_id: 'a' };
+    const planB = { verdict: 'revise', summary: 's', findings: [f('q.ts', 9, 'security', 'major')], session_id: 'b' };
+    const secReview = vi.fn().mockResolvedValue(ok(cross('confirmed', 'r'))); // gemini judge
+    const priReview = vi.fn().mockResolvedValue(ok(cross('unsure', 'r'))); // codex judge
+    const primary = backend('codex', { reviewPlan: vi.fn().mockResolvedValue(ok(planA)), crossReview: priReview });
+    const secondary = backend('gemini', { reviewPlan: vi.fn().mockResolvedValue(ok(planB)), crossReview: secReview });
+
+    await createDeliberationBackend(primary, secondary, { crossReview: true }).reviewPlan({ plan: 'do a thing', model: 'gpt-5.4' });
+
+    expect(priReview).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-5.4' })); // primary judge gets it
+    expect(secReview).toHaveBeenCalledWith(expect.objectContaining({ model: undefined })); // secondary resolves own
   });
 });

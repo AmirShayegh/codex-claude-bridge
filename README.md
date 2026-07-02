@@ -319,8 +319,9 @@ Each divergent item gains an optional `adjudication` (the `agreed` findings and 
 
 Notes:
 - **`verdict`** is `confirmed` (a real issue), `disputed` (a false positive here), or `unsure` (can't tell from the change). `by` is the provider that adjudicated — always the one that did *not* raise the finding.
-- **Cost:** adds up to two more provider calls per review (one per side that has divergent findings). Skipped entirely when there's nothing divergent.
-- **Best-effort:** if a provider is out of usage or errors during the cross-review round, its side is simply left un-adjudicated — the deliberation result still returns.
+- **Top-level `verdict` is not folded back:** under deliberate-deep the result's `verdict` still reflects both providers' *independent* reviews (worst-of-both). The per-finding `adjudication`s are advisory input for **your** synthesis — the bridge does not recompute the verdict from them (ISS-015). A `reject` resting on findings the other provider `disputed` still reports `reject`; it's up to you to weigh the adjudications.
+- **Cost:** adds up to two more provider calls per review (one per side that has divergent findings). Skipped entirely when there's nothing divergent. The cross-review subject is sliced to just the files the divergent findings touch, so it stays small even on large diffs.
+- **Best-effort:** if a provider is out of usage or errors during the cross-review round, its side is simply left un-adjudicated and reported in `deliberation.cross_review_failures` — the deliberation result still returns.
 
 ## Storage
 

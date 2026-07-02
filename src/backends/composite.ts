@@ -106,7 +106,7 @@ export function createCompositeBackend(
       if (mode === 'single-deliberate-conflict') return err<PlanReviewResult>(singleModeConflictError());
       if (mode === 'single') return stamp('single', await primary.reviewPlan(input));
       if (mode === 'deliberate' || mode === 'deliberate-deep') {
-        return stamp(mode, await deliberatePlan(primary, secondary, input, mode === 'deliberate-deep', lookup));
+        return stamp(mode, await deliberatePlan(primary, secondary, input, mode === 'deliberate-deep', lookup, config.max_chunk_tokens));
       }
       return stamp('failover', await withFailover(primary, secondary, input, (b, i) => b.reviewPlan(i), lookup));
     },
@@ -115,7 +115,7 @@ export function createCompositeBackend(
       if (mode === 'single-deliberate-conflict') return err<CodeReviewResult>(singleModeConflictError());
       if (mode === 'single') return stamp('single', await primary.reviewCode(input));
       if (mode === 'deliberate' || mode === 'deliberate-deep') {
-        return stamp(mode, await deliberateCode(primary, secondary, input, mode === 'deliberate-deep', lookup));
+        return stamp(mode, await deliberateCode(primary, secondary, input, mode === 'deliberate-deep', lookup, config.max_chunk_tokens));
       }
       return stamp('failover', await withFailover(primary, secondary, input, (b, i) => b.reviewCode(i), lookup));
     },

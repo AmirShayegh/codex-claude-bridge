@@ -17,9 +17,9 @@
     "T-028",
     "T-030"
   ],
-  "resolution": null,
-  "resolvedDate": null,
+  "resolution": "Both halves fixed. Marker half (T-028): runAdjudicate/adjudicateDivergent surface per-judge failures as deliberation.cross_review_failures[], distinguishing 'could not run' from 'ran, found nothing'. Chunking half (T-030): new sliceDiffToFiles util slices the cross-review subject to only the files the divergent findings touch (header-preserving, falls back to full for plans/no-file/no-match); if the sliced subject still exceeds max_chunk_tokens, runAdjudicate fails that adjudication cleanly (cross_review_failures marker, no crossReview call) — bounded cost, no multi-turn. Tests in diff-files.test.ts + deliberation.test.ts.",
+  "resolvedDate": "2026-07-01",
   "severity": "medium",
-  "status": "open",
+  "status": "resolved",
   "title": "Cross-review round is unchunked and its failure is invisible"
 }

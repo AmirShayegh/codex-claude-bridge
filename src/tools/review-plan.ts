@@ -35,7 +35,10 @@ export function registerReviewPlanTool(server: McpServer, client: ReviewBackend,
           .describe(
             'Per-call override of the configured review mode: true = both providers review (deliberation); ' +
               'false = single provider with failover. Omit to use the configured mode. Requires a two-provider ' +
-              'setup; requesting deliberation under a single-provider config returns an error.',
+              'setup; requesting deliberation under a single-provider config returns an error. Under ' +
+              'deliberate-deep, the returned verdict reflects both providers\' independent reviews and is NOT ' +
+              'recomputed from cross-review adjudications — treat deliberation.divergent[].adjudication as ' +
+              'advisory input for your own synthesis.',
           ),
       },
     },

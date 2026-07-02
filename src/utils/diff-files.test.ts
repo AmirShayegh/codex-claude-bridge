@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractFilesFromDiff } from './diff-files.js';
+import { extractFilesFromDiff, sliceDiffToFiles } from './diff-files.js';
 
 describe('extractFilesFromDiff', () => {
   it('extracts single file path', () => {
@@ -83,5 +83,37 @@ new file mode 100644
 @@ -1 +1 @@
 -old`;
     expect(extractFilesFromDiff(diff)).toEqual(['src/config/loaders/json.ts']);
+  });
+});
+
+describe('sliceDiffToFiles', () => {
+  const fileA = 'diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-a\n+A';
+  const fileB = 'diff --git a/b.ts b/b.ts\n--- a/b.ts\n+++ b/b.ts\n@@ -1 +1 @@\n-b\n+B';
+  const twoFile = `${fileA}\n${fileB}`;
+
+  it('keeps only the referenced file section and preserves its diff --git header', () => {
+    const sliced = sliceDiffToFiles(twoFile, new Set(['a.ts']));
+    expect(sliced.startsWith('diff --git ')).toBe(true);
+    expect(sliced).toContain('a/a.ts');
+    expect(sliced).not.toContain('b/b.ts');
+  });
+
+  it('keeps multiple referenced sections', () => {
+    const sliced = sliceDiffToFiles(twoFile, new Set(['a.ts', 'b.ts']));
+    expect(sliced).toContain('a/a.ts');
+    expect(sliced).toContain('a/b.ts');
+  });
+
+  it('falls back to the full diff when wanted is empty', () => {
+    expect(sliceDiffToFiles(twoFile, new Set())).toBe(twoFile);
+  });
+
+  it('falls back to the full diff when nothing matches', () => {
+    expect(sliceDiffToFiles(twoFile, new Set(['nonexistent.ts']))).toBe(twoFile);
+  });
+
+  it('returns non-diff text (e.g. a plan subject) unchanged', () => {
+    const plan = 'Step 1: add a function to a.ts\nStep 2: test it';
+    expect(sliceDiffToFiles(plan, new Set(['a.ts']))).toBe(plan);
   });
 });

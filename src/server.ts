@@ -49,7 +49,10 @@ TIPS:
   Requires a two-provider setup. review_precommit is always failover.
 - Every result carries a 'review_mode' field (single/failover/deliberate/deliberate-deep) naming the
   composition that ran, so you can tell whether deliberation actually happened even without a
-  'deliberation' block.`;
+  'deliberation' block.
+- Under deliberate-deep, the top-level 'verdict' reflects both providers' INDEPENDENT reviews; the
+  per-finding adjudications in deliberation.divergent[] are advisory for YOUR synthesis and are not
+  folded back into the verdict. Weigh disputed findings yourself.`;
 
 // Read the package version once at module load so the MCP server advertises
 // the same version as the published package, instead of drifting from a

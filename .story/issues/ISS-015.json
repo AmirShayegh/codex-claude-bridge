@@ -16,9 +16,9 @@
     "T-025",
     "T-030"
   ],
-  "resolution": null,
-  "resolvedDate": null,
+  "resolution": "Fixed in T-030 as a documented contract (no verdict recompute — synthesis is the caller's job by design). Code comments at combineCode/combinePlan verdict lines, plus notes in README (deliberate-deep section), the MCP server instructions, and both review_plan/review_code tool descriptions stating: under deliberate-deep the verdict reflects both providers' independent reviews and is not recomputed from cross-review adjudications; deliberation.divergent[].adjudication is advisory input for the caller's synthesis.",
+  "resolvedDate": "2026-07-01",
   "severity": "low",
-  "status": "open",
+  "status": "resolved",
   "title": "Merged verdict computed before cross-review — adjudication never feeds back into verdict"
 }

@@ -8,6 +8,8 @@ import {
 import type { PlanReviewResult, CodeReviewResult } from '../review/types.js';
 import { withFailover } from './failover.js';
 import type { SessionProviderLookup } from './failover.js';
+import { sliceDiffToFiles } from '../utils/diff-files.js';
+import { estimateTokens } from '../utils/chunking.js';
 import type {
   ReviewBackend,
   PlanReviewInput,
@@ -124,6 +126,9 @@ function combineCode(
     { provider: s, findings: rb.findings },
     codeRank,
   );
+  // Worst-of-both, computed from the two INDEPENDENT reviews and BY DESIGN not
+  // re-derived after cross-review (ISS-015): a deliberate-deep adjudication is
+  // advisory input for the caller's synthesis, not folded back into the verdict.
   const verdict = CODE_VERDICT_RANK[ra.verdict] >= CODE_VERDICT_RANK[rb.verdict] ? ra.verdict : rb.verdict;
   return {
     verdict,
@@ -158,6 +163,7 @@ function combinePlan(
     { provider: s, findings: rb.findings },
     planRank,
   );
+  // Worst-of-both, pre-cross-review by design (ISS-015) — see combineCode.
   const verdict = PLAN_VERDICT_RANK[ra.verdict] >= PLAN_VERDICT_RANK[rb.verdict] ? ra.verdict : rb.verdict;
   return {
     verdict,
@@ -247,11 +253,28 @@ async function runAdjudicate(
   judge: ReviewBackend,
   content: string,
   findings: CrossFinding[],
+  model?: string,
+  maxChunkTokens?: number,
 ): Promise<AdjudicateResult> {
   const out: (Adjudication | undefined)[] = new Array(findings.length).fill(undefined);
   if (findings.length === 0 || !judge.crossReview) return { adjudications: out };
+  // ISS-012: slice the subject to only the files these findings touch so a large
+  // diff doesn't blow the single adjudication turn. Plans / no-file findings fall
+  // back to the full subject. If it's STILL over budget, fail this adjudication
+  // cleanly (bounded cost) — surfaced via cross_review_failures, no multi-turn.
+  const wanted = new Set(findings.map((f) => f.file).filter((f): f is string => typeof f === 'string'));
+  const subject = sliceDiffToFiles(content, wanted);
+  if (maxChunkTokens !== undefined && estimateTokens(subject) > maxChunkTokens) {
+    return {
+      adjudications: out,
+      failure: {
+        by: judge.provider,
+        reason: `cross-review subject exceeds max_chunk_tokens (${estimateTokens(subject)} > ${maxChunkTokens}) even after slicing to referenced files`,
+      },
+    };
+  }
   const res = await judge.crossReview({
-    content,
+    content: subject,
     findings: findings.map((f) => ({
       severity: f.severity,
       category: f.category,
@@ -259,6 +282,7 @@ async function runAdjudicate(
       line: f.line,
       description: f.description,
     })),
+    model,
   });
   if (!res.ok) return { adjudications: out, failure: { by: judge.provider, reason: res.error } };
   for (const a of res.data.adjudications) {
@@ -277,12 +301,16 @@ async function adjudicateDivergent(
   content: string,
   primary: ReviewBackend,
   secondary: ReviewBackend,
+  primaryModel?: string,
+  maxChunkTokens?: number,
 ): Promise<{ adjudications: (Adjudication | undefined)[]; failures: CrossReviewFailure[] }> {
   const byPrimary = divergent.filter((d) => d.provider === primary.provider);
   const bySecondary = divergent.filter((d) => d.provider === secondary.provider);
   const [secAdj, priAdj] = await Promise.all([
-    runAdjudicate(secondary, content, byPrimary.map((d) => d.finding)),
-    runAdjudicate(primary, content, bySecondary.map((d) => d.finding)),
+    // The primary's model override applies to the PRIMARY judge only; the
+    // secondary judge resolves its own default (same convention as reviews).
+    runAdjudicate(secondary, content, byPrimary.map((d) => d.finding), undefined, maxChunkTokens),
+    runAdjudicate(primary, content, bySecondary.map((d) => d.finding), primaryModel, maxChunkTokens),
   ]);
   const out: (Adjudication | undefined)[] = new Array(divergent.length).fill(undefined);
   let si = 0;
@@ -307,10 +335,12 @@ async function maybeAdjudicateCode(
   primary: ReviewBackend,
   secondary: ReviewBackend,
   crossReview: boolean,
+  primaryModel?: string,
+  maxChunkTokens?: number,
 ): Promise<CodeReviewResult> {
   const dl = combined.deliberation;
   if (!crossReview || !dl || dl.divergent.length === 0) return combined;
-  const { adjudications, failures } = await adjudicateDivergent(dl.divergent, subject, primary, secondary);
+  const { adjudications, failures } = await adjudicateDivergent(dl.divergent, subject, primary, secondary, primaryModel, maxChunkTokens);
   return {
     ...combined,
     deliberation: {
@@ -327,10 +357,12 @@ async function maybeAdjudicatePlan(
   primary: ReviewBackend,
   secondary: ReviewBackend,
   crossReview: boolean,
+  primaryModel?: string,
+  maxChunkTokens?: number,
 ): Promise<PlanReviewResult> {
   const dl = combined.deliberation;
   if (!crossReview || !dl || dl.divergent.length === 0) return combined;
-  const { adjudications, failures } = await adjudicateDivergent(dl.divergent, subject, primary, secondary);
+  const { adjudications, failures } = await adjudicateDivergent(dl.divergent, subject, primary, secondary, primaryModel, maxChunkTokens);
   return {
     ...combined,
     deliberation: {
@@ -360,6 +392,7 @@ export async function deliberatePlan(
   input: PlanReviewInput,
   crossReview: boolean,
   lookup?: SessionProviderLookup,
+  maxChunkTokens?: number,
 ): Promise<Result<PlanReviewResult>> {
   if (input.session_id) {
     // Deliberate-on-resume (ISS-010): the OWNER resumes its session; the other
@@ -375,7 +408,7 @@ export async function deliberatePlan(
     const secondaryRes = ownerLeaf === primary ? otherRes : ownerRes;
     if (ownerRes.ok && otherRes.ok && primaryRes.ok && secondaryRes.ok) {
       const combined = combinePlan(primary.provider, primaryRes.data, secondary.provider, secondaryRes.data, ownerRes.data.session_id);
-      return ok(await maybeAdjudicatePlan(combined, input.plan, primary, secondary, crossReview));
+      return ok(await maybeAdjudicatePlan(combined, input.plan, primary, secondary, crossReview, input.model, maxChunkTokens));
     }
     if (ownerRes.ok) return ok(degradePlan(ownerLeaf.provider, ownerRes.data, otherLeaf.provider, errOf(otherRes)));
     if (otherRes.ok) return ok(degradePlan(otherLeaf.provider, otherRes.data, ownerLeaf.provider, errOf(ownerRes)));
@@ -388,7 +421,7 @@ export async function deliberatePlan(
   ]);
   if (ra.ok && rb.ok) {
     const combined = combinePlan(primary.provider, ra.data, secondary.provider, rb.data);
-    return ok(await maybeAdjudicatePlan(combined, input.plan, primary, secondary, crossReview));
+    return ok(await maybeAdjudicatePlan(combined, input.plan, primary, secondary, crossReview, input.model, maxChunkTokens));
   }
   if (ra.ok) return ok(degradePlan(primary.provider, ra.data, secondary.provider, errOf(rb)));
   if (rb.ok) return ok(degradePlan(secondary.provider, rb.data, primary.provider, errOf(ra)));
@@ -401,6 +434,7 @@ export async function deliberateCode(
   input: CodeReviewInput,
   crossReview: boolean,
   lookup?: SessionProviderLookup,
+  maxChunkTokens?: number,
 ): Promise<Result<CodeReviewResult>> {
   if (input.session_id) {
     const { ownerLeaf, otherLeaf } = ownerLeafFor(input.session_id, primary, secondary, lookup);
@@ -412,7 +446,7 @@ export async function deliberateCode(
     const secondaryRes = ownerLeaf === primary ? otherRes : ownerRes;
     if (ownerRes.ok && otherRes.ok && primaryRes.ok && secondaryRes.ok) {
       const combined = combineCode(primary.provider, primaryRes.data, secondary.provider, secondaryRes.data, ownerRes.data.session_id);
-      return ok(await maybeAdjudicateCode(combined, input.diff, primary, secondary, crossReview));
+      return ok(await maybeAdjudicateCode(combined, input.diff, primary, secondary, crossReview, input.model, maxChunkTokens));
     }
     if (ownerRes.ok) return ok(degradeCode(ownerLeaf.provider, ownerRes.data, otherLeaf.provider, errOf(otherRes)));
     if (otherRes.ok) return ok(degradeCode(otherLeaf.provider, otherRes.data, ownerLeaf.provider, errOf(ownerRes)));
@@ -425,7 +459,7 @@ export async function deliberateCode(
   ]);
   if (ra.ok && rb.ok) {
     const combined = combineCode(primary.provider, ra.data, secondary.provider, rb.data);
-    return ok(await maybeAdjudicateCode(combined, input.diff, primary, secondary, crossReview));
+    return ok(await maybeAdjudicateCode(combined, input.diff, primary, secondary, crossReview, input.model, maxChunkTokens));
   }
   if (ra.ok) return ok(degradeCode(primary.provider, ra.data, secondary.provider, errOf(rb)));
   if (rb.ok) return ok(degradeCode(secondary.provider, rb.data, primary.provider, errOf(ra)));
@@ -435,12 +469,14 @@ export async function deliberateCode(
 export function createDeliberationBackend(
   primary: ReviewBackend,
   secondary: ReviewBackend,
-  opts: { crossReview?: boolean; lookup?: SessionProviderLookup } = {},
+  opts: { crossReview?: boolean; lookup?: SessionProviderLookup; maxChunkTokens?: number } = {},
 ): ReviewBackend {
   // deliberate-deep: after each provider reviews independently, the OTHER
   // provider adjudicates its divergent findings (confirmed/disputed/unsure).
   const crossReview = opts.crossReview ?? false;
   const lookup = opts.lookup;
+  // Budget for the cross-review subject (ISS-012). Undefined = unbounded.
+  const maxChunkTokens = opts.maxChunkTokens;
   return {
     // Presents as the primary for tagging + the session_id/model gate; but a
     // resumed session routes to its OWNING leaf via lookup (ISS-011). The
@@ -450,8 +486,8 @@ export function createDeliberationBackend(
     provider: primary.provider,
     providers: [...primary.providers, ...secondary.providers],
     allowsModelOverrideOnResume: primary.allowsModelOverrideOnResume,
-    reviewPlan: (input: PlanReviewInput) => deliberatePlan(primary, secondary, input, crossReview, lookup),
-    reviewCode: (input: CodeReviewInput) => deliberateCode(primary, secondary, input, crossReview, lookup),
+    reviewPlan: (input: PlanReviewInput) => deliberatePlan(primary, secondary, input, crossReview, lookup, maxChunkTokens),
+    reviewCode: (input: CodeReviewInput) => deliberateCode(primary, secondary, input, crossReview, lookup, maxChunkTokens),
     // Precommit stays failover — it runs constantly and is latency-sensitive. It
     // still routes resumes to the owning leaf via the same lookup.
     reviewPrecommit: (input: PrecommitReviewInput) =>

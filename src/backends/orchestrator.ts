@@ -43,8 +43,21 @@ export function looksLikeDiff(text: string): boolean {
   const hasDiffGit = /^diff --git /m.test(text);
   const hasHunks = /^@@ /m.test(text);
   const hasFileHeaders = /^--- [ab]\//m.test(text) && /^\+\+\+ [ab]\//m.test(text);
-  // Require at least two structural markers to reduce false positives
-  return (hasDiffGit && (hasHunks || hasFileHeaders)) || (hasFileHeaders && hasHunks);
+  // Hunk-less but valid git diffs: binary changes and metadata-only changes
+  // (mode, rename, copy, empty file add/delete). These carry `diff --git` but no
+  // `@@` and no `---/+++`, so they'd be rejected without these markers (ISS-005).
+  const hasBinary = /^Binary files .* differ/m.test(text) || /^GIT binary patch/m.test(text);
+  const hasMetadata =
+    /^(?:new file mode |deleted file mode |old mode |new mode |similarity index |dissimilarity index |rename from |rename to |copy from |copy to |index [0-9a-f]{4,}\.\.)/m.test(
+      text,
+    );
+  // Require at least two structural markers to reduce false positives: the binary
+  // and metadata markers only count alongside `diff --git`, so prose that merely
+  // contains e.g. "rename from ..." is still rejected.
+  return (
+    (hasDiffGit && (hasHunks || hasFileHeaders || hasBinary || hasMetadata)) ||
+    (hasFileHeaders && hasHunks)
+  );
 }
 
 // Fixed overhead for prompt framing (role, rubric, schema, chunk header)

@@ -126,6 +126,56 @@ describe('looksLikeDiff', () => {
   it('accepts diff --git with file headers (no hunks)', () => {
     expect(looksLikeDiff('diff --git a/f b/f\n--- a/f\n+++ b/f\ncontext line')).toBe(true);
   });
+
+  // ISS-005: hunk-less-but-valid git diffs must be accepted.
+  it('accepts a rename-only diff (no hunks, no ---/+++)', () => {
+    expect(
+      looksLikeDiff('diff --git a/old.js b/new.js\nsimilarity index 100%\nrename from old.js\nrename to new.js'),
+    ).toBe(true);
+  });
+
+  it('accepts a binary diff (Binary files ... differ)', () => {
+    expect(
+      looksLikeDiff(
+        'diff --git a/img.png b/img.png\nnew file mode 100644\nindex 0000000..abc1234\nBinary files /dev/null and b/img.png differ',
+      ),
+    ).toBe(true);
+  });
+
+  it('accepts a binary diff (GIT binary patch)', () => {
+    expect(looksLikeDiff('diff --git a/img.png b/img.png\nindex abc..def 100644\nGIT binary patch\nzcmV')).toBe(true);
+  });
+
+  it('accepts a mixed rename + content diff', () => {
+    const diff =
+      'diff --git a/old.js b/new.js\nsimilarity index 100%\nrename from old.js\nrename to new.js\n' +
+      'diff --git a/src/foo.ts b/src/foo.ts\n--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1 +1 @@\n-old\n+new';
+    expect(looksLikeDiff(diff)).toBe(true);
+  });
+
+  it('accepts a mode-only change diff', () => {
+    expect(looksLikeDiff('diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755')).toBe(true);
+  });
+
+  it('accepts a copy-only diff', () => {
+    expect(
+      looksLikeDiff('diff --git a/orig.js b/copy.js\nsimilarity index 100%\ncopy from orig.js\ncopy to copy.js'),
+    ).toBe(true);
+  });
+
+  it('accepts an empty-file creation diff', () => {
+    expect(looksLikeDiff('diff --git a/empty.txt b/empty.txt\nnew file mode 100644\nindex 0000000..e69de29')).toBe(true);
+  });
+
+  it('accepts an empty-file deletion diff', () => {
+    expect(
+      looksLikeDiff('diff --git a/empty.txt b/empty.txt\ndeleted file mode 100644\nindex e69de29..0000000'),
+    ).toBe(true);
+  });
+
+  it('rejects metadata lines without diff --git (metadata requires diff --git)', () => {
+    expect(looksLikeDiff('rename from old.js\nrename to new.js')).toBe(false);
+  });
 });
 
 describe('createCodexBackend', () => {

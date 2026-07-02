@@ -144,6 +144,18 @@ describe('chunkDiff', () => {
       expect(result[0]).toBe(binaryDiff);
     });
 
+    // ISS-005: a rename-only section must survive a real multi-file split, not be
+    // dropped by the file-boundary splitter.
+    it('preserves a rename-only section when splitting a mixed diff', () => {
+      const renameSection =
+        'diff --git a/old.js b/new.js\nsimilarity index 100%\nrename from old.js\nrename to new.js';
+      const contentSection = makeMultiHunkDiff('src/big.ts', 4, 50);
+      const diff = `${renameSection}\n${contentSection}`;
+      const result = chunkDiff(diff, Math.floor(estimateTokens(contentSection) / 2));
+      expect(result.length).toBeGreaterThan(1);
+      expect(result.join('\n')).toContain('rename to new.js');
+    });
+
     it('each hunk chunk is a valid diff section', () => {
       const diff = makeMultiHunkDiff('src/big.ts', 6, 40);
       const totalTokens = estimateTokens(diff);

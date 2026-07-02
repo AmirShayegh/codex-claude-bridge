@@ -1,0 +1,13 @@
+{
+  "blockedBy": [],
+  "completedDate": "2026-07-01",
+  "createdDate": "2026-07-02",
+  "description": "## Problem (ISS-005)\nlooksLikeDiff (src/backends/orchestrator.ts:42-48) requires TWO structural markers:\n`(hasDiffGit && (hasHunks || hasFileHeaders)) || (hasFileHeaders && hasHunks)` where hasHunks=/^@@ /m and hasFileHeaders=/^--- [ab]\\//m + /^\\+\\+\\+ [ab]\\//m.\nRename-only diffs (`diff --git` + `similarity index 100%` + `rename from`/`rename to` — NO hunks, NO ---/+++ headers) and binary diffs (`diff --git` + `Binary files a/x and b/x differ`, or `GIT binary patch`) fail every disjunct → INVALID_INPUT even though git produced them. Call sites: runCodeReview (orchestrator.ts:266) and runPrecommitReview (orchestrator.ts:377), both gated by `input.diff.length > 20` — do NOT touch that gate.\n\n## Fix (decided — do this, not something else)\nExtend looksLikeDiff with two new markers:\n- hasBinary = /^Binary files .* differ$/m.test(text) || /^GIT binary patch$/m.test(text)\n- hasRename = /^rename from /m.test(text) && /^rename to /m.test(text)\nNew rule: `(hasDiffGit && (hasHunks || hasFileHeaders || hasBinary || hasRename)) || (hasFileHeaders && hasHunks)`. Still requires diff --git for the new markers (two-marker principle preserved; plain prose containing \"rename from\" alone must still be rejected).\nThe accepted diff then flows to the reviewer verbatim — no special-casing downstream. Verify chunking doesn't choke: chunkDiff (src/utils/chunking.ts:65) splits on file boundaries; add a test that a mixed diff (1 rename-only file + 1 content change) chunks without dropping the rename entry.\n\n## TDD order\nWrite failing tests first in src/backends/orchestrator.test.ts (colocated, Vitest): (a) rename-only diff accepted, (b) binary-only diff accepted (`Binary files` variant AND `GIT binary patch` variant), (c) mixed rename+content diff accepted, (d) prose text containing the words \"rename from x rename to y\" (no diff --git) still rejected, (e) existing fixtures still pass. Then the fix. Then a chunking test for (c).\n\n## House rules\nESM imports with .js suffix; no `any`/`as`; Result<T> pattern (no throws); run full gate (typecheck, lint, vitest) before commit; commit message describes what/why, never names AI tools. Update ISS-005 to resolved in the same commit (storybloq issue update ISS-005 --status resolved).",
+  "displayId": "T-026",
+  "id": "T-026",
+  "order": 10,
+  "phase": "hardening",
+  "status": "complete",
+  "title": "Accept binary-only and rename-only diffs in diff validation (ISS-005)",
+  "type": "task"
+}

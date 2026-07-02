@@ -4,17 +4,19 @@
     "diff-handling"
   ],
   "discoveredDate": "2026-05-02",
+  "displayId": "ISS-005",
   "id": "ISS-005",
   "impact": "review_code and review_precommit currently reject diffs that don't include unified-diff hunks via looksLikeDiff (src/codex/client.ts) — which means binary-only diffs and rename-only diffs (which carry `diff --git` headers but no `@@` markers) are misclassified as 'not a diff' and refused. The user gets an INVALID_INPUT error even though git produced a valid diff. Surfaced during a pre-1.0.0 implementation review as a deferred medium issue. Fix shape: relax looksLikeDiff to accept `diff --git` + `Binary files` or `rename from/to` lines as valid, OR allow these through as a no-op chunk that doesn't need review. Not blocking 1.0.0; tracked for 1.0.x.",
   "location": [
-    "src/codex/client.ts:59-65",
-    "src/utils/chunking.ts:32-33"
+    "src/backends/orchestrator.ts:42"
   ],
   "phase": null,
-  "relatedTickets": [],
-  "resolution": null,
-  "resolvedDate": null,
+  "relatedTickets": [
+    "T-026"
+  ],
+  "resolution": "Fixed in T-026: extended looksLikeDiff (src/backends/orchestrator.ts) with hasBinary + hasMetadata markers so hunk-less-but-valid git diffs (binary, rename, mode-only, copy-only, empty-file add/delete) are accepted. New markers only count alongside `diff --git`, preserving the two-marker anti-false-positive principle. 10 tests added (codex.test.ts + chunking.test.ts); full suite 715/715 green.",
+  "resolvedDate": "2026-07-01",
   "severity": "medium",
-  "status": "open",
+  "status": "resolved",
   "title": "Binary and rename-only diffs rejected as 'not a diff'"
 }

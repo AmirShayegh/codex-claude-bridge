@@ -259,6 +259,12 @@ describe('orchestrator — runCrossReview (deliberate-deep)', () => {
     await runCrossReview({ content: 'x', findings: [finding], model: 'gpt-5.5' }, deps(false), turn);
     expect(calls[0].model).toBe('gpt-5.5');
   });
+
+  it('resolves the model quietly — no stderr narration even for an unpinned request', async () => {
+    const { turn } = makeFakeTurn(CANNED_CROSS);
+    await runCrossReview({ content: 'x', findings: [finding] }, deps(false), turn);
+    expect(consoleSpy).not.toHaveBeenCalled();
+  });
 });
 
 // Direct units for the merge helpers. They're the same key/severity logic that

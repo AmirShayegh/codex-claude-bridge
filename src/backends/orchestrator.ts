@@ -506,7 +506,9 @@ export async function runCrossReview(
   deps: ReviewFlowDeps,
   turn: TurnRunner,
 ): Promise<Result<CrossReviewResult>> {
-  const resolved = await resolveModelLogged(deps.resolveModel, input.model ?? deps.config.model);
+  // Resolve quietly: cross-review only runs after this provider's primary review
+  // already narrated the same resolution, so logging again just duplicates stderr.
+  const resolved = await deps.resolveModel(input.model ?? deps.config.model);
   const result = await turn<CrossReviewResult>({
     prompt: buildCrossReviewPrompt(input),
     responseSchema: CrossReviewResultSchema,

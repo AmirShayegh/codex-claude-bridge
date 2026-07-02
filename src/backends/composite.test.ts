@@ -125,6 +125,16 @@ describe('withSingleMode', () => {
     const res = await withSingleMode(backend('codex')).reviewPlan({ plan: 'p', deliberate: false });
     expect(res.ok && res.data.review_mode).toBe('single');
   });
+
+  it('stamps the serving provider on plan, code, and precommit results (ISS-023)', async () => {
+    const single = withSingleMode(backend('codex'));
+    const plan = await single.reviewPlan({ plan: 'p' });
+    const code = await single.reviewCode({ diff: DIFF });
+    const precommit = await single.reviewPrecommit({ diff: DIFF });
+    expect(plan.ok && plan.data.provider).toBe('codex');
+    expect(code.ok && code.data.provider).toBe('codex');
+    expect(precommit.ok && precommit.data.provider).toBe('codex');
+  });
 });
 
 // Defensive: the exported composite is correct even if called with a single-mode
@@ -134,6 +144,7 @@ describe('createCompositeBackend — defensive single-mode handling', () => {
     const s = backend('gemini');
     const res = await createCompositeBackend(backend('codex'), s, cfg({ mode: 'single' })).reviewCode({ diff: DIFF });
     expect(res.ok && res.data.review_mode).toBe('single');
+    expect(res.ok && res.data.provider).toBe('codex'); // ISS-023
     expect(s.reviewCode).not.toHaveBeenCalled(); // no second provider
   });
 

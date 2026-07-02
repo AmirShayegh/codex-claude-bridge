@@ -1,6 +1,6 @@
 import { ok, err, ErrorCode } from '../utils/errors.js';
 import type { Result } from '../utils/errors.js';
-import type { ReviewBridgeConfig } from '../config/types.js';
+import type { ReviewBridgeConfig, ReviewProvider } from '../config/types.js';
 import type { PlanReviewResult, CodeReviewResult } from '../review/types.js';
 import { withFailover } from './failover.js';
 import type { SessionProviderLookup } from './failover.js';
@@ -55,10 +55,16 @@ function singleModeConflictError(): string {
 }
 
 // Stamp the effective mode onto a successful result so the caller can always tell
-// which composition ran (even when there's no deliberation block).
-function stamp<R extends { review_mode?: ReviewMode }>(mode: ReviewMode, result: Result<R>): Result<R> {
+// which composition ran (even when there's no deliberation block). When `provider`
+// is given (single mode, where no downstream composite tags it), stamp that too so
+// every mode reports the serving provider (ISS-023).
+function stamp<R extends { review_mode?: ReviewMode; provider?: ReviewProvider }>(
+  mode: ReviewMode,
+  result: Result<R>,
+  provider?: ReviewProvider,
+): Result<R> {
   if (!result.ok) return result;
-  return ok({ ...result.data, review_mode: mode });
+  return ok({ ...result.data, review_mode: mode, ...(provider ? { provider } : {}) });
 }
 
 // Single-provider decorator: stamps review_mode:'single' and rejects a per-call
@@ -70,14 +76,14 @@ export function withSingleMode(primary: ReviewBackend): ReviewBackend {
     allowsModelOverrideOnResume: primary.allowsModelOverrideOnResume,
     reviewPlan: async (input: PlanReviewInput) => {
       if (input.deliberate === true) return err<PlanReviewResult>(singleModeConflictError());
-      return stamp('single', await primary.reviewPlan(input));
+      return stamp('single', await primary.reviewPlan(input), primary.provider);
     },
     reviewCode: async (input: CodeReviewInput) => {
       if (input.deliberate === true) return err<CodeReviewResult>(singleModeConflictError());
-      return stamp('single', await primary.reviewCode(input));
+      return stamp('single', await primary.reviewCode(input), primary.provider);
     },
     reviewPrecommit: async (input: PrecommitReviewInput) =>
-      stamp('single', await primary.reviewPrecommit(input)),
+      stamp('single', await primary.reviewPrecommit(input), primary.provider),
     ...(primary.crossReview ? { crossReview: primary.crossReview.bind(primary) } : {}),
   };
 }
@@ -104,7 +110,7 @@ export function createCompositeBackend(
       // returns withSingleMode instead), but handle those returns defensively so
       // the exported factory is correct in isolation.
       if (mode === 'single-deliberate-conflict') return err<PlanReviewResult>(singleModeConflictError());
-      if (mode === 'single') return stamp('single', await primary.reviewPlan(input));
+      if (mode === 'single') return stamp('single', await primary.reviewPlan(input), primary.provider);
       if (mode === 'deliberate' || mode === 'deliberate-deep') {
         return stamp(mode, await deliberatePlan(primary, secondary, input, mode === 'deliberate-deep', lookup, config.max_chunk_tokens));
       }
@@ -113,7 +119,7 @@ export function createCompositeBackend(
     reviewCode: async (input: CodeReviewInput) => {
       const mode = resolveMode(cfgMode, input.deliberate);
       if (mode === 'single-deliberate-conflict') return err<CodeReviewResult>(singleModeConflictError());
-      if (mode === 'single') return stamp('single', await primary.reviewCode(input));
+      if (mode === 'single') return stamp('single', await primary.reviewCode(input), primary.provider);
       if (mode === 'deliberate' || mode === 'deliberate-deep') {
         return stamp(mode, await deliberateCode(primary, secondary, input, mode === 'deliberate-deep', lookup, config.max_chunk_tokens));
       }

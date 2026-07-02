@@ -1,13 +1,13 @@
 {
   "blockedBy": [],
-  "completedDate": null,
+  "completedDate": "2026-07-01",
   "createdDate": "2026-07-02",
   "description": "## Problem (ISS-003) — scope has SHRUNK since filing; read this before the issue\nThe original complaint had two parts, one of which is already fixed: the \"failing gpt-5.4 told to fall back to gpt-5.4\" tip was fixed by ISS-009 (classifyError now recommends the OTHER model via `altModel`, src/backends/codex.ts:65) and a ChatGPT-tier rollout tip exists (:61-71). What REMAINS: when the failing model name extracted from the raw error differs from the model the caller configured — the Codex-internal-subsystem case (e.g. the CLI's memory-writing agent hardcodes gpt-5.1-codex-mini; see the codex-sdk lesson) — the message still opens `Model \"<extracted>\" is not supported` and offers model-config tips that CANNOT fix it, because the failing call isn't using the caller's model at all.\n\n## Fix (small, one branch)\nIn classifyError's MODEL_ERROR branch (src/backends/codex.ts:46-76): `modelErrorMatch[1]` is the extracted model and `context?.model` (already available, used at :55) is the caller's configured/requested one. Add a check BEFORE composing the existing tip: if both are present and different, return a distinct message, e.g.:\n`Model \"<extracted>\" was rejected, but your configured model is \"<configured>\" — the failure came from a Codex-internal call (e.g. the CLI's memory agent), not your model setting. Changing \"model\" in .reviewbridge.json will not fix this. Try updating the Codex CLI/SDK, using API-key auth (OPENAI_API_KEY) instead of ChatGPT-subscription auth, or the Gemini backend (\"provider\": \"gemini\"). Original error: <raw>`\nKeep ErrorCode.MODEL_ERROR (failover eligibility must not change). Keep the `Original error:` suffix (ISS-001 contract). The extracted===configured and extracted-absent paths keep the EXISTING tips verbatim.\n\n## Model-recommendation boundary (lesson L-006)\nAny model names in the new message must stay within the recommended set (gpt-5.5/gpt-5.4) if mentioned at all — prefer mentioning none, as drafted above. Never suggest blocking or validating the user's model choice.\n\n## Acceptance\nUnit tests in the existing classifyError test suite: (a) raw error naming gpt-5.1-codex-mini with context.model gpt-5.4 → new mismatch message, code MODEL_ERROR, raw error preserved; (b) raw naming the same model as context.model → existing tip unchanged; (c) no extractable model name → existing fallback (context.model ?? 'your configured model') unchanged; (d) ChatGPT-account-limitation branch unchanged when models match. Full gate. Resolve ISS-003 (its resolution field already documents the SDK-bump mitigation — append the classifier fix).\n\n## House rules\nTDD; ESM .js suffixes; no `any`/`as`; Result<T>; no AI names in commits.",
   "displayId": "T-032",
   "id": "T-032",
   "order": 70,
   "phase": "hardening",
-  "status": "open",
+  "status": "complete",
   "title": "Tighten MODEL_ERROR tip when extracted model differs from configured model (ISS-003)",
   "type": "task"
 }

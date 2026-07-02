@@ -52,7 +52,29 @@ export function classifyError(
     /\bmodel\b(?:\s+["'`]([^"'`]+)["'`])?\s+(?:is\s+|does\s+)?not\s+(?:supported|found|exist)/i,
   );
   if (modelErrorMatch) {
-    const modelName = modelErrorMatch[1] ?? context?.model ?? 'your configured model';
+    const extracted = modelErrorMatch[1]; // the rejected model name, or undefined
+    const sent = context?.model; // resolvedModel — the model this review actually sent
+
+    // ISS-003: Codex rejected a model whose name differs from the one we sent, so
+    // the failure came from a Codex-internal call (e.g. the CLI's memory-writing
+    // agent, which hardcodes its own model like gpt-5.1-codex-mini), not the
+    // caller's model setting. The usual model-config tips cannot fix it. Only fires
+    // when both names are known AND differ; model ids are case-insensitive, so a
+    // casing-only difference is the SAME model, not a mismatch.
+    if (extracted && sent && extracted.toLowerCase() !== sent.toLowerCase()) {
+      return {
+        code: ErrorCode.MODEL_ERROR,
+        message:
+          `Model "${extracted}" was rejected, but the review ran with "${sent}" — ` +
+          `the failure came from a Codex-internal call (e.g. the CLI's memory agent), ` +
+          `not your model setting. Changing "model" in .reviewbridge.json will not fix this. ` +
+          `Try updating the Codex CLI/SDK, using API-key auth (OPENAI_API_KEY) instead of ` +
+          `ChatGPT-subscription auth, or the Gemini backend ("provider": "gemini"). ` +
+          `Original error: ${raw}`,
+      };
+    }
+
+    const modelName = extracted ?? context?.model ?? 'your configured model';
     // ChatGPT-subscription Codex auth lags API availability by a few days after
     // OpenAI announces a new flagship model. When that happens the raw error
     // explicitly mentions the ChatGPT account — surface a targeted fallback tip

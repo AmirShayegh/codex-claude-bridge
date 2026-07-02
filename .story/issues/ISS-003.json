@@ -15,9 +15,9 @@
   "relatedTickets": [
     "T-032"
   ],
-  "resolution": "Mitigated by SDK bump in commit 306b4c1 (1.0.0 release): the bundled CLI moved from 0.104.0 to 0.128.0, which no longer exhibits the memory-agent gpt-5.1-codex-mini failure path against ChatGPT-tier auth — the misleading tip stops appearing in the most common scenario. Status remains open because (a) we have not directly probed the memory-agent path under the new binary across all auth/config combinations, and (b) the classifier text is still imprecise if any future Codex subsystem surfaces a model name that differs from the configured one. Future work would tighten the classifier to detect extracted-model ≠ configured-model and emit a distinct tip; tracked separately and not blocking 1.0.0.",
-  "resolvedDate": null,
+  "resolution": "Mitigated by SDK bump in commit 306b4c1 (1.0.0 release): the bundled CLI moved from 0.104.0 to 0.128.0, which no longer exhibits the memory-agent gpt-5.1-codex-mini failure path against ChatGPT-tier auth — the misleading tip stops appearing in the most common scenario.\n\nClassifier fix (T-032): classifyError's MODEL_ERROR branch now detects when the rejected model name differs (case-insensitively) from the model the review actually sent (context.model = resolvedModel). In that case it returns a distinct message — 'Model \"<extracted>\" was rejected, but the review ran with \"<sent>\" — the failure came from a Codex-internal call ... Changing \"model\" in .reviewbridge.json will not fix this. Try updating the Codex CLI/SDK, using API-key auth, or the Gemini backend.' — instead of the unhelpful change-your-model tip. Code stays ErrorCode.MODEL_ERROR (failover eligibility unchanged) and the 'Original error:' suffix is preserved (ISS-001 contract). The extracted===sent and extracted-absent paths keep the existing tips verbatim. Guard requires both names present and case-insensitively different, so a legitimately-bad user-configured model (which resolveModel forwards verbatim, making extracted===sent) still gets the generic tip — no false positives. Covered by 3 new + 1 realigned unit test in src/backends/codex.test.ts; full gate green.",
+  "resolvedDate": "2026-07-01",
   "severity": "medium",
-  "status": "open",
+  "status": "resolved",
   "title": "MODEL_ERROR tip misleads when failure is from Codex internal subsystem (not caller's model)"
 }

@@ -670,9 +670,14 @@ describe('error classification', () => {
   });
 
   it('uses generic MODEL_ERROR tip (different model + Gemini) when ChatGPT account is not mentioned', async () => {
+    // T-032: pin the model to the rejected name so this stays a same-model case
+    // (rejected model === sent model) and keeps exercising the generic tip. With
+    // default config the sent model is gpt-5.5, which would differ from phantom-99
+    // and correctly route to the internal-call mismatch message instead (ISS-003).
+    const sameModel = { ...config, model: 'phantom-99' };
     mockRun.mockRejectedValue(new Error('The model "phantom-99" is not supported'));
 
-    const client = createCodexBackend(config);
+    const client = createCodexBackend(sameModel);
     const result = await client.reviewPlan({ plan: 'plan' });
 
     expect(result.ok).toBe(false);
@@ -681,6 +686,62 @@ describe('error classification', () => {
       expect(result.error).toContain('"model": "gpt-5.5"');
       expect(result.error).toContain('"provider": "gemini"');
       expect(result.error).not.toContain('ChatGPT-tier Codex');
+      expect(result.error).not.toContain('will not fix'); // not the mismatch branch
+    }
+  });
+
+  // ISS-003 (T-032): when Codex rejects a model whose name differs from the one we
+  // actually sent, the failure came from a Codex-internal call (e.g. the CLI's
+  // memory agent hardcoding gpt-5.1-codex-mini), not the caller's model setting —
+  // so surface a distinct message and do NOT offer model-config tips that can't help.
+  it('returns the internal-call mismatch message when the rejected model differs from the sent model (ISS-003)', async () => {
+    const configured = { ...config, model: 'gpt-5.4' };
+    mockRun.mockRejectedValue(new Error('The model "gpt-5.1-codex-mini" is not supported'));
+
+    const result = await createCodexBackend(configured).reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('MODEL_ERROR'); // failover eligibility unchanged
+      expect(result.error).toContain('gpt-5.1-codex-mini'); // the rejected internal model
+      expect(result.error).toContain('gpt-5.4'); // the model the review actually sent
+      expect(result.error).toContain('will not fix'); // distinct mismatch guidance
+      expect(result.error).toContain('"provider": "gemini"'); // escape hatch still offered
+      // raw error preserved (ISS-001 contract)
+      expect(result.error).toContain('The model "gpt-5.1-codex-mini" is not supported');
+      // NOT the generic "change your model" tip — that can't fix an internal call
+      expect(result.error).not.toContain('Try "model":');
+    }
+  });
+
+  it('keeps the generic tip when the rejected model equals the sent model (ISS-003 boundary)', async () => {
+    const configured = { ...config, model: 'gpt-5.4' };
+    mockRun.mockRejectedValue(new Error('The model "gpt-5.4" is not supported'));
+
+    const result = await createCodexBackend(configured).reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('MODEL_ERROR');
+      expect(result.error).toContain('"model": "gpt-5.5"'); // recommend the OTHER model
+      expect(result.error).toContain('"provider": "gemini"');
+      expect(result.error).not.toContain('will not fix'); // not the mismatch branch
+      expect(result.error).not.toContain('ChatGPT-tier Codex');
+    }
+  });
+
+  it('treats a casing-only difference as the same model, not a mismatch (ISS-003)', async () => {
+    // Model ids are case-insensitive: "GPT-5.5" is the same model we sent (gpt-5.5),
+    // so this must take the same-model generic path, not the internal-call message.
+    mockRun.mockRejectedValue(new Error('The model "GPT-5.5" is not supported'));
+
+    const result = await createCodexBackend(config).reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('MODEL_ERROR');
+      expect(result.error).not.toContain('will not fix'); // NOT the mismatch branch
+      expect(result.error).toContain('"provider": "gemini"');
     }
   });
 

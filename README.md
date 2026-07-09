@@ -123,7 +123,7 @@ Send an implementation plan for architectural/feasibility review.
 | `focus` | string[] | no | Review focus areas (e.g. `["architecture", "security"]`) |
 | `depth` | `"quick"` \| `"thorough"` | no | Review depth |
 | `session_id` | string | no | Continue from a previous review session |
-| `model` | string | no | Override the model for this call (e.g. `"gpt-5.4"` or `"latest"`). With Codex this can't be combined with `session_id` (a resumed thread keeps its model); Gemini allows changing model on a resumed session. |
+| `model` | string | no | Override the model for this call (e.g. `"gpt-5.5"` or `"latest"`). With Codex this can't be combined with `session_id` (a resumed thread keeps its model); Gemini allows changing model on a resumed session. |
 
 Returns: `{ verdict, summary, findings[], session_id }`
 
@@ -137,7 +137,7 @@ Send a code diff for code review.
 | `context` | string | no | Intent of the changes |
 | `session_id` | string | no | Continue from previous review (e.g. plan review session) |
 | `criteria` | string[] | no | Review criteria (e.g. `["bugs", "security", "performance"]`) |
-| `model` | string | no | Override the model for this call (e.g. `"gpt-5.4"` or `"latest"`). With Codex this can't be combined with `session_id` (a resumed thread keeps its model); Gemini allows changing model on a resumed session. |
+| `model` | string | no | Override the model for this call (e.g. `"gpt-5.5"` or `"latest"`). With Codex this can't be combined with `session_id` (a resumed thread keeps its model); Gemini allows changing model on a resumed session. |
 
 Returns: `{ verdict, summary, findings[], session_id }`
 
@@ -153,7 +153,7 @@ Quick pre-commit sanity check. Auto-captures staged git changes by default.
 | `diff` | string | no | Explicit diff instead of auto-capture |
 | `session_id` | string | no | Continue from previous review |
 | `checklist` | string[] | no | Custom pre-commit checks |
-| `model` | string | no | Override the model for this call (e.g. `"gpt-5.4"` or `"latest"`). With Codex this can't be combined with `session_id` (a resumed thread keeps its model); Gemini allows changing model on a resumed session. |
+| `model` | string | no | Override the model for this call (e.g. `"gpt-5.5"` or `"latest"`). With Codex this can't be combined with `session_id` (a resumed thread keeps its model); Gemini allows changing model on a resumed session. |
 
 Returns: `{ ready_to_commit, blockers[], warnings[], session_id }`
 
@@ -186,7 +186,7 @@ Create `.reviewbridge.json` in your project root to customize review behavior:
 {
   "provider": "codex",
   "fallback": true,
-  "model": "gpt-5.5",
+  "model": "gpt-5.6-sol",
   "reasoning_effort": "medium",
   "timeout_seconds": 300,
   "max_chunk_tokens": 8000,
@@ -222,7 +222,7 @@ When the MCP server or CLI starts, it looks for `.reviewbridge.json` in this ord
 
 1. **`RB_CONFIG_PATH` env var** — if set, load exactly that file. Useful when the bridge is launched from a directory that isn't your project (e.g. an MCP host launches it from your home dir). Missing or unreadable file is a hard startup error so typos are surfaced immediately, not silently ignored.
 2. **Walk-up from the working directory** — looks for `.reviewbridge.json` in the current directory, then each parent. The walk stops at the first `.git` boundary so a project nested inside an unrelated git repo doesn't accidentally inherit a parent project's config.
-3. **`$HOME/.reviewbridge.json`** — a per-machine default. Drop one here to pin a model (e.g. `{"model": "gpt-5.4"}`) for every project on the box without having to touch each one.
+3. **`$HOME/.reviewbridge.json`** — a per-machine default. Drop one here to pin a model (e.g. `{"model": "gpt-5.5"}`) for every project on the box without having to touch each one.
 4. **Built-in defaults** — what you get if nothing is found anywhere.
 
 A startup log line on stderr names the source (`[codex-bridge] config source: project (/repo/.reviewbridge.json)`) so you can confirm which file is in effect.
@@ -235,12 +235,12 @@ The CLI's `--config <dir>` flag is an explicit override: it looks only at `<dir>
 
 `model` takes a concrete id or `"latest"`; each provider resolves its own default when the field is unset.
 
-**Codex** — default `gpt-5.5`. When the ChatGPT tier doesn't yet have a newly-announced flagship, pin `gpt-5.4`:
+**Codex** — default `gpt-5.6-sol`. If Sol has not reached your account yet, pin `gpt-5.5`:
 
 | Model | Description |
 |-------|-------------|
-| `gpt-5.5` | Flagship frontier model (default) — 400K context in Codex |
-| `gpt-5.4` | Previous flagship. Use when `gpt-5.5` isn't yet available on your account tier. |
+| `gpt-5.6-sol` | Latest flagship agentic coding model (default) |
+| `gpt-5.5` | Previous flagship. Use while Sol is still rolling out to your account. |
 
 **Gemini** — default resolves to the latest Flash via `agy models`. Effort is part of the model name:
 

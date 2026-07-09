@@ -9,7 +9,7 @@ import type {
   PrecommitResult,
   CrossReviewResult,
 } from '../review/types.js';
-import type { ReviewBridgeConfig } from '../config/types.js';
+import { RECOMMENDED_MODELS, type ReviewBridgeConfig } from '../config/types.js';
 import { estimateTokens } from '../utils/chunking.js';
 import type { CopilotInstructions } from '../config/copilot-instructions.js';
 import type { ReviewBackend } from './backend.js';
@@ -82,10 +82,13 @@ export function classifyError(
     // (a different model, the Gemini backend, or API-key auth) instead of
     // leaving the user stuck.
     const isChatGptAccountLimitation = /chatgpt\s+account/i.test(raw);
-    // Recommend a model OTHER than the one that just failed. The old tip
-    // hardcoded gpt-5.4, so a failing gpt-5.4 was told to "fall back to gpt-5.4"
-    // (ISS-009). Also point at the Gemini backend as an out-of-usage escape hatch.
-    const altModel = modelName === 'gpt-5.5' ? 'gpt-5.4' : 'gpt-5.5';
+    // Recommend the highest-ranked documented model OTHER than the one that
+    // just failed (ISS-009). Also point at the Gemini backend as an
+    // out-of-usage escape hatch.
+    const altModel =
+      RECOMMENDED_MODELS.codex.find(
+        (candidate) => candidate.toLowerCase() !== modelName.toLowerCase(),
+      ) ?? RECOMMENDED_MODELS.codex[0];
     const tip = isChatGptAccountLimitation
       ? `This model may still be rolling out to ChatGPT-tier Codex. ` +
         `Try "model": "${altModel}" in .reviewbridge.json, switch to the Gemini backend ` +
@@ -149,7 +152,7 @@ export function classifyError(
 
 // Codex's default model, used when neither a per-call override nor config.model
 // is set. The backend owns this default — the config schema no longer supplies one.
-const CODEX_DEFAULT_MODEL = 'gpt-5.5';
+const CODEX_DEFAULT_MODEL = RECOMMENDED_MODELS.codex[0];
 
 // Thread options shared by the start and resume paths. The model is handled by
 // the two wrappers below: a fresh start always sets it (the orchestrator

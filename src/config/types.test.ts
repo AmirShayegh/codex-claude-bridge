@@ -220,7 +220,7 @@ describe('RECOMMENDED_MODELS', () => {
   it('is keyed by provider and is documentation, not an enforced allowlist', () => {
     // recommend-not-enforce (L-006): these models seed error tips and README copy,
     // never a blocking gate — see "accepts any non-empty model string" above.
-    expect(RECOMMENDED_MODELS.codex).toContain('gpt-5.5');
+    expect(RECOMMENDED_MODELS.codex).toEqual(['gpt-5.6-sol', 'gpt-5.5']);
     expect(Array.isArray(RECOMMENDED_MODELS.gemini)).toBe(true);
   });
 });

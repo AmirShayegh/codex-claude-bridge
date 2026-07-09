@@ -1,10 +1,11 @@
 {
-  "content": "codex-claude-bridge documents and recommends exactly two models: `gpt-5.5` as the default (current flagship) and `gpt-5.4` as the documented fallback. This is a RECOMMENDATION boundary — it scopes the README model table, error-message tips, CLI help text, and any new default choices. It is NOT an enforcement gate. If a user explicitly sets a different model via `.reviewbridge.json`, the MCP `model` parameter, or the `--model` CLI flag, we forward it to Codex as-is. We don't advertise older Codex variants (`gpt-5.3-codex`, `gpt-5.2-codex`, `gpt-5.1-codex-mini`) or mini models, but we also don't block users from running them. Tension to respect: curate our recommendations; don't gate user autonomy.",
-  "context": "Initial policy captured 2026-04-23 after README cleanup (commit d9da0c2). A stricter enforcement pass landed in 0.3.4 (commit ef803d4) that rejected non-allowlisted models at config parse time. User pushback on that release: \"we shouldnt offer it ourselves (5.1) but if user chooses it we shouldnt block them.\" Reverted in 0.3.5 — `config.model` is `z.string().default('gpt-5.5')` again, `RECOMMENDED_MODELS` retained as a documentation constant for tip/help-text sourcing but not used as a schema refine. Use this distinction when adding new config fields: curate defaults + docs, but keep inputs permissive unless a value is categorically unsafe (e.g. would crash the process or leak secrets). Supported set grows by editing this lesson + README + constant, not by shipping new enum values.",
+  "content": "codex-claude-bridge documents and recommends exactly two Codex models: `gpt-5.6-sol` as the default current flagship and `gpt-5.5` as the fallback. This recommendation boundary scopes defaults, README/model tables, error tips, and CLI/MCP help; explicitly configured other model IDs are still forwarded unchanged rather than blocked. Curate recommendations without gating user autonomy.",
+  "context": "Policy originally captured after the 2026-04-23 model cleanup and recommend-not-enforce rollback. Updated 2026-07-09 after GPT-5.6 general availability: Codex's live model catalog identifies `gpt-5.6-sol` as the latest frontier agentic coding model, so the supported recommendation pair advanced from 5.5/5.4 to Sol/5.5. Keep this lesson, README, RECOMMENDED_MODELS, backend default, SDK pin, and help/error examples synchronized on future flagship releases.",
   "createdDate": "2026-04-23",
+  "displayId": "L-006",
   "id": "L-006",
-  "lastValidated": "2026-04-23",
-  "reinforcements": 0,
+  "lastValidated": "2026-07-09",
+  "reinforcements": 1,
   "source": "correction",
   "status": "active",
   "supersedes": null,
@@ -14,6 +15,6 @@
     "user-preference",
     "policy"
   ],
-  "title": "Recommend gpt-5.5 + gpt-5.4 only; never block the user's model choice",
-  "updatedDate": "2026-04-23"
+  "title": "Recommend gpt-5.6-sol + gpt-5.5 only; never block the user's model choice",
+  "updatedDate": "2026-07-09"
 }

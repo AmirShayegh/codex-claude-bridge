@@ -21,7 +21,7 @@ export function toReviewProvider(value: string | null | undefined): ReviewProvid
 // CLI --model flag are forwarded to the backend as-is; we just don't advertise
 // anything outside this set. See L-006 for the policy.
 export const RECOMMENDED_MODELS = {
-  codex: ['gpt-5.5', 'gpt-5.4'],
+  codex: ['gpt-5.6-sol', 'gpt-5.5'],
   // agy model strings (effort is part of the name); from `agy models`.
   gemini: ['Gemini 3.5 Flash (Medium)', 'Gemini 3.5 Flash (High)', 'Gemini 3.1 Pro (High)'],
 } as const satisfies Record<ReviewProvider, readonly string[]>;

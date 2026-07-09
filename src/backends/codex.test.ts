@@ -375,13 +375,13 @@ describe('model resolution (codex)', () => {
   it('resolves an unset model to the SDK-pinned default and passes it to startThread', async () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
     await createCodexBackend(config).reviewPlan({ plan: 'My plan' });
-    expect(mockStartThread.mock.calls[0][0]).toMatchObject({ model: 'gpt-5.5' });
+    expect(mockStartThread.mock.calls[0][0]).toMatchObject({ model: 'gpt-5.6-sol' });
   });
 
   it("resolves model 'latest' to the SDK-pinned default (never passes the literal 'latest')", async () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
     await createCodexBackend(config).reviewPlan({ plan: 'My plan', model: 'latest' });
-    expect(mockStartThread.mock.calls[0][0]).toMatchObject({ model: 'gpt-5.5' });
+    expect(mockStartThread.mock.calls[0][0]).toMatchObject({ model: 'gpt-5.6-sol' });
   });
 
   it('forwards an explicit model pin unchanged to startThread', async () => {
@@ -793,7 +793,7 @@ describe('error classification', () => {
 
   it('surfaces ChatGPT-account fallback tip recommending a different model + the Gemini backend', async () => {
     mockRun.mockRejectedValue(
-      new Error(`The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account.`),
+      new Error(`The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.`),
     );
 
     const client = createCodexBackend(config);
@@ -802,19 +802,19 @@ describe('error classification', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain('MODEL_ERROR');
-      expect(result.error).toContain('gpt-5.5'); // the failing model is named in the error
+      expect(result.error).toContain('gpt-5.6-sol'); // the failing model is named in the error
       expect(result.error).toContain('ChatGPT-tier Codex');
-      expect(result.error).toContain('"model": "gpt-5.4"'); // recommend a DIFFERENT model
+      expect(result.error).toContain('"model": "gpt-5.5"'); // recommend a DIFFERENT model
       expect(result.error).toContain('"provider": "gemini"'); // Gemini fallback
     }
   });
 
-  // ISS-009: the old tip hardcoded "Fall back to gpt-5.4", so a failing gpt-5.4
-  // was told to fall back to gpt-5.4 — recommending the model that just failed.
+  // ISS-009: the old tip hardcoded a fallback, so a failing fallback model was
+  // told to use itself — recommending the model that just failed.
   it('never recommends the failing model in the fallback tip (ISS-009)', async () => {
-    const failing = { ...config, model: 'gpt-5.4' };
+    const failing = { ...config, model: 'gpt-5.5' };
     mockRun.mockRejectedValue(
-      new Error(`The 'gpt-5.4' model is not supported when using Codex with a ChatGPT account.`),
+      new Error(`The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account.`),
     );
 
     const result = await createCodexBackend(failing).reviewPlan({ plan: 'plan' });
@@ -822,8 +822,8 @@ describe('error classification', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain('MODEL_ERROR');
-      expect(result.error).toContain('"model": "gpt-5.5"'); // recommends the OTHER model
-      expect(result.error).not.toContain('Try "model": "gpt-5.4"'); // not the failed one
+      expect(result.error).toContain('"model": "gpt-5.6-sol"'); // recommends the OTHER model
+      expect(result.error).not.toContain('Try "model": "gpt-5.5"'); // not the failed one
       expect(result.error).toContain('"provider": "gemini"');
     }
   });
@@ -831,7 +831,7 @@ describe('error classification', () => {
   it('uses generic MODEL_ERROR tip (different model + Gemini) when ChatGPT account is not mentioned', async () => {
     // T-032: pin the model to the rejected name so this stays a same-model case
     // (rejected model === sent model) and keeps exercising the generic tip. With
-    // default config the sent model is gpt-5.5, which would differ from phantom-99
+    // default config sends gpt-5.6-sol, which differs from phantom-99
     // and correctly route to the internal-call mismatch message instead (ISS-003).
     const sameModel = { ...config, model: 'phantom-99' };
     mockRun.mockRejectedValue(new Error('The model "phantom-99" is not supported'));
@@ -842,7 +842,7 @@ describe('error classification', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain('MODEL_ERROR');
-      expect(result.error).toContain('"model": "gpt-5.5"');
+      expect(result.error).toContain('"model": "gpt-5.6-sol"');
       expect(result.error).toContain('"provider": "gemini"');
       expect(result.error).not.toContain('ChatGPT-tier Codex');
       expect(result.error).not.toContain('will not fix'); // not the mismatch branch
@@ -882,7 +882,7 @@ describe('error classification', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain('MODEL_ERROR');
-      expect(result.error).toContain('"model": "gpt-5.5"'); // recommend the OTHER model
+      expect(result.error).toContain('"model": "gpt-5.6-sol"'); // recommend the OTHER model
       expect(result.error).toContain('"provider": "gemini"');
       expect(result.error).not.toContain('will not fix'); // not the mismatch branch
       expect(result.error).not.toContain('ChatGPT-tier Codex');
@@ -890,9 +890,9 @@ describe('error classification', () => {
   });
 
   it('treats a casing-only difference as the same model, not a mismatch (ISS-003)', async () => {
-    // Model ids are case-insensitive: "GPT-5.5" is the same model we sent (gpt-5.5),
+    // Model ids are case-insensitive: "GPT-5.6-SOL" is the same model we sent,
     // so this must take the same-model generic path, not the internal-call message.
-    mockRun.mockRejectedValue(new Error('The model "GPT-5.5" is not supported'));
+    mockRun.mockRejectedValue(new Error('The model "GPT-5.6-SOL" is not supported'));
 
     const result = await createCodexBackend(config).reviewPlan({ plan: 'plan' });
 
@@ -1054,9 +1054,9 @@ describe('per-call model override (T-011)', () => {
     const client = createCodexBackend({ ...config, model: undefined });
     await client.reviewPlan({ plan: 'plan' });
 
-    // codex resolves its own default ('gpt-5.5') — the schema no longer supplies one.
+    // codex resolves its own default — the schema no longer supplies one.
     expect(mockStartThread).toHaveBeenCalledWith(
-      expect.objectContaining({ model: 'gpt-5.5' }),
+      expect.objectContaining({ model: 'gpt-5.6-sol' }),
     );
   });
 

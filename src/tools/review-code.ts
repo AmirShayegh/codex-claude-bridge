@@ -34,7 +34,7 @@ export function registerReviewCodeTool(server: McpServer, client: ReviewBackend,
           .min(1)
           .optional()
           .describe(
-            'Override the configured default model for this call (e.g., "gpt-5.4"), or "latest". ' +
+            'Override the configured default model for this call (e.g., "gpt-5.5"), or "latest". ' +
               'With the Codex provider this cannot be combined with session_id (a resumed thread ' +
               'keeps its model); the Gemini provider allows changing model on a resumed session.',
           ),

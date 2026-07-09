@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest';
 // at least one release where that drift broke the advertised default model
 // (0.104.0 bundled CLI rejected gpt-5.5 outright). Future SDK bumps must
 // re-prove the matrix and update both constants together.
-const EXPECTED_SDK_VERSION = '0.128.0';
+const EXPECTED_SDK_VERSION = '0.144.0';
 
 const ourPkg = JSON.parse(
   readFileSync(new URL('../../package.json', import.meta.url), 'utf-8'),

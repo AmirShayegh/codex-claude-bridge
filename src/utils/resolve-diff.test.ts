@@ -85,6 +85,20 @@ describe('resolvePrecommitDiff', () => {
       expect(mockGetStagedDiff).not.toHaveBeenCalled();
     });
   });
+
+  describe('cwd threading', () => {
+    it('forwards cwd to getStagedDiff', async () => {
+      mockGetStagedDiff.mockResolvedValue({ ok: true, data: sampleDiff });
+      await resolvePrecommitDiff({ cwd: '/some/repo' });
+      expect(mockGetStagedDiff).toHaveBeenCalledWith('/some/repo');
+    });
+
+    it('passes undefined to getStagedDiff when cwd is omitted (preserves default behavior)', async () => {
+      mockGetStagedDiff.mockResolvedValue({ ok: true, data: sampleDiff });
+      await resolvePrecommitDiff({});
+      expect(mockGetStagedDiff).toHaveBeenCalledWith(undefined);
+    });
+  });
 });
 
 describe('resolveCodeDiff', () => {
@@ -165,6 +179,20 @@ describe('resolveCodeDiff', () => {
         expect(result.error).toBe('auto_diff disabled and no diff provided');
       }
       expect(mockGetWorkingDiff).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('cwd threading', () => {
+    it('forwards cwd to getWorkingDiff', async () => {
+      mockGetWorkingDiff.mockResolvedValue({ ok: true, data: sampleDiff });
+      await resolveCodeDiff({ cwd: '/some/repo' });
+      expect(mockGetWorkingDiff).toHaveBeenCalledWith('/some/repo');
+    });
+
+    it('passes undefined to getWorkingDiff when cwd is omitted (preserves default behavior)', async () => {
+      mockGetWorkingDiff.mockResolvedValue({ ok: true, data: sampleDiff });
+      await resolveCodeDiff({});
+      expect(mockGetWorkingDiff).toHaveBeenCalledWith(undefined);
     });
   });
 });

@@ -4,6 +4,7 @@ import type Database from 'better-sqlite3';
 import type { ReviewBackend } from '../backends/backend.js';
 import { sessionModelConflictMessage } from '../backends/orchestrator.js';
 import { resolveCodeDiff, NO_WORKING_CHANGES } from '../utils/resolve-diff.js';
+import { resolveCwd } from '../utils/cwd.js';
 import { createSessionTracker } from '../storage/session-tracker.js';
 
 export function registerReviewCodeTool(server: McpServer, client: ReviewBackend, db?: Database.Database): void {
@@ -49,6 +50,13 @@ export function registerReviewCodeTool(server: McpServer, client: ReviewBackend,
               'recomputed from cross-review adjudications — treat deliberation.divergent[].adjudication as ' +
               'advisory input for your own synthesis.',
           ),
+        cwd: z
+          .string()
+          .optional()
+          .describe(
+            'Repository directory for auto-capture; git commands run here. ' +
+              'Defaults to the server process cwd.',
+          ),
       },
     },
     async (args) => {
@@ -60,10 +68,19 @@ export function registerReviewCodeTool(server: McpServer, client: ReviewBackend,
           isError: true,
         };
       }
+      const cwdResult = resolveCwd(args.cwd);
+      if (!cwdResult.ok) {
+        return { content: [{ type: 'text' as const, text: cwdResult.error }], isError: true };
+      }
+      const cwd = cwdResult.data;
       const tracker = createSessionTracker(db, client.providers, client.provider);
       try {
         // Resolve diff (auto-capture or explicit)
-        const diffResult = await resolveCodeDiff({ diff: args.diff, auto_diff: args.auto_diff });
+        const diffResult = await resolveCodeDiff({
+          diff: args.diff,
+          auto_diff: args.auto_diff,
+          cwd,
+        });
         if (!diffResult.ok) {
           if (diffResult.error.startsWith(NO_WORKING_CHANGES)) {
             return {
@@ -89,7 +106,9 @@ export function registerReviewCodeTool(server: McpServer, client: ReviewBackend,
           return { content: [{ type: 'text' as const, text: preflight.error }], isError: true };
         }
 
-        const result = await client.reviewCode({ ...args, diff });
+        // Override args.cwd (the raw, possibly-relative caller value already
+        // consumed by resolveCwd above) with the validated absolute path.
+        const result = await client.reviewCode({ ...args, cwd, diff });
         if (!result.ok) {
           tracker.recordFailure(result.session_id);
           return { content: [{ type: 'text' as const, text: result.error }], isError: true };

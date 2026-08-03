@@ -163,6 +163,42 @@ describe('registerReviewCodeTool', () => {
 
     expect(saveReview).not.toHaveBeenCalled();
   });
+
+  describe('cwd param', () => {
+    it('a valid cwd is resolved to an absolute path and forwarded to resolveCodeDiff and the client', async () => {
+      vi.mocked(mockClient.reviewCode).mockResolvedValue(ok(validResult));
+
+      const result = await handler({ diff: 'some diff', cwd: process.cwd() }, {});
+
+      expect(result.isError).toBeUndefined();
+      expect(resolveCodeDiff).toHaveBeenCalledWith(expect.objectContaining({ cwd: process.cwd() }));
+      expect(mockClient.reviewCode).toHaveBeenCalledWith(
+        expect.objectContaining({ cwd: process.cwd() }),
+      );
+    });
+
+    it('an invalid cwd returns a clear tool error instead of calling resolveCodeDiff or the client', async () => {
+      const missing = `${process.cwd()}/definitely-does-not-exist-${Date.now()}`;
+
+      const result = await handler({ diff: 'some diff', cwd: missing }, {});
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('INVALID_INPUT');
+      expect(resolveCodeDiff).not.toHaveBeenCalled();
+      expect(mockClient.reviewCode).not.toHaveBeenCalled();
+    });
+
+    it('omitting cwd leaves it undefined downstream (preserves default behavior)', async () => {
+      vi.mocked(mockClient.reviewCode).mockResolvedValue(ok(validResult));
+
+      await handler({ diff: 'some diff' }, {});
+
+      expect(resolveCodeDiff).toHaveBeenCalledWith(expect.objectContaining({ cwd: undefined }));
+      expect(mockClient.reviewCode).toHaveBeenCalledWith(
+        expect.objectContaining({ cwd: undefined }),
+      );
+    });
+  });
 });
 
 describe('registerReviewCodeTool with db', () => {

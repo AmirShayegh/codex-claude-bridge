@@ -8,6 +8,11 @@ export const NO_WORKING_CHANGES = 'NO_WORKING_CHANGES';
 export async function resolvePrecommitDiff(args: {
   diff?: string;
   auto_diff?: boolean;
+  // Repository directory to run auto-capture git commands in. Undefined
+  // (the default) preserves prior behavior — git runs in the server
+  // process's own cwd. Callers are expected to have already validated this
+  // (see utils/cwd.ts) before it reaches here.
+  cwd?: string;
 }): Promise<Result<string>> {
   // Explicit diff takes precedence (including empty string)
   if (args.diff !== undefined) {
@@ -16,7 +21,7 @@ export async function resolvePrecommitDiff(args: {
 
   // auto_diff defaults to true (undefined !== false)
   if (args.auto_diff !== false) {
-    const gitResult = await getStagedDiff();
+    const gitResult = await getStagedDiff(args.cwd);
     if (!gitResult.ok) {
       return gitResult;
     }
@@ -32,6 +37,8 @@ export async function resolvePrecommitDiff(args: {
 export async function resolveCodeDiff(args: {
   diff?: string;
   auto_diff?: boolean;
+  // See resolvePrecommitDiff's cwd for the contract.
+  cwd?: string;
 }): Promise<Result<string>> {
   // Explicit non-empty diff takes precedence
   if (args.diff !== undefined && args.diff.trim() !== '') {
@@ -40,7 +47,7 @@ export async function resolveCodeDiff(args: {
 
   // auto_diff defaults to true (undefined !== false)
   if (args.auto_diff !== false) {
-    const gitResult = await getWorkingDiff();
+    const gitResult = await getWorkingDiff(args.cwd);
     if (!gitResult.ok) {
       return gitResult;
     }

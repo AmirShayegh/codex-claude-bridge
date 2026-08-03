@@ -5,6 +5,8 @@ import type { ReviewBackend } from '../backends/backend.js';
 import type { ReviewBridgeConfig } from '../config/types.js';
 import { sessionModelConflictMessage } from '../backends/orchestrator.js';
 import { resolvePrecommitDiff, NO_STAGED_CHANGES } from '../utils/resolve-diff.js';
+import { resolveCwd } from '../utils/cwd.js';
+import { discoverProjectConfig } from '../config/loader.js';
 import { createSessionTracker } from '../storage/session-tracker.js';
 
 export function registerReviewPrecommitTool(
@@ -37,6 +39,14 @@ export function registerReviewPrecommitTool(
               'With the Codex provider this cannot be combined with session_id (a resumed thread ' +
               'keeps its model); the Gemini provider allows changing model on a resumed session.',
           ),
+        cwd: z
+          .string()
+          .optional()
+          .describe(
+            'Repository directory for auto-capture and config discovery; git commands run here, ' +
+              "and this repo's .reviewbridge.json (if any, searched by walking up from here) is " +
+              'used for defaults like auto_diff. Defaults to the server process cwd.',
+          ),
       },
     },
     async (args) => {
@@ -48,13 +58,60 @@ export function registerReviewPrecommitTool(
           isError: true,
         };
       }
+      const cwdResult = resolveCwd(args.cwd);
+      if (!cwdResult.ok) {
+        return { content: [{ type: 'text' as const, text: cwdResult.error }], isError: true };
+      }
+      const cwd = cwdResult.data;
+
+      // config is loaded once at server startup from the server process's own
+      // launch directory (src/server.ts), so it can't reflect a repo named by
+      // a per-call cwd. When the caller names one, walk up from THAT
+      // directory the same way the server's own boot-time discovery would
+      // (discoverProjectConfig — same walk-up/.git-boundary algorithm as
+      // loadConfig()'s implicit mode, just anchored at cwd instead of
+      // process.cwd()), so a repo-root .reviewbridge.json becomes reachable
+      // even when cwd names a SUBDIRECTORY of that repo. This only affects
+      // the one field this tool reads per call
+      // (review_standards.precommit.auto_diff) — provider/backend selection,
+      // deliberate-mode capability, and copilot instructions are still wired
+      // once when the backend is constructed at server startup and stay tied
+      // to the server's launch directory; re-resolving those per call would
+      // mean reconstructing the backend per call, out of scope for this fix.
+      //
+      // If nothing is found anywhere up the tree from cwd, precommitConfig
+      // stays the server's own BOOT-TIME config — never built-in schema
+      // defaults. Falling back to schema defaults here would silently
+      // discard whatever the server actually loaded at startup
+      // (RB_CONFIG_PATH, $HOME/.reviewbridge.json, or its own
+      // launch-directory walk-up): e.g. a user who set
+      // precommit.auto_diff:false globally would see it silently reset to
+      // the schema default (true) the instant they passed a cwd whose own
+      // tree has no config file of its own.
+      let precommitConfig = config;
+      if (cwd !== undefined) {
+        const discovered = discoverProjectConfig(cwd);
+        if (!discovered.ok) {
+          return { content: [{ type: 'text' as const, text: discovered.error }], isError: true };
+        }
+        if (discovered.data) {
+          precommitConfig = discovered.data.config;
+        }
+        // else: nothing found walking up from cwd — precommitConfig stays
+        // the boot-time config set above, by design.
+      }
+
       const tracker = createSessionTracker(db, client.providers, client.provider);
       try {
         // An explicit auto_diff arg wins; otherwise fall back to the project
         // config default (config is the validated ReviewBridgeConfig, so the
         // field is always present — no optional chaining needed).
-        const autoDiff = args.auto_diff ?? config.review_standards.precommit.auto_diff;
-        const diffResult = await resolvePrecommitDiff({ diff: args.diff, auto_diff: autoDiff });
+        const autoDiff = args.auto_diff ?? precommitConfig.review_standards.precommit.auto_diff;
+        const diffResult = await resolvePrecommitDiff({
+          diff: args.diff,
+          auto_diff: autoDiff,
+          cwd,
+        });
         if (!diffResult.ok) {
           // "No staged changes" is not an error — return structured response
           if (diffResult.error.startsWith(NO_STAGED_CHANGES)) {
@@ -88,6 +145,7 @@ export function registerReviewPrecommitTool(
           checklist: args.checklist,
           session_id: args.session_id,
           model: args.model,
+          cwd,
         });
         if (!result.ok) {
           tracker.recordFailure(result.session_id);

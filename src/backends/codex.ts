@@ -154,32 +154,45 @@ export function classifyError(
 // is set. The backend owns this default — the config schema no longer supplies one.
 const CODEX_DEFAULT_MODEL = RECOMMENDED_MODELS.codex[0];
 
-// Thread options shared by the start and resume paths. The model is handled by
-// the two wrappers below: a fresh start always sets it (the orchestrator
-// resolves a concrete model for every start — see startThreadOpts), while the
-// resume path deliberately omits it. The SDK forwards `--model` to `codex exec`
-// unconditionally whenever the field is present (see
-// @openai/codex-sdk/dist/index.js:170), which would reassert a model on resume
-// and either break a thread created with an override or fail auth on
-// ChatGPT-tier Codex if the new model isn't available there. A resumed thread
-// keeps whatever model it was started with.
-function baseThreadOpts(config: ReviewBridgeConfig) {
+// Thread options shared by the start and resume paths.
+//
+// workingDirectory applies uniformly to both. Confirmed against the SDK's
+// actual compiled output (@openai/codex-sdk/dist/index.js): it's forwarded as
+// `--cd <dir>` unconditionally whenever set, built into the command args
+// independently of whether a `resume <id>` subcommand is also appended, and
+// `ThreadOptions` (the type both startThread and resumeThread accept) makes no
+// start/resume distinction for it. `codex exec resume --help` doesn't even
+// list --cd as a resume-specific option — it's a top-level `codex exec` flag
+// governing where the whole invocation runs, not a server-side session
+// parameter. That's structurally unlike model (below): unset/undefined here
+// means no `--cd` is added at all, identical to today's behavior.
+//
+// model is different, and stays resume-restricted. A fresh start always sets
+// it (the orchestrator resolves a concrete model for every start — see
+// startThreadOpts), while the resume path deliberately omits it. The SDK
+// forwards `--model` to `codex exec` unconditionally whenever the field is
+// present (see @openai/codex-sdk/dist/index.js:170), which would reassert a
+// model on resume and either break a thread created with an override or fail
+// auth on ChatGPT-tier Codex if the new model isn't available there. A
+// resumed thread keeps whatever model it was started with.
+function baseThreadOpts(config: ReviewBridgeConfig, cwd?: string) {
   return {
     sandboxMode: 'read-only' as const,
     skipGitRepoCheck: true,
     modelReasoningEffort: config.reasoning_effort,
+    workingDirectory: cwd,
   };
 }
 
 // A fresh thread always starts on a resolved model (the orchestrator resolves
 // one — an explicit pin, config.model, or CODEX_DEFAULT_MODEL — before every
 // start), so it's a required argument here rather than a defaulted fallback.
-function startThreadOpts(config: ReviewBridgeConfig, model: string) {
-  return { model, ...baseThreadOpts(config) };
+function startThreadOpts(config: ReviewBridgeConfig, model: string, cwd?: string) {
+  return { model, ...baseThreadOpts(config, cwd) };
 }
 
-function resumeThreadOpts(config: ReviewBridgeConfig) {
-  return baseThreadOpts(config);
+function resumeThreadOpts(config: ReviewBridgeConfig, cwd?: string) {
+  return baseThreadOpts(config, cwd);
 }
 
 // Codex implementation of the orchestrator's TurnRunner: create or resume a
@@ -187,13 +200,13 @@ function resumeThreadOpts(config: ReviewBridgeConfig) {
 async function runReview<T extends Record<string, unknown>>(
   params: TurnParams & { codex: Codex; config: ReviewBridgeConfig },
 ): Promise<Result<T & { session_id: string }>> {
-  const { codex, config, prompt, responseSchema, sessionId, model, resolvedModel } = params;
+  const { codex, config, prompt, responseSchema, sessionId, model, resolvedModel, cwd } = params;
 
   let thread;
   try {
     thread = sessionId
-      ? codex.resumeThread(sessionId, resumeThreadOpts(config))
-      : codex.startThread(startThreadOpts(config, model ?? resolvedModel));
+      ? codex.resumeThread(sessionId, resumeThreadOpts(config, cwd))
+      : codex.startThread(startThreadOpts(config, model ?? resolvedModel, cwd));
   } catch (e: unknown) {
     if (sessionId) {
       const msg = e instanceof Error ? e.message : String(e);

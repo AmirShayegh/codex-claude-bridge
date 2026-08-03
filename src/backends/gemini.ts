@@ -241,6 +241,11 @@ export function readConversationId(cwd: string): string | undefined {
 // critical section through a process-global chain so captures can't interleave.
 // Documented limitation: this serializes same-process Gemini reviews; it does
 // not guard against a separate agy process writing the same cwd entry.
+//
+// This chain is GLOBAL (every Gemini review in this process, regardless of
+// cwd, shares it) — not per-cwd. Its scope never varies with the caller's
+// cwd param, so a resumed session passing a different (or no) cwd cannot
+// change what gets serialized against what.
 let serialChain: Promise<unknown> = Promise.resolve();
 export function runSerialized<T>(fn: () => Promise<T>): Promise<T> {
   const result = serialChain.then(fn);
@@ -454,6 +459,21 @@ async function runAgyReview<T extends Record<string, unknown>>(
 
       // Resume → reuse the conversation we resumed; fresh → capture the new id
       // agy just recorded for this cwd.
+      //
+      // Cross-cwd resume safety: this cwd-keyed cache lookup is reachable
+      // ONLY on the fresh branch (sessionId falsy) — the `??` short-circuits
+      // it entirely whenever sessionId is present. A resumed call always
+      // returns the caller's OWN sessionId verbatim, regardless of what cwd
+      // (if any) is passed alongside it: the cache can never substitute a
+      // different id, so a resume can't silently "fork" via this mechanism.
+      // A resume DOES still spawn the agy subprocess in whatever cwd this
+      // particular call specifies (see runAgyPrint above) while asking it to
+      // continue conversation `sessionId` — if that cwd differs from the one
+      // the session started in, the review's *content* may be about the
+      // wrong repo relative to the conversation's history, same as passing
+      // an unrelated `diff`/`plan` to a resumed session always could. That's
+      // a caller-coherence concern, not a data-corruption or identity-
+      // confusion one, and pre-dates cwd threading.
       const resolvedId = sessionId ?? readConversationId(cwd);
       if (!resolvedId) {
         // The review itself parsed fine — this is a storage read failure (agy's
@@ -488,8 +508,13 @@ export function createGeminiBackend(
     );
   }
 
+  // params.cwd is the caller's resolved repository directory (from
+  // CodeReviewInput/PrecommitReviewInput.cwd); fall back to the server
+  // process's own cwd when omitted — the pre-existing, zero-footprint
+  // default. Spreading params first means an explicit cwd wins over the
+  // fallback rather than being silently clobbered by it.
   const turn: TurnRunner = <T extends Record<string, unknown>>(params: TurnParams) =>
-    runAgyReview<T>({ ...params, config, cwd: process.cwd() });
+    runAgyReview<T>({ ...params, config, cwd: params.cwd ?? process.cwd() });
   const deps = {
     config,
     copilotInstructions,

@@ -30,6 +30,10 @@ export interface CodeReviewInput {
   model?: string;
   // See PlanReviewInput.deliberate.
   deliberate?: boolean;
+  // Repository directory for auto-capture and provider spawns (e.g. the agy
+  // CLI). Undefined preserves prior behavior (the server process's own cwd).
+  // Already validated to an existing directory by the tool layer.
+  cwd?: string;
 }
 
 export interface PrecommitReviewInput {
@@ -37,6 +41,8 @@ export interface PrecommitReviewInput {
   checklist?: string[];
   session_id?: string;
   model?: string;
+  // See CodeReviewInput.cwd.
+  cwd?: string;
 }
 
 // One finding (from another reviewer) to adjudicate in a cross-review round.

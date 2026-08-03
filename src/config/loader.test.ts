@@ -1,21 +1,28 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { loadConfig, formatConfigSource } from './loader.js';
+import {
+  loadConfig,
+  formatConfigSource,
+  discoverProjectConfig,
+  resetConfigWarningMemo,
+} from './loader.js';
 import { DEFAULT_CONFIG } from './types.js';
 
 vi.mock('node:fs', () => ({
   readFileSync: vi.fn(),
   existsSync: vi.fn(),
+  statSync: vi.fn(),
 }));
 
 vi.mock('node:os', () => ({
   homedir: vi.fn(() => '/Users/test'),
 }));
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 
 const mockReadFileSync = vi.mocked(readFileSync);
 const mockExistsSync = vi.mocked(existsSync);
+const mockStatSync = vi.mocked(statSync);
 const mockHomedir = vi.mocked(homedir);
 
 // Helper: build an fs layout where each path either has content,
@@ -44,13 +51,31 @@ function applyLayout(layout: Layout) {
   });
 }
 
+// Minimal fake fs.Stats — only mtimeMs is read by loader.ts. One `as` cast
+// (not `any`), matching the rest of this file's mocking style.
+function fakeStats(mtimeMs: number) {
+  return { mtimeMs } as ReturnType<typeof statSync>;
+}
+
 const ORIGINAL_ENV = process.env.RB_CONFIG_PATH;
 const ORIGINAL_CWD = process.cwd;
 
 beforeEach(() => {
   vi.resetAllMocks();
   mockHomedir.mockReturnValue('/Users/test');
+  // Stable default mtime for every path — existing tests below don't care
+  // about mtime and expect the pre-P2 "warns once per path" behavior, which
+  // this preserves (same path + same mtime = same memo key). Tests that
+  // specifically exercise mtime-based re-warning override this.
+  mockStatSync.mockReturnValue(fakeStats(1000));
   delete process.env.RB_CONFIG_PATH;
+  // warnUnknownConfigKeys' one-time-per-(path,mtime) memo is process-lifetime
+  // module state, not a vi mock — vi.resetAllMocks() above doesn't touch it.
+  // Several tests below intentionally reuse the same config path across
+  // cases, so it must be cleared here or a later test's warning assertion
+  // would silently never fire (already "warned" by an earlier test in this
+  // file, at the same default mtime).
+  resetConfigWarningMemo();
 });
 
 afterEach(() => {
@@ -465,5 +490,130 @@ describe('loadConfig — unknown-key warnings (ISS-004)', () => {
     applyLayout({ '/p/.reviewbridge.json': JSON.stringify({ review_standards: 'nope' }) });
     expect(() => loadConfig('/p')).not.toThrow();
     spy.mockRestore();
+  });
+
+  it('warns only once per (path, mtime) across repeated loads of the SAME unchanged file (F9)', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    applyLayout({
+      '/p/.reviewbridge.json': JSON.stringify({ model: 'gpt-5.4', bogus_field: 1 }),
+    });
+    // mtime stays at the beforeEach default (1000) for every read — an
+    // unchanged file, the common case.
+
+    loadConfig('/p');
+    loadConfig('/p');
+    loadConfig('/p');
+
+    const warnings = spy.mock.calls
+      .map((c) => String(c[0]))
+      .filter((w) => w.includes('unrecognized config field'));
+    expect(warnings).toHaveLength(1);
+    spy.mockRestore();
+  });
+
+  it('P2: an EDITED file (different mtime, new unknown key) re-warns instead of being silently suppressed by the earlier warning', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // First read: mtime 1000, one unknown key (old_bogus).
+    mockStatSync.mockReturnValueOnce(fakeStats(1000));
+    applyLayout({
+      '/p/.reviewbridge.json': JSON.stringify({ model: 'gpt-5.4', old_bogus: 1 }),
+    });
+    loadConfig('/p');
+
+    // "Edit" the file mid-process: same path, later mtime, a DIFFERENT
+    // unknown key. Before P2 (path-only keying) this second call would have
+    // been silently swallowed by the first call's memo entry — new_bogus
+    // would never surface.
+    mockStatSync.mockReturnValueOnce(fakeStats(2000));
+    applyLayout({
+      '/p/.reviewbridge.json': JSON.stringify({ model: 'gpt-5.4', new_bogus: 1 }),
+    });
+    loadConfig('/p');
+
+    const warnings = spy.mock.calls
+      .map((c) => String(c[0]))
+      .filter((w) => w.includes('unrecognized config field'));
+    expect(warnings).toHaveLength(2);
+    expect(warnings.some((w) => w.includes('old_bogus'))).toBe(true);
+    expect(warnings.some((w) => w.includes('new_bogus'))).toBe(true);
+    spy.mockRestore();
+  });
+
+  it('still warns for a DIFFERENT path even after another path was already warned', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    applyLayout({
+      '/p1/.reviewbridge.json': JSON.stringify({ bogus_a: 1 }),
+      '/p2/.reviewbridge.json': JSON.stringify({ bogus_b: 1 }),
+    });
+
+    loadConfig('/p1');
+    loadConfig('/p2');
+
+    const warnings = spy.mock.calls
+      .map((c) => String(c[0]))
+      .filter((w) => w.includes('unrecognized config field'));
+    expect(warnings.some((w) => w.includes('bogus_a'))).toBe(true);
+    expect(warnings.some((w) => w.includes('bogus_b'))).toBe(true);
+    spy.mockRestore();
+  });
+});
+
+describe('discoverProjectConfig (F4)', () => {
+  it('finds .reviewbridge.json in the exact start directory', () => {
+    applyLayout({
+      '/repo/.reviewbridge.json': JSON.stringify({ model: 'gpt-5.4' }),
+    });
+
+    const result = discoverProjectConfig('/repo');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data?.config.model).toBe('gpt-5.4');
+      expect(result.data?.source).toEqual({ kind: 'project', path: '/repo/.reviewbridge.json' });
+    }
+  });
+
+  it("walks up from a SUBDIRECTORY to find the repo-root config — the exact case loadConfig(cwd)'s single-directory lookup misses", () => {
+    applyLayout({
+      '/repo/.reviewbridge.json': JSON.stringify({ model: 'root-model' }),
+    });
+
+    const result = discoverProjectConfig('/repo/src/deep/subdir');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data?.config.model).toBe('root-model');
+      expect(result.data?.source).toEqual({ kind: 'project', path: '/repo/.reviewbridge.json' });
+    }
+  });
+
+  it("stops at a .git boundary, same as loadConfig()'s own implicit walk-up", () => {
+    applyLayout({
+      '/repo/.git': '', // .git boundary at /repo
+      '/.reviewbridge.json': JSON.stringify({ model: 'above-boundary' }), // above it — must not be found
+    });
+
+    const result = discoverProjectConfig('/repo/sub');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data).toBeNull();
+    }
+  });
+
+  it('returns ok(null) — not schema defaults, not an error — when nothing is found anywhere up the tree', () => {
+    applyLayout({});
+
+    const result = discoverProjectConfig('/nowhere/at/all');
+    expect(result).toEqual({ ok: true, data: null });
+  });
+
+  it('aborts on a malformed config found while walking up', () => {
+    applyLayout({
+      '/repo/sub/.reviewbridge.json': '{ broken',
+    });
+
+    const result = discoverProjectConfig('/repo/sub');
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('invalid JSON');
+    }
   });
 });

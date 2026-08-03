@@ -195,6 +195,11 @@ export interface TurnParams {
   // error-context so messages report the correct model even when `model` is
   // intentionally undefined on resumed chunks of a chunked review.
   resolvedModel: string;
+  // Repository directory for backends that spawn a subprocess (Gemini/agy).
+  // Forwarded from CodeReviewInput/PrecommitReviewInput.cwd; undefined
+  // preserves prior behavior. Ignored by backends that don't need repo
+  // context (Codex).
+  cwd?: string;
 }
 
 export type TurnRunner = <T extends Record<string, unknown>>(
@@ -348,6 +353,7 @@ export async function runCodeReview(
       sessionId: input.session_id,
       model: perTurnModel(resolved, input.session_id, allowsModelOverrideOnResume),
       resolvedModel: resolved,
+      cwd: input.cwd,
     });
   }
 
@@ -375,6 +381,7 @@ export async function runCodeReview(
       sessionId: chunkSession,
       model: perTurnModel(resolved, chunkSession, allowsModelOverrideOnResume),
       resolvedModel: resolved,
+      cwd: input.cwd,
     });
 
     if (!result.ok) {
@@ -454,6 +461,7 @@ export async function runPrecommitReview(
       sessionId: input.session_id,
       model: perTurnModel(resolved, input.session_id, allowsModelOverrideOnResume),
       resolvedModel: resolved,
+      cwd: input.cwd,
     });
   }
 
@@ -477,6 +485,7 @@ export async function runPrecommitReview(
       sessionId: chunkSession,
       model: perTurnModel(resolved, chunkSession, allowsModelOverrideOnResume),
       resolvedModel: resolved,
+      cwd: input.cwd,
     });
 
     if (!result.ok) {

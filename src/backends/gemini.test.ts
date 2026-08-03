@@ -513,6 +513,34 @@ describe('createGeminiBackend', () => {
     expect(lastArgs[lastArgs.indexOf('--conversation') + 1]).toBe('conv-prev');
   });
 
+  it('reviewCode: an explicit cwd is spawned into and used for id capture, instead of process.cwd()', async () => {
+    fakeFiles[CACHE] = JSON.stringify({ '/some/repo': 'conv-cwd' });
+    script({ stdout: JSON.stringify(CODE_OK) });
+
+    const res = await createGeminiBackend(PINNED_CONFIG).reviewCode({
+      diff: SMALL_DIFF,
+      cwd: '/some/repo',
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.data.session_id).toBe('conv-cwd');
+    expect(lastCwd).toBe('/some/repo');
+  });
+
+  it('reviewPrecommit: an explicit cwd is spawned into and used for id capture, instead of process.cwd()', async () => {
+    fakeFiles[CACHE] = JSON.stringify({ '/some/repo': 'conv-precommit-cwd' });
+    script({ stdout: JSON.stringify({ ready_to_commit: true, blockers: [], warnings: [] }) });
+
+    const res = await createGeminiBackend(PINNED_CONFIG).reviewPrecommit({
+      diff: SMALL_DIFF,
+      cwd: '/some/repo',
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.data.session_id).toBe('conv-precommit-cwd');
+    expect(lastCwd).toBe('/some/repo');
+  });
+
   it('retries once on malformed JSON, then succeeds (two spawns)', async () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-retry' });
     script({ stdout: 'not json at all' }, { stdout: JSON.stringify(PLAN_OK) });

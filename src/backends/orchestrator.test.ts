@@ -128,6 +128,33 @@ describe('orchestrator — allowsModelOverrideOnResume capability', () => {
     expect(calls[0].model).toBe('m');
     expect(calls.slice(1).every((c) => c.model === undefined)).toBe(true);
   });
+
+  it('single-chunk code review: forwards input.cwd to the turn', async () => {
+    const { turn, calls } = makeFakeTurn(CANNED_CODE);
+    const res = await runCodeReview({ diff: SMALL_DIFF, cwd: '/some/repo' }, deps(true), turn);
+    expect(res.ok).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].cwd).toBe('/some/repo');
+  });
+
+  it('multi-chunk code review: forwards input.cwd on every chunk', async () => {
+    const { turn, calls } = makeFakeTurn(CANNED_CODE);
+    const res = await runCodeReview(
+      { diff: bigDiff(3, 30), cwd: '/some/repo' },
+      deps(true, { max_chunk_tokens: 2500 }),
+      turn,
+    );
+    expect(res.ok).toBe(true);
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    expect(calls.every((c) => c.cwd === '/some/repo')).toBe(true);
+  });
+
+  it('code review: leaves cwd undefined on the turn when not provided (preserves default behavior)', async () => {
+    const { turn, calls } = makeFakeTurn(CANNED_CODE);
+    const res = await runCodeReview({ diff: SMALL_DIFF }, deps(true), turn);
+    expect(res.ok).toBe(true);
+    expect(calls[0].cwd).toBeUndefined();
+  });
 });
 
 describe('orchestrator — model resolution wiring', () => {

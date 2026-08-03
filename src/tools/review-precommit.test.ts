@@ -22,9 +22,21 @@ vi.mock('../storage/sessions.js', () => ({
   activateSession: vi.fn(),
 }));
 
+// Only exercised when a test passes `cwd` — the handler calls
+// discoverProjectConfig(cwd) exclusively on that path (see
+// review-precommit.ts), so every existing cwd-omitted test below never
+// touches this mock. Real walk-up behavior (subdirectory discovery, .git
+// boundary) is tested directly against discoverProjectConfig's own real
+// implementation in config/loader.test.ts — this file only needs to verify
+// review-precommit.ts's OWN policy for using what it returns.
+vi.mock('../config/loader.js', () => ({
+  discoverProjectConfig: vi.fn(),
+}));
+
 import { getStagedDiff } from '../utils/git.js';
 import { saveReview } from '../storage/reviews.js';
 import { getOrCreateSession, getSession, markSessionCompleted, markSessionFailed, activateSession } from '../storage/sessions.js';
+import { discoverProjectConfig } from '../config/loader.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type HandlerFn = (args: Record<string, unknown>, extra: unknown) => Promise<any>;
@@ -240,6 +252,133 @@ describe('registerReviewPrecommitTool', () => {
     await handler({}, {});
 
     expect(saveReview).not.toHaveBeenCalled();
+  });
+
+  describe('cwd param', () => {
+    it('a valid cwd is resolved to an absolute path and forwarded to getStagedDiff and the client', async () => {
+      vi.mocked(discoverProjectConfig).mockReturnValue(ok(null)); // nothing found — irrelevant to this test
+      vi.mocked(getStagedDiff).mockResolvedValue(ok('staged diff content'));
+      vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(validResult));
+
+      const result = await handler({ cwd: process.cwd() }, {});
+
+      expect(result.isError).toBeUndefined();
+      expect(getStagedDiff).toHaveBeenCalledWith(process.cwd());
+      expect(mockClient.reviewPrecommit).toHaveBeenCalledWith(
+        expect.objectContaining({ cwd: process.cwd() }),
+      );
+    });
+
+    it('an invalid cwd returns a clear tool error instead of calling getStagedDiff, discoverProjectConfig, or the client', async () => {
+      const missing = `${process.cwd()}/definitely-does-not-exist-${Date.now()}`;
+
+      const result = await handler({ cwd: missing }, {});
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('INVALID_INPUT');
+      expect(getStagedDiff).not.toHaveBeenCalled();
+      expect(discoverProjectConfig).not.toHaveBeenCalled();
+      expect(mockClient.reviewPrecommit).not.toHaveBeenCalled();
+    });
+
+    it('omitting cwd leaves it undefined downstream and never calls discoverProjectConfig (preserves default behavior)', async () => {
+      vi.mocked(getStagedDiff).mockResolvedValue(ok('staged diff content'));
+      vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(validResult));
+
+      await handler({}, {});
+
+      expect(getStagedDiff).toHaveBeenCalledWith(undefined);
+      expect(discoverProjectConfig).not.toHaveBeenCalled();
+      expect(mockClient.reviewPrecommit).toHaveBeenCalledWith(
+        expect.objectContaining({ cwd: undefined }),
+      );
+    });
+
+    it('ISS-004 per-repo (F4): auto_diff default comes from the cwd-scoped repo config, not the server boot-time config', async () => {
+      // The server booted with auto_diff:true (DEFAULT_CONFIG); the repo named
+      // by cwd has its own .reviewbridge.json with auto_diff:false.
+      const repoConfig = {
+        ...DEFAULT_CONFIG,
+        review_standards: {
+          ...DEFAULT_CONFIG.review_standards,
+          precommit: { ...DEFAULT_CONFIG.review_standards.precommit, auto_diff: false },
+        },
+      };
+      vi.mocked(discoverProjectConfig).mockReturnValue(
+        ok({
+          config: repoConfig,
+          source: { kind: 'project', path: `${process.cwd()}/.reviewbridge.json` },
+        }),
+      );
+
+      const result = await handler({ cwd: process.cwd() }, {});
+
+      expect(discoverProjectConfig).toHaveBeenCalledWith(process.cwd());
+      expect(getStagedDiff).not.toHaveBeenCalled(); // the repo config disabled auto_diff
+      // Mirrors the pre-existing "ISS-004: falls back to config precommit.auto_diff"
+      // test above: auto_diff off + no explicit diff is a genuine tool error, not
+      // the friendly no-staged-changes response (that's the "capture ran and found
+      // nothing" case, distinct from "capture never ran").
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('auto_diff disabled and no diff provided');
+    });
+
+    it('F4: no config found ANYWHERE up the tree from cwd preserves a non-default BOOT config value — never resets to schema defaults', async () => {
+      // The server booted with a NON-default config (auto_diff:false, set via
+      // e.g. RB_CONFIG_PATH or $HOME/.reviewbridge.json — irrelevant which).
+      // discoverProjectConfig finds nothing walking up from cwd. Before F4,
+      // this silently fell back to loadConfig(cwd)'s built-in schema default
+      // (auto_diff:true) instead of the boot config — this test is the
+      // regression guard for that.
+      const bootConfig = {
+        ...DEFAULT_CONFIG,
+        review_standards: {
+          ...DEFAULT_CONFIG.review_standards,
+          precommit: { ...DEFAULT_CONFIG.review_standards.precommit, auto_diff: false },
+        },
+      };
+      setupHandler(undefined, bootConfig);
+      vi.mocked(discoverProjectConfig).mockReturnValue(ok(null)); // nothing found anywhere
+
+      const result = await handler({ cwd: process.cwd() }, {});
+
+      expect(discoverProjectConfig).toHaveBeenCalledWith(process.cwd());
+      expect(getStagedDiff).not.toHaveBeenCalled(); // boot config's auto_diff:false won, not the schema default (true)
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('auto_diff disabled and no diff provided');
+    });
+
+    it('an explicit auto_diff arg still overrides the cwd-scoped repo config', async () => {
+      const repoConfig = {
+        ...DEFAULT_CONFIG,
+        review_standards: {
+          ...DEFAULT_CONFIG.review_standards,
+          precommit: { ...DEFAULT_CONFIG.review_standards.precommit, auto_diff: false },
+        },
+      };
+      vi.mocked(discoverProjectConfig).mockReturnValue(
+        ok({ config: repoConfig, source: { kind: 'default' } }),
+      );
+      vi.mocked(getStagedDiff).mockResolvedValue(ok('staged diff content'));
+      vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(validResult));
+
+      await handler({ cwd: process.cwd(), auto_diff: true }, {});
+
+      expect(getStagedDiff).toHaveBeenCalledTimes(1);
+    });
+
+    it('a broken .reviewbridge.json found while walking up from the named cwd returns a clear tool error', async () => {
+      vi.mocked(discoverProjectConfig).mockReturnValue(
+        err('CONFIG_ERROR: invalid config in /some/repo/.reviewbridge.json'),
+      );
+
+      const result = await handler({ cwd: process.cwd() }, {});
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('CONFIG_ERROR');
+      expect(getStagedDiff).not.toHaveBeenCalled();
+      expect(mockClient.reviewPrecommit).not.toHaveBeenCalled();
+    });
   });
 });
 

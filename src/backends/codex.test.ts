@@ -1185,6 +1185,62 @@ describe('config passthrough', () => {
   });
 });
 
+// The SDK's ThreadOptions.workingDirectory is forwarded as `--cd <dir>` by
+// @openai/codex-sdk — verified against its compiled output. Unlike model,
+// there's no evidence it's resume-restricted (see the comment on
+// baseThreadOpts), so it threads through uniformly on both start and resume.
+describe('cwd threading (workingDirectory)', () => {
+  it('reviewCode: forwards cwd as workingDirectory on a fresh startThread', async () => {
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validCodeResponse) });
+
+    const client = createCodexBackend(config);
+    await client.reviewCode({ diff: 'diff --git a/f b/f\n@@ -1 +1 @@\n-a\n+b', cwd: '/some/repo' });
+
+    expect(mockStartThread).toHaveBeenCalledWith(
+      expect.objectContaining({ workingDirectory: '/some/repo' }),
+    );
+  });
+
+  it('reviewPrecommit: forwards cwd as workingDirectory on a resumeThread', async () => {
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPrecommitResponse) });
+
+    const client = createCodexBackend(config);
+    await client.reviewPrecommit({
+      diff: 'diff --git a/f b/f\n@@ -1 +1 @@\n-a\n+b',
+      session_id: 'existing_thread',
+      cwd: '/some/repo',
+    });
+
+    expect(mockResumeThread).toHaveBeenCalledWith(
+      'existing_thread',
+      expect.objectContaining({ workingDirectory: '/some/repo' }),
+    );
+  });
+
+  it('omitting cwd leaves workingDirectory undefined (preserves default behavior — no --cd added)', async () => {
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
+
+    const client = createCodexBackend(config);
+    await client.reviewPlan({ plan: 'plan' });
+
+    expect(mockStartThread).toHaveBeenCalledWith(
+      expect.objectContaining({ workingDirectory: undefined }),
+    );
+  });
+
+  it('review_plan never threads cwd — PlanReviewInput has no cwd field, workingDirectory stays undefined even on resume', async () => {
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
+
+    const client = createCodexBackend(config);
+    await client.reviewPlan({ plan: 'plan', session_id: 'existing_thread' });
+
+    expect(mockResumeThread).toHaveBeenCalledWith(
+      'existing_thread',
+      expect.objectContaining({ workingDirectory: undefined }),
+    );
+  });
+});
+
 describe('config flows to prompts', () => {
   const configWithContext: ReviewBridgeConfig = {
     ...DEFAULT_CONFIG,

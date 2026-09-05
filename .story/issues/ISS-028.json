@@ -1,0 +1,35 @@
+{
+  "components": [
+    "tools/review-precommit",
+    "tools/review-code",
+    "utils/resolve-diff",
+    "cli/formatter"
+  ],
+  "createdBy": "external-review:care2talk-9e (design suggestion; code-verified in this session)",
+  "dedupeKey": "care2talk-9e-2026-09-03:capture-dir-disclosure",
+  "discoveredDate": "2026-09-04",
+  "id": "ISS-028",
+  "impact": "\"No staged changes found\" (src/tools/review-precommit.ts:70, src/utils/resolve-diff.ts:24) and \"No changes found to review.\" (src/tools/review-code.ts:87) are indistinguishable from a legitimate empty result and name no directory. When the capture ran somewhere other than where the user is working (ISS-027), the user has no reason to doubt the tool, checks their own git state first, and only then suspects the bridge; that is why the worktree bug cost two full diagnoses instead of one. Independent of the capture fix, every auto-captured result (empty or not) should report the absolute directory the git command ran in, e.g. `captured_from: /Users/.../c2t-design`, and the empty-result summary should say \"No staged changes found in <dir>\". When a caller-supplied cwd exists and differs from the server cwd, say so explicitly. This is self-diagnosing and also protects against the next variant of the same class. Suggested as the FIRST change, ahead of the full cwd plumbing, since it is ~10 lines and no behavior change.",
+  "location": [
+    "src/tools/review-precommit.ts:70",
+    "src/tools/review-code.ts:87",
+    "src/utils/resolve-diff.ts:24"
+  ],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": null,
+  "resolvedDate": null,
+  "severity": "medium",
+  "sourceRefs": [
+    {
+      "contentHash": "7cb10c8d49967b3489a5d572164287cc705548100d044dbb30fb5d772aacd8c1",
+      "endLine": 72,
+      "path": "src/tools/review-precommit.ts",
+      "reviewId": "care2talk-9e-2026-09-03",
+      "revision": "a066fba339b032c0bd20f8bc3737bbaa404bb6b9",
+      "startLine": 61
+    }
+  ],
+  "status": "open",
+  "title": "Empty auto-capture results are silent: name the directory the capture ran in and flag when it is not the caller's cwd"
+}

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ModelSelectorSchema, SessionIdSchema } from '../utils/input-validation.js';
 
 // Separate severity enums: plan uses 'suggestion', code uses 'nitpick'
 export const PlanFindingSeveritySchema = z.enum(['critical', 'major', 'minor', 'suggestion']);
@@ -16,14 +17,11 @@ const BaseFindingFields = {
   category: z.string(),
   description: z.string(),
   file: z.string().nullable(),
-  line: z.preprocess(
-    v => {
-      if (v === '' || v === null || v === undefined) return null;
-      if (typeof v === 'string' || typeof v === 'number') return v;
-      return null;
-    },
-    z.coerce.number().int().positive().nullable(),
-  ),
+  line: z.preprocess((v) => {
+    if (v === '' || v === null || v === undefined) return null;
+    if (typeof v === 'string' || typeof v === 'number') return v;
+    return null;
+  }, z.coerce.number().int().positive().nullable()),
   suggestion: z.string().nullable(),
 };
 
@@ -46,8 +44,30 @@ export const ReviewFindingSchema = z.object({
 // The backend that actually produced this result. Set by each backend on its
 // own results; under provider failover it reflects the provider that served the
 // review (which may differ from the configured primary). Optional/additive.
-const ReviewProviderEnum = z.enum(['codex', 'gemini']);
+export const ReviewProviderSchema = z.enum(['codex', 'gemini']);
+const ReviewProviderEnum = ReviewProviderSchema;
 const ServingProviderSchema = ReviewProviderEnum.optional();
+
+export const ModelIdentitySchema = z.object({
+  provider: ReviewProviderSchema,
+  role: z.enum(['review', 'adjudication']),
+  requested: ModelSelectorSchema.nullable(),
+  resolved: ModelSelectorSchema.nullable(),
+  observed: ModelSelectorSchema.nullable(),
+  evidence: z.enum(['runtime_session_record', 'bridge_selection', 'unavailable']),
+});
+
+export const ReviewProvenanceSchema = z.object({
+  persistence: z.enum(['durable', 'memory_only', 'not_recorded']),
+  warning: z.string().nullable(),
+});
+
+const HostReviewMetadataFields = {
+  // Additive for backward-compatible decoding. New successful bridge responses
+  // always emit both fields; model-facing schemas must explicitly omit them.
+  models: z.array(ModelIdentitySchema).optional(),
+  provenance: ReviewProvenanceSchema.optional(),
+};
 
 // Deliberation metadata: when both providers review the same input, the bridge
 // reports each provider's verdict and splits findings into those BOTH flagged
@@ -102,44 +122,45 @@ function deliberationSchema<F extends z.ZodTypeAny>(findingSchema: F) {
 // never set it; the composite and the single-mode decorator stamp it so the
 // caller can tell single/failover/deliberate apart even when no deliberation
 // block is present.
-const ReviewModeSchema = z
-  .enum(['single', 'failover', 'deliberate', 'deliberate-deep'])
-  .optional();
+const ReviewModeSchema = z.enum(['single', 'failover', 'deliberate', 'deliberate-deep']).optional();
 
 export const PlanReviewResultSchema = z.object({
   verdict: z.enum(['approve', 'revise', 'reject']),
   summary: z.string(),
   findings: z.array(PlanFindingSchema),
-  session_id: z.string(),
+  session_id: SessionIdSchema,
   provider: ServingProviderSchema,
   review_mode: ReviewModeSchema,
   deliberation: deliberationSchema(PlanFindingSchema),
+  ...HostReviewMetadataFields,
 });
 
 export const CodeReviewResultSchema = z.object({
   verdict: z.enum(['approve', 'request_changes', 'reject']),
   summary: z.string(),
   findings: z.array(CodeFindingSchema),
-  session_id: z.string(),
+  session_id: SessionIdSchema,
   chunks_reviewed: z.number().int().positive().optional(),
   provider: ServingProviderSchema,
   review_mode: ReviewModeSchema,
   deliberation: deliberationSchema(CodeFindingSchema),
+  ...HostReviewMetadataFields,
 });
 
 export const PrecommitResultSchema = z.object({
   ready_to_commit: z.boolean(),
   blockers: z.array(z.string()),
   warnings: z.array(z.string()),
-  session_id: z.string(),
+  session_id: SessionIdSchema,
   chunks_reviewed: z.number().int().positive().optional(),
   provider: ServingProviderSchema,
   review_mode: ReviewModeSchema,
+  ...HostReviewMetadataFields,
 });
 
 // Cross-review (deliberate-deep): a provider's adjudication of another reviewer's
 // findings. `index` refers to the position of the finding in the input list.
-export const CrossReviewResultSchema = z.object({
+export const CrossReviewResponseSchema = z.object({
   adjudications: z.array(
     z.object({
       index: z.number().int(),
@@ -149,17 +170,21 @@ export const CrossReviewResultSchema = z.object({
   ),
 });
 
+export const CrossReviewResultSchema = CrossReviewResponseSchema.extend({
+  ...HostReviewMetadataFields,
+});
+
 export const ReviewStatusSchema = z.object({
   status: z.enum(['in_progress', 'completed', 'failed', 'not_found']),
-  session_id: z.string(),
+  session_id: SessionIdSchema,
   progress: z.string().optional(),
   elapsed_seconds: z.number().optional(),
 });
 
 export const VerdictSchema = z.enum(['approve', 'revise', 'reject', 'request_changes']);
 
-export const ReviewHistoryEntrySchema = z.object({
-  session_id: z.string(),
+const ReviewHistoryEntryBaseSchema = z.object({
+  session_id: SessionIdSchema,
   type: z.enum(['plan', 'code', 'precommit']),
   verdict: VerdictSchema,
   timestamp: z.string(),
@@ -169,6 +194,21 @@ export const ReviewHistoryEntrySchema = z.object({
   provider: z.string().nullable(),
 });
 
+export const ReviewHistoryEntrySchema = z.discriminatedUnion('model_metadata_status', [
+  ReviewHistoryEntryBaseSchema.extend({
+    models: z.array(ModelIdentitySchema),
+    model_metadata_status: z.literal('recorded'),
+  }),
+  ReviewHistoryEntryBaseSchema.extend({
+    models: z.null(),
+    model_metadata_status: z.literal('legacy_unrecorded'),
+  }),
+  ReviewHistoryEntryBaseSchema.extend({
+    models: z.null(),
+    model_metadata_status: z.literal('invalid'),
+  }),
+]);
+
 // Inferred types for use across the codebase
 export type PlanFindingSeverity = z.infer<typeof PlanFindingSeveritySchema>;
 export type CodeFindingSeverity = z.infer<typeof CodeFindingSeveritySchema>;
@@ -176,9 +216,13 @@ export type FindingSeverity = z.infer<typeof FindingSeveritySchema>;
 export type PlanFinding = z.infer<typeof PlanFindingSchema>;
 export type CodeFinding = z.infer<typeof CodeFindingSchema>;
 export type ReviewFinding = z.infer<typeof ReviewFindingSchema>;
+export type ReviewProvider = z.infer<typeof ReviewProviderSchema>;
+export type ModelIdentity = z.infer<typeof ModelIdentitySchema>;
+export type ReviewProvenance = z.infer<typeof ReviewProvenanceSchema>;
 export type PlanReviewResult = z.infer<typeof PlanReviewResultSchema>;
 export type CodeReviewResult = z.infer<typeof CodeReviewResultSchema>;
 export type PrecommitResult = z.infer<typeof PrecommitResultSchema>;
+export type CrossReviewResponse = z.infer<typeof CrossReviewResponseSchema>;
 export type CrossReviewResult = z.infer<typeof CrossReviewResultSchema>;
 export type ReviewStatus = z.infer<typeof ReviewStatusSchema>;
 export type Verdict = z.infer<typeof VerdictSchema>;

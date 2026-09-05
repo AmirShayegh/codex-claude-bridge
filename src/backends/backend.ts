@@ -68,10 +68,13 @@ export interface ReviewBackend {
   // (membership check) and by resume routing to find a session's owning leaf.
   providers: readonly ReviewProvider[];
   // Whether a resumed session may change model. False for Codex (its SDK
-  // reasserts --model on resume); true for Gemini. The tool layer gates the
-  // session_id+model conflict rejection on this so it isn't a Codex-only rule
-  // leaking onto every provider.
+  // reasserts --model on resume); true for Gemini. Leaf orchestration and the
+  // lifecycle's pre-admission validation both consult this capability.
   allowsModelOverrideOnResume: boolean;
+  // Composites may serve leaves with different resume capabilities. Resolve
+  // against the session's owning provider instead of treating the configured
+  // primary's flag as representative of every leaf.
+  allowsModelOverrideOnResumeFor?(provider: ReviewProvider): boolean;
   reviewPlan(input: PlanReviewInput): Promise<Result<PlanReviewResult>>;
   reviewCode(input: CodeReviewInput): Promise<Result<CodeReviewResult>>;
   reviewPrecommit(input: PrecommitReviewInput): Promise<Result<PrecommitResult>>;
@@ -79,4 +82,22 @@ export interface ReviewBackend {
   // (deliberate-deep's cross-review round). Leaf backends implement it; composites
   // don't — the deliberation composite calls it on its underlying leaves.
   crossReview?(input: CrossReviewInput): Promise<Result<CrossReviewResult>>;
+}
+
+// Resolve a resume capability for one concrete provider. Leaves only expose the
+// legacy scalar flag; composites provide the owner-aware callback above.
+export function canOverrideModelOnResume(
+  backend: ReviewBackend,
+  provider: ReviewProvider,
+): boolean {
+  if (!backend.providers.includes(provider)) return false;
+  if (backend.allowsModelOverrideOnResumeFor) {
+    return backend.allowsModelOverrideOnResumeFor(provider);
+  }
+  // The scalar is authoritative for a leaf (and for a composite's presented
+  // primary). A hand-built multi-provider backend without an owner-aware
+  // callback fails closed for non-primary owners.
+  return provider === backend.provider || backend.providers.length === 1
+    ? backend.allowsModelOverrideOnResume
+    : false;
 }

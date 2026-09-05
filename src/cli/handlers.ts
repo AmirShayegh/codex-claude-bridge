@@ -1,4 +1,5 @@
 import type { Result } from '../utils/errors.js';
+import { escapeTerminalControls, stringifyTerminalSafeJson } from '../utils/terminal.js';
 
 export interface HandlerIO {
   stdout: { write(s: string): boolean };
@@ -14,7 +15,27 @@ export interface HandlerConfig<TResult> {
   exitCode: (result: TResult) => number;
 }
 
-export function createHandler<TResult>(config: HandlerConfig<TResult>): (io: HandlerIO) => Promise<void> {
+const CLI_PROVENANCE = {
+  persistence: 'not_recorded',
+  warning: null,
+} as const;
+
+function withCliProvenance<TResult>(data: TResult): TResult {
+  if (
+    typeof data !== 'object' ||
+    data === null ||
+    !('session_id' in data) ||
+    typeof data.session_id !== 'string' ||
+    ('provenance' in data && data.provenance !== undefined)
+  ) {
+    return data;
+  }
+  return { ...data, provenance: CLI_PROVENANCE };
+}
+
+export function createHandler<TResult>(
+  config: HandlerConfig<TResult>,
+): (io: HandlerIO) => Promise<void> {
   return async (io: HandlerIO) => {
     let result: Result<TResult>;
     try {
@@ -26,20 +47,21 @@ export function createHandler<TResult>(config: HandlerConfig<TResult>): (io: Han
 
     if (!result.ok) {
       if (io.json) {
-        io.stderr.write(JSON.stringify({ error: result.error }) + '\n');
+        io.stderr.write(stringifyTerminalSafeJson({ error: result.error }) + '\n');
       } else {
-        io.stderr.write(`Error: ${result.error}\n`);
+        io.stderr.write(`Error: ${escapeTerminalControls(result.error)}\n`);
       }
       io.exit(1);
       return;
     }
 
+    const output = withCliProvenance(result.data);
     if (io.json) {
-      io.stdout.write(JSON.stringify(result.data) + '\n');
+      io.stdout.write(stringifyTerminalSafeJson(output) + '\n');
     } else {
-      io.stdout.write(config.format(result.data, io.color) + '\n');
+      io.stdout.write(config.format(output, io.color) + '\n');
     }
 
-    io.exit(config.exitCode(result.data));
+    io.exit(config.exitCode(output));
   };
 }

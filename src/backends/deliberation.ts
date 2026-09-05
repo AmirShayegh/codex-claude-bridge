@@ -1,12 +1,10 @@
-import { ok, err } from '../utils/errors.js';
+import { ErrorCode, ok, err } from '../utils/errors.js';
 import type { Result } from '../utils/errors.js';
 import type { ReviewProvider } from '../config/types.js';
-import {
-  CodeFindingSeveritySchema,
-  PlanFindingSeveritySchema,
-} from '../review/types.js';
-import type { PlanReviewResult, CodeReviewResult } from '../review/types.js';
-import { withFailover } from './failover.js';
+import { CodeFindingSeveritySchema, PlanFindingSeveritySchema } from '../review/types.js';
+import type { PlanReviewResult, CodeReviewResult, ModelIdentity } from '../review/types.js';
+import { deduplicateModelIdentities, sessionModelConflictMessage } from './orchestrator.js';
+import { lookupSessionOwner, withFailover } from './failover.js';
 import type { SessionProviderLookup } from './failover.js';
 import { sliceDiffToFiles } from '../utils/diff-files.js';
 import { estimateTokens } from '../utils/chunking.js';
@@ -16,6 +14,17 @@ import type {
   CodeReviewInput,
   PrecommitReviewInput,
 } from './backend.js';
+import { canOverrideModelOnResume } from './backend.js';
+
+const REJECTED_PROVIDER_ERROR = `${ErrorCode.UNKNOWN_ERROR}: provider call failed unexpectedly`;
+
+async function resultFromProviderCall<T>(call: () => Promise<Result<T>>): Promise<Result<T>> {
+  try {
+    return await call();
+  } catch {
+    return err<T>(REJECTED_PROVIDER_ERROR);
+  }
+}
 
 // Deliberation: run BOTH providers on the same review, then surface where they
 // agree (both flagged a finding → high confidence) vs. diverge (only one flagged
@@ -201,20 +210,32 @@ function combineCode(
   // Worst-of-both, computed from the two INDEPENDENT reviews and BY DESIGN not
   // re-derived after cross-review (ISS-015): a deliberate-deep adjudication is
   // advisory input for the caller's synthesis, not folded back into the verdict.
-  const verdict = CODE_VERDICT_RANK[ra.verdict] >= CODE_VERDICT_RANK[rb.verdict] ? ra.verdict : rb.verdict;
+  const verdict =
+    CODE_VERDICT_RANK[ra.verdict] >= CODE_VERDICT_RANK[rb.verdict] ? ra.verdict : rb.verdict;
   return {
     verdict,
     summary: joinSummaries(ra.summary, rb.summary),
     findings: [...agreed, ...divergent.map((d) => d.finding)],
     session_id: sessionId ?? ra.session_id,
     provider: p,
+    ...(ra.models || rb.models
+      ? { models: deduplicateModelIdentities([...(ra.models ?? []), ...(rb.models ?? [])]) }
+      : {}),
     // Surface the primary's chunk count at top level (the presented result).
     ...(ra.chunks_reviewed !== undefined ? { chunks_reviewed: ra.chunks_reviewed } : {}),
     deliberation: {
       providers: [p, s],
       verdicts: [
-        { provider: p, verdict: ra.verdict, ...(ra.chunks_reviewed !== undefined ? { chunks_reviewed: ra.chunks_reviewed } : {}) },
-        { provider: s, verdict: rb.verdict, ...(rb.chunks_reviewed !== undefined ? { chunks_reviewed: rb.chunks_reviewed } : {}) },
+        {
+          provider: p,
+          verdict: ra.verdict,
+          ...(ra.chunks_reviewed !== undefined ? { chunks_reviewed: ra.chunks_reviewed } : {}),
+        },
+        {
+          provider: s,
+          verdict: rb.verdict,
+          ...(rb.chunks_reviewed !== undefined ? { chunks_reviewed: rb.chunks_reviewed } : {}),
+        },
       ],
       agreement: agreementLabel(ra.verdict, rb.verdict, divergent.length),
       agreed,
@@ -236,13 +257,17 @@ function combinePlan(
     planRank,
   );
   // Worst-of-both, pre-cross-review by design (ISS-015) — see combineCode.
-  const verdict = PLAN_VERDICT_RANK[ra.verdict] >= PLAN_VERDICT_RANK[rb.verdict] ? ra.verdict : rb.verdict;
+  const verdict =
+    PLAN_VERDICT_RANK[ra.verdict] >= PLAN_VERDICT_RANK[rb.verdict] ? ra.verdict : rb.verdict;
   return {
     verdict,
     summary: joinSummaries(ra.summary, rb.summary),
     findings: [...agreed, ...divergent.map((d) => d.finding)],
     session_id: sessionId ?? ra.session_id,
     provider: p,
+    ...(ra.models || rb.models
+      ? { models: deduplicateModelIdentities([...(ra.models ?? []), ...(rb.models ?? [])]) }
+      : {}),
     deliberation: {
       providers: [p, s],
       // Plan reviews are not chunked, so no chunks_reviewed on verdicts.
@@ -311,10 +336,22 @@ function errOf<T>(r: Result<T>): string {
 
 // --- Cross-review round (deliberate-deep) ---
 
-type Adjudication = { by: ReviewProvider; verdict: 'confirmed' | 'disputed' | 'unsure'; reason: string };
+type Adjudication = {
+  by: ReviewProvider;
+  verdict: 'confirmed' | 'disputed' | 'unsure';
+  reason: string;
+};
 type CrossFinding = AnyFinding & { description: string };
 type CrossReviewFailure = { by: ReviewProvider; reason: string };
-type AdjudicateResult = { adjudications: (Adjudication | undefined)[]; failure?: CrossReviewFailure };
+type AdjudicateResult = {
+  adjudications: (Adjudication | undefined)[];
+  models: ModelIdentity[];
+  failure?: CrossReviewFailure;
+};
+type DeliberationModelOverrides = {
+  primary?: string;
+  secondary?: string;
+};
 
 // Ask `judge` to adjudicate `findings` (from the other provider) against the
 // change. Returns adjudications aligned to `findings` (undefined where none),
@@ -329,40 +366,52 @@ async function runAdjudicate(
   maxChunkTokens?: number,
 ): Promise<AdjudicateResult> {
   const out: (Adjudication | undefined)[] = new Array(findings.length).fill(undefined);
-  if (findings.length === 0 || !judge.crossReview) return { adjudications: out };
+  const crossReview = judge.crossReview;
+  if (findings.length === 0 || !crossReview) return { adjudications: out, models: [] };
   // ISS-012: slice the subject to only the files these findings touch so a large
   // diff doesn't blow the single adjudication turn. Plans / no-file findings fall
   // back to the full subject. If it's STILL over budget, fail this adjudication
   // cleanly (bounded cost) — surfaced via cross_review_failures, no multi-turn.
-  const wanted = new Set(findings.map((f) => f.file).filter((f): f is string => typeof f === 'string'));
+  const wanted = new Set(
+    findings.map((f) => f.file).filter((f): f is string => typeof f === 'string'),
+  );
   const subject = sliceDiffToFiles(content, wanted);
   if (maxChunkTokens !== undefined && estimateTokens(subject) > maxChunkTokens) {
     return {
       adjudications: out,
+      models: [],
       failure: {
         by: judge.provider,
         reason: `cross-review subject exceeds max_chunk_tokens (${estimateTokens(subject)} > ${maxChunkTokens}) even after slicing to referenced files`,
       },
     };
   }
-  const res = await judge.crossReview({
-    content: subject,
-    findings: findings.map((f) => ({
-      severity: f.severity,
-      category: f.category,
-      file: f.file,
-      line: f.line,
-      description: f.description,
-    })),
-    model,
-  });
-  if (!res.ok) return { adjudications: out, failure: { by: judge.provider, reason: res.error } };
+  const res = await resultFromProviderCall(() =>
+    crossReview({
+      content: subject,
+      findings: findings.map((f) => ({
+        severity: f.severity,
+        category: f.category,
+        file: f.file,
+        line: f.line,
+        description: f.description,
+      })),
+      model,
+    }),
+  );
+  if (!res.ok) {
+    return {
+      adjudications: out,
+      models: [],
+      failure: { by: judge.provider, reason: res.error },
+    };
+  }
   for (const a of res.data.adjudications) {
     if (a.index >= 0 && a.index < findings.length) {
       out[a.index] = { by: judge.provider, verdict: a.verdict, reason: a.reason };
     }
   }
-  return { adjudications: out };
+  return { adjudications: out, models: res.data.models ?? [] };
 }
 
 // Each provider's divergent findings are adjudicated by the OTHER provider (in
@@ -373,16 +422,30 @@ async function adjudicateDivergent(
   content: string,
   primary: ReviewBackend,
   secondary: ReviewBackend,
-  primaryModel?: string,
+  modelOverrides: DeliberationModelOverrides,
   maxChunkTokens?: number,
-): Promise<{ adjudications: (Adjudication | undefined)[]; failures: CrossReviewFailure[] }> {
+): Promise<{
+  adjudications: (Adjudication | undefined)[];
+  failures: CrossReviewFailure[];
+  models: ModelIdentity[];
+}> {
   const byPrimary = divergent.filter((d) => d.provider === primary.provider);
   const bySecondary = divergent.filter((d) => d.provider === secondary.provider);
   const [secAdj, priAdj] = await Promise.all([
-    // The primary's model override applies to the PRIMARY judge only; the
-    // secondary judge resolves its own default (same convention as reviews).
-    runAdjudicate(secondary, content, byPrimary.map((d) => d.finding), undefined, maxChunkTokens),
-    runAdjudicate(primary, content, bySecondary.map((d) => d.finding), primaryModel, maxChunkTokens),
+    runAdjudicate(
+      secondary,
+      content,
+      byPrimary.map((d) => d.finding),
+      modelOverrides.secondary,
+      maxChunkTokens,
+    ),
+    runAdjudicate(
+      primary,
+      content,
+      bySecondary.map((d) => d.finding),
+      modelOverrides.primary,
+      maxChunkTokens,
+    ),
   ]);
   const out: (Adjudication | undefined)[] = new Array(divergent.length).fill(undefined);
   let si = 0;
@@ -394,7 +457,10 @@ async function adjudicateDivergent(
   const failures: CrossReviewFailure[] = [];
   if (secAdj.failure) failures.push(secAdj.failure);
   if (priAdj.failure) failures.push(priAdj.failure);
-  return { adjudications: out, failures };
+  // Review identities are primary→secondary, so adjudication identities follow
+  // the same deterministic provider order even though the two calls run in parallel.
+  const models = deduplicateModelIdentities([...priAdj.models, ...secAdj.models]);
+  return { adjudications: out, failures, models };
 }
 
 // deliberate-deep tail, shared by the fresh and resume paths: if cross-review is
@@ -407,17 +473,27 @@ async function maybeAdjudicateCode(
   primary: ReviewBackend,
   secondary: ReviewBackend,
   crossReview: boolean,
-  primaryModel?: string,
+  modelOverrides: DeliberationModelOverrides,
   maxChunkTokens?: number,
 ): Promise<CodeReviewResult> {
   const dl = combined.deliberation;
   if (!crossReview || !dl || dl.divergent.length === 0) return combined;
-  const { adjudications, failures } = await adjudicateDivergent(dl.divergent, subject, primary, secondary, primaryModel, maxChunkTokens);
+  const { adjudications, failures, models } = await adjudicateDivergent(
+    dl.divergent,
+    subject,
+    primary,
+    secondary,
+    modelOverrides,
+    maxChunkTokens,
+  );
   return {
     ...combined,
+    models: deduplicateModelIdentities([...(combined.models ?? []), ...models]),
     deliberation: {
       ...dl,
-      divergent: dl.divergent.map((d, i) => (adjudications[i] ? { ...d, adjudication: adjudications[i] } : d)),
+      divergent: dl.divergent.map((d, i) =>
+        adjudications[i] ? { ...d, adjudication: adjudications[i] } : d,
+      ),
       ...(failures.length > 0 ? { cross_review_failures: failures } : {}),
     },
   };
@@ -429,17 +505,27 @@ async function maybeAdjudicatePlan(
   primary: ReviewBackend,
   secondary: ReviewBackend,
   crossReview: boolean,
-  primaryModel?: string,
+  modelOverrides: DeliberationModelOverrides,
   maxChunkTokens?: number,
 ): Promise<PlanReviewResult> {
   const dl = combined.deliberation;
   if (!crossReview || !dl || dl.divergent.length === 0) return combined;
-  const { adjudications, failures } = await adjudicateDivergent(dl.divergent, subject, primary, secondary, primaryModel, maxChunkTokens);
+  const { adjudications, failures, models } = await adjudicateDivergent(
+    dl.divergent,
+    subject,
+    primary,
+    secondary,
+    modelOverrides,
+    maxChunkTokens,
+  );
   return {
     ...combined,
+    models: deduplicateModelIdentities([...(combined.models ?? []), ...models]),
     deliberation: {
       ...dl,
-      divergent: dl.divergent.map((d, i) => (adjudications[i] ? { ...d, adjudication: adjudications[i] } : d)),
+      divergent: dl.divergent.map((d, i) =>
+        adjudications[i] ? { ...d, adjudication: adjudications[i] } : d,
+      ),
       ...(failures.length > 0 ? { cross_review_failures: failures } : {}),
     },
   };
@@ -452,10 +538,12 @@ function ownerLeafFor(
   primary: ReviewBackend,
   secondary: ReviewBackend,
   lookup?: SessionProviderLookup,
-): { ownerLeaf: ReviewBackend; otherLeaf: ReviewBackend } {
-  const owner = lookup?.(sessionId) ?? null;
+): Result<{ ownerLeaf: ReviewBackend; otherLeaf: ReviewBackend }> {
+  const ownerResult = lookupSessionOwner(sessionId, lookup);
+  if (!ownerResult.ok) return ownerResult;
+  const owner = ownerResult.data;
   const ownerLeaf = owner && secondary.providers.includes(owner) ? secondary : primary;
-  return { ownerLeaf, otherLeaf: ownerLeaf === primary ? secondary : primary };
+  return ok({ ownerLeaf, otherLeaf: ownerLeaf === primary ? secondary : primary });
 }
 
 export async function deliberatePlan(
@@ -468,32 +556,80 @@ export async function deliberatePlan(
 ): Promise<Result<PlanReviewResult>> {
   if (input.session_id) {
     // Deliberate-on-resume (ISS-010): the OWNER resumes its session; the other
-    // leaf reviews fresh. Each leaf gets input.model only if it is the primary.
-    const { ownerLeaf, otherLeaf } = ownerLeafFor(input.session_id, primary, secondary, lookup);
+    // leaf reviews fresh. A model override belongs to the resumed owner; the
+    // fresh other provider resolves its own default.
+    const owner = ownerLeafFor(input.session_id, primary, secondary, lookup);
+    if (!owner.ok) return err<PlanReviewResult>(owner.error);
+    const { ownerLeaf, otherLeaf } = owner.data;
+    if (input.model && !canOverrideModelOnResume(ownerLeaf, ownerLeaf.provider)) {
+      return err<PlanReviewResult>(sessionModelConflictMessage());
+    }
+    const modelOverrides: DeliberationModelOverrides =
+      ownerLeaf === primary ? { primary: input.model } : { secondary: input.model };
     const [ownerRes, otherRes] = await Promise.all([
-      ownerLeaf.reviewPlan({ ...input, model: ownerLeaf === primary ? input.model : undefined }),
-      otherLeaf.reviewPlan({ ...input, session_id: undefined, model: otherLeaf === primary ? input.model : undefined }),
+      resultFromProviderCall(() => ownerLeaf.reviewPlan(input)),
+      resultFromProviderCall(() =>
+        otherLeaf.reviewPlan({
+          ...input,
+          session_id: undefined,
+          model: undefined,
+        }),
+      ),
     ]);
     // Map owner/other back to primary/secondary Results (used for both the combine
     // and the primary-led bothFailed message).
     const primaryRes = ownerLeaf === primary ? ownerRes : otherRes;
     const secondaryRes = ownerLeaf === primary ? otherRes : ownerRes;
     if (ownerRes.ok && otherRes.ok && primaryRes.ok && secondaryRes.ok) {
-      const combined = combinePlan(primary.provider, primaryRes.data, secondary.provider, secondaryRes.data, ownerRes.data.session_id);
-      return ok(await maybeAdjudicatePlan(combined, input.plan, primary, secondary, crossReview, input.model, maxChunkTokens));
+      const combined = combinePlan(
+        primary.provider,
+        primaryRes.data,
+        secondary.provider,
+        secondaryRes.data,
+        ownerRes.data.session_id,
+      );
+      return ok(
+        await maybeAdjudicatePlan(
+          combined,
+          input.plan,
+          primary,
+          secondary,
+          crossReview,
+          modelOverrides,
+          maxChunkTokens,
+        ),
+      );
     }
-    if (ownerRes.ok) return ok(degradePlan(ownerLeaf.provider, ownerRes.data, otherLeaf.provider, errOf(otherRes)));
-    if (otherRes.ok) return ok(degradePlan(otherLeaf.provider, otherRes.data, ownerLeaf.provider, errOf(ownerRes)));
-    return err<PlanReviewResult>(bothFailed(errOf(primaryRes), secondary.provider, errOf(secondaryRes)));
+    if (ownerRes.ok)
+      return ok(
+        degradePlan(ownerLeaf.provider, ownerRes.data, otherLeaf.provider, errOf(otherRes)),
+      );
+    if (otherRes.ok)
+      return ok(
+        degradePlan(otherLeaf.provider, otherRes.data, ownerLeaf.provider, errOf(ownerRes)),
+      );
+    return err<PlanReviewResult>(
+      bothFailed(errOf(primaryRes), secondary.provider, errOf(secondaryRes)),
+    );
   }
 
   const [ra, rb] = await Promise.all([
-    primary.reviewPlan(input),
-    secondary.reviewPlan({ ...input, model: undefined }),
+    resultFromProviderCall(() => primary.reviewPlan(input)),
+    resultFromProviderCall(() => secondary.reviewPlan({ ...input, model: undefined })),
   ]);
   if (ra.ok && rb.ok) {
     const combined = combinePlan(primary.provider, ra.data, secondary.provider, rb.data);
-    return ok(await maybeAdjudicatePlan(combined, input.plan, primary, secondary, crossReview, input.model, maxChunkTokens));
+    return ok(
+      await maybeAdjudicatePlan(
+        combined,
+        input.plan,
+        primary,
+        secondary,
+        crossReview,
+        { primary: input.model },
+        maxChunkTokens,
+      ),
+    );
   }
   if (ra.ok) return ok(degradePlan(primary.provider, ra.data, secondary.provider, errOf(rb)));
   if (rb.ok) return ok(degradePlan(secondary.provider, rb.data, primary.provider, errOf(ra)));
@@ -509,29 +645,76 @@ export async function deliberateCode(
   maxChunkTokens?: number,
 ): Promise<Result<CodeReviewResult>> {
   if (input.session_id) {
-    const { ownerLeaf, otherLeaf } = ownerLeafFor(input.session_id, primary, secondary, lookup);
+    const owner = ownerLeafFor(input.session_id, primary, secondary, lookup);
+    if (!owner.ok) return err<CodeReviewResult>(owner.error);
+    const { ownerLeaf, otherLeaf } = owner.data;
+    if (input.model && !canOverrideModelOnResume(ownerLeaf, ownerLeaf.provider)) {
+      return err<CodeReviewResult>(sessionModelConflictMessage());
+    }
+    const modelOverrides: DeliberationModelOverrides =
+      ownerLeaf === primary ? { primary: input.model } : { secondary: input.model };
     const [ownerRes, otherRes] = await Promise.all([
-      ownerLeaf.reviewCode({ ...input, model: ownerLeaf === primary ? input.model : undefined }),
-      otherLeaf.reviewCode({ ...input, session_id: undefined, model: otherLeaf === primary ? input.model : undefined }),
+      resultFromProviderCall(() => ownerLeaf.reviewCode(input)),
+      resultFromProviderCall(() =>
+        otherLeaf.reviewCode({
+          ...input,
+          session_id: undefined,
+          model: undefined,
+        }),
+      ),
     ]);
     const primaryRes = ownerLeaf === primary ? ownerRes : otherRes;
     const secondaryRes = ownerLeaf === primary ? otherRes : ownerRes;
     if (ownerRes.ok && otherRes.ok && primaryRes.ok && secondaryRes.ok) {
-      const combined = combineCode(primary.provider, primaryRes.data, secondary.provider, secondaryRes.data, ownerRes.data.session_id);
-      return ok(await maybeAdjudicateCode(combined, input.diff, primary, secondary, crossReview, input.model, maxChunkTokens));
+      const combined = combineCode(
+        primary.provider,
+        primaryRes.data,
+        secondary.provider,
+        secondaryRes.data,
+        ownerRes.data.session_id,
+      );
+      return ok(
+        await maybeAdjudicateCode(
+          combined,
+          input.diff,
+          primary,
+          secondary,
+          crossReview,
+          modelOverrides,
+          maxChunkTokens,
+        ),
+      );
     }
-    if (ownerRes.ok) return ok(degradeCode(ownerLeaf.provider, ownerRes.data, otherLeaf.provider, errOf(otherRes)));
-    if (otherRes.ok) return ok(degradeCode(otherLeaf.provider, otherRes.data, ownerLeaf.provider, errOf(ownerRes)));
-    return err<CodeReviewResult>(bothFailed(errOf(primaryRes), secondary.provider, errOf(secondaryRes)));
+    if (ownerRes.ok)
+      return ok(
+        degradeCode(ownerLeaf.provider, ownerRes.data, otherLeaf.provider, errOf(otherRes)),
+      );
+    if (otherRes.ok)
+      return ok(
+        degradeCode(otherLeaf.provider, otherRes.data, ownerLeaf.provider, errOf(ownerRes)),
+      );
+    return err<CodeReviewResult>(
+      bothFailed(errOf(primaryRes), secondary.provider, errOf(secondaryRes)),
+    );
   }
 
   const [ra, rb] = await Promise.all([
-    primary.reviewCode(input),
-    secondary.reviewCode({ ...input, model: undefined }),
+    resultFromProviderCall(() => primary.reviewCode(input)),
+    resultFromProviderCall(() => secondary.reviewCode({ ...input, model: undefined })),
   ]);
   if (ra.ok && rb.ok) {
     const combined = combineCode(primary.provider, ra.data, secondary.provider, rb.data);
-    return ok(await maybeAdjudicateCode(combined, input.diff, primary, secondary, crossReview, input.model, maxChunkTokens));
+    return ok(
+      await maybeAdjudicateCode(
+        combined,
+        input.diff,
+        primary,
+        secondary,
+        crossReview,
+        { primary: input.model },
+        maxChunkTokens,
+      ),
+    );
   }
   if (ra.ok) return ok(degradeCode(primary.provider, ra.data, secondary.provider, errOf(rb)));
   if (rb.ok) return ok(degradeCode(secondary.provider, rb.data, primary.provider, errOf(ra)));
@@ -550,16 +733,23 @@ export function createDeliberationBackend(
   // Budget for the cross-review subject (ISS-012). Undefined = unbounded.
   const maxChunkTokens = opts.maxChunkTokens;
   return {
-    // Presents as the primary for tagging + the session_id/model gate; but a
-    // resumed session routes to its OWNING leaf via lookup (ISS-011). The
-    // allowsModelOverrideOnResume gate stays the primary's conservative one — a
-    // secondary-owned resume combined with a model override may still be rejected;
-    // acceptable, out of scope for T-027.
+    // Presents as the primary for tagging, while owner-aware capability lookup
+    // and resume routing both target the leaf that owns the session (ISS-011).
     provider: primary.provider,
     providers: [...primary.providers, ...secondary.providers],
     allowsModelOverrideOnResume: primary.allowsModelOverrideOnResume,
-    reviewPlan: (input: PlanReviewInput) => deliberatePlan(primary, secondary, input, crossReview, lookup, maxChunkTokens),
-    reviewCode: (input: CodeReviewInput) => deliberateCode(primary, secondary, input, crossReview, lookup, maxChunkTokens),
+    allowsModelOverrideOnResumeFor: (provider) => {
+      const owner = primary.providers.includes(provider)
+        ? primary
+        : secondary.providers.includes(provider)
+          ? secondary
+          : null;
+      return owner ? canOverrideModelOnResume(owner, provider) : false;
+    },
+    reviewPlan: (input: PlanReviewInput) =>
+      deliberatePlan(primary, secondary, input, crossReview, lookup, maxChunkTokens),
+    reviewCode: (input: CodeReviewInput) =>
+      deliberateCode(primary, secondary, input, crossReview, lookup, maxChunkTokens),
     // Precommit stays failover — it runs constantly and is latency-sensitive. It
     // still routes resumes to the owning leaf via the same lookup.
     reviewPrecommit: (input: PrecommitReviewInput) =>

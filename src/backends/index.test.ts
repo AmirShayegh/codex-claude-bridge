@@ -65,6 +65,26 @@ describe('createBackend — two-provider composite', () => {
     expect(backend).toBe(compositeStub);
   });
 
+  it('injects persisted model lookup into every Codex leaf', () => {
+    const providerLookup = vi.fn();
+    const modelLookup = vi.fn();
+    const config = { ...DEFAULT_CONFIG, provider: 'gemini' as const, mode: 'deliberate' as const };
+
+    createBackend(config, undefined, providerLookup, modelLookup);
+
+    expect(createCodexBackend).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: 'codex' }),
+      undefined,
+      { lookupSessionModel: modelLookup },
+    );
+    expect(createCompositeBackend).toHaveBeenCalledWith(
+      geminiStub,
+      codexStub,
+      config,
+      providerLookup,
+    );
+  });
+
   it('builds the secondary leaf with the other provider and a cleared model pin', () => {
     createBackend({ ...DEFAULT_CONFIG, provider: 'codex', model: 'gpt-5.4' });
     expect(createGeminiBackend).toHaveBeenCalledWith(

@@ -1,0 +1,31 @@
+{
+  "components": [
+    "review-lenses"
+  ],
+  "createdBy": "review-lenses:error-handling",
+  "dedupeKey": "review-lenses:df3cb20b2fb5062a24797436eedeb3363046487e2d95f7e5479d8dea29c09b55",
+  "discoveredDate": "2026-07-13",
+  "displayId": "ISS-025",
+  "id": "ISS-025",
+  "impact": "If either provider rejects its promise instead of returning a Result, this Promise.all rejects immediately, so the following ra.ok/rb.ok degradation logic never runs and a successful contributor is discarded. I checked the resume and code paths and found the same unguarded pattern at lines 556, 641, and 684; adjudication at line 421 can likewise erase already-successful main reviews when an optional cross-review rejects. I also checked the lifecycle tests and confirmed backend rejection is an explicitly supported failure scenario, so the ReviewBackend type cannot guarantee these promises never reject.",
+  "location": [
+    "src/backends/deliberation.ts:601"
+  ],
+  "phase": null,
+  "relatedTickets": [
+    "T-038"
+  ],
+  "resolution": "Resolved in T-038 by wrapping all deliberation reviewer and adjudicator provider calls in a rejection-to-Result boundary. Rejected peers now degrade safely with a sanitized UNKNOWN_ERROR while successful results and model contributions are preserved.",
+  "resolvedDate": "2026-07-13",
+  "severity": "high",
+  "sourceRefs": [
+    {
+      "contentHash": "4675a15ea3e27afd5395914e8147729a9b7bd1cbc3550a3c000edd433af5faf4",
+      "path": "src/backends/deliberation.ts",
+      "reviewId": "lens-mrj0adky",
+      "startLine": 601
+    }
+  ],
+  "status": "resolved",
+  "title": "[pre-existing] [graceful-degradation] If either provider rejects its promise instead of returning "
+}

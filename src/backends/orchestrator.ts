@@ -6,7 +6,7 @@ import {
   PlanReviewResultSchema,
   CodeReviewResultSchema,
   PrecommitResultSchema,
-  CrossReviewResultSchema,
+  CrossReviewResponseSchema,
   CodeFindingSeveritySchema,
 } from '../review/types.js';
 import type {
@@ -14,6 +14,7 @@ import type {
   CodeReviewResult,
   PrecommitResult,
   CrossReviewResult,
+  ModelIdentity,
   CodeFinding,
   CodeFindingSeverity,
 } from '../review/types.js';
@@ -28,12 +29,15 @@ import { chunkDiff, estimateTokens } from '../utils/chunking.js';
 import { filterByFiles, formatForPrompt } from '../config/copilot-instructions.js';
 import type { CopilotInstructions } from '../config/copilot-instructions.js';
 import { extractFilesFromDiff } from '../utils/diff-files.js';
+import { ModelSelectorSchema } from '../utils/input-validation.js';
+import type { ReviewProvider } from '../config/types.js';
 import type {
   PlanReviewInput,
   CodeReviewInput,
   PrecommitReviewInput,
   CrossReviewInput,
 } from './backend.js';
+import { escapeTerminalControls } from '../utils/terminal.js';
 
 // Provider-agnostic review orchestration shared by every backend. Carries no
 // SDK/provider assumptions: the per-turn model call, error classification, and
@@ -148,6 +152,8 @@ const PlanReviewResponseSchema = PlanReviewResultSchema.omit({
   provider: true,
   review_mode: true,
   deliberation: true,
+  models: true,
+  provenance: true,
 });
 const CodeReviewResponseSchema = CodeReviewResultSchema.omit({
   session_id: true,
@@ -155,12 +161,16 @@ const CodeReviewResponseSchema = CodeReviewResultSchema.omit({
   provider: true,
   review_mode: true,
   deliberation: true,
+  models: true,
+  provenance: true,
 });
 const PrecommitResponseSchema = PrecommitResultSchema.omit({
   session_id: true,
   chunks_reviewed: true,
   provider: true,
   review_mode: true,
+  models: true,
+  provenance: true,
 });
 
 // The exact model-facing schemas handed to the provider SDKs (via toJSONSchema in
@@ -172,6 +182,7 @@ export const RESPONSE_SCHEMAS = {
   plan: PlanReviewResponseSchema,
   code: CodeReviewResponseSchema,
   precommit: PrecommitResponseSchema,
+  cross: CrossReviewResponseSchema,
 } as const;
 
 export function sessionModelConflictMessage(): string {
@@ -191,10 +202,10 @@ export interface TurnParams {
   sessionId?: string;
   // Applied only when starting a fresh session; omitted on resume.
   model?: string;
-  // The model the active session actually runs on. Always set; used for
-  // error-context so messages report the correct model even when `model` is
-  // intentionally undefined on resumed chunks of a chunked review.
-  resolvedModel: string;
+  // The concrete identity retained/selected for the active session, when the
+  // bridge knows it. It stays undefined for an unrecorded legacy Codex resume
+  // instead of substituting today's default. Used for error context otherwise.
+  resolvedModel?: string;
 }
 
 export type TurnRunner = <T extends Record<string, unknown>>(
@@ -203,6 +214,7 @@ export type TurnRunner = <T extends Record<string, unknown>>(
 
 export interface ReviewFlowDeps {
   config: ReviewBridgeConfig;
+  provider: ReviewProvider;
   copilotInstructions?: CopilotInstructions;
   // When false (e.g. Codex, whose SDK reasserts --model on resume) the flow
   // rejects session_id + model and omits the model on resumed chunks. When true
@@ -212,12 +224,137 @@ export interface ReviewFlowDeps {
   // per-call override or config.model (undefined if neither set). Each backend
   // maps 'latest' (and unset) to its own newest supported model — Codex bounded
   // by the SDK pin, Gemini via `agy models` — and returns an explicit pin
-  // unchanged (L-006). Always yields a usable id (safe fallback, never throws).
+  // unchanged (L-006). Orchestration treats this as an untrusted boundary and
+  // validates the returned label before it reaches an SDK or subprocess.
   resolveModel: (requested: string | undefined) => Promise<string>;
+  // A resumed Codex turn must retain the conversation's known identity instead
+  // of substituting today's configured default. Storage/registry lookups are
+  // injected so this provider-neutral module never imports persistence.
+  lookupSessionModel?: (sessionId: string) => ModelIdentity | null;
+  // Codex can expose stronger control-plane evidence in its local rollout.
+  // Gemini intentionally leaves this undefined because agy has no equivalent.
+  observeSessionModel?: (sessionId: string) => Promise<string | undefined>;
   // Whether chunks 2..N of one review resume chunk 1's session. Codex resumes
   // (one thread per review); Gemini reviews each chunk independently to avoid
   // O(N²) context growth, so its review session id is chunk 1's.
   resumesAcrossChunks: boolean;
+}
+
+interface PreparedModel {
+  requested: string | null;
+  resolved: string | null;
+  turnResolved?: string;
+  known: ModelIdentity | null;
+}
+
+function safeModel(value: string | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  const parsed = ModelSelectorSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
+function lookupKnownModel(deps: ReviewFlowDeps, sessionId: string): ModelIdentity | null {
+  try {
+    return deps.lookupSessionModel?.(sessionId) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function prepareModel(
+  input: { session_id?: string; model?: string },
+  deps: ReviewFlowDeps,
+  quiet = false,
+): Promise<Result<PreparedModel>> {
+  // A Codex resume must retain the bridge's prior identity rather than replacing
+  // it with today's configured default. Fresh runtime observation may disagree;
+  // that mismatch is reported after the successful turn.
+  if (input.session_id && !deps.allowsModelOverrideOnResume) {
+    const known = lookupKnownModel(deps, input.session_id);
+    const resolved = safeModel(known?.resolved);
+    const observed = safeModel(known?.observed);
+    return ok({
+      requested: null,
+      resolved,
+      turnResolved: resolved ?? observed ?? undefined,
+      known,
+    });
+  }
+
+  const requestedRaw = input.model ?? deps.config.model;
+  const resolvedResult = await resolveModelValidated(deps.resolveModel, requestedRaw, quiet);
+  if (!resolvedResult.ok) return resolvedResult;
+  return ok({
+    requested: safeModel(requestedRaw),
+    resolved: resolvedResult.data,
+    turnResolved: resolvedResult.data,
+    known: null,
+  });
+}
+
+function normalizedModel(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+export function deduplicateModelIdentities(models: readonly ModelIdentity[]): ModelIdentity[] {
+  const seen = new Set<string>();
+  const out: ModelIdentity[] = [];
+  for (const model of models) {
+    const key = JSON.stringify([
+      model.provider,
+      model.role,
+      model.requested,
+      model.resolved,
+      model.observed,
+      model.evidence,
+    ]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(model);
+  }
+  return out;
+}
+
+async function enrichModelIdentity<R extends { session_id: string; models?: ModelIdentity[] }>(
+  result: Result<R>,
+  deps: ReviewFlowDeps,
+  prepared: PreparedModel,
+  role: ModelIdentity['role'],
+): Promise<Result<R>> {
+  if (!result.ok) return result;
+
+  let observed = safeModel(prepared.known?.observed);
+  if (deps.observeSessionModel) {
+    try {
+      observed = safeModel(await deps.observeSessionModel(result.data.session_id)) ?? observed;
+    } catch {
+      // Observation is optional evidence. The provider result remains valid.
+    }
+  }
+
+  const resolved = prepared.resolved ?? safeModel(prepared.known?.resolved);
+  const evidence: ModelIdentity['evidence'] = observed
+    ? 'runtime_session_record'
+    : resolved
+      ? 'bridge_selection'
+      : 'unavailable';
+  const identity: ModelIdentity = {
+    provider: deps.provider,
+    role,
+    requested: prepared.requested,
+    resolved,
+    observed,
+    evidence,
+  };
+
+  if (resolved && observed && normalizedModel(resolved) !== normalizedModel(observed)) {
+    console.error(
+      `[codex-bridge] warning: model identity mismatch for ${deps.provider}: ` +
+        `bridge selected "${escapeTerminalControls(resolved)}" but runtime recorded "${escapeTerminalControls(observed)}"`,
+    );
+  }
+
+  return ok({ ...result.data, models: [identity] });
 }
 
 export async function runPlanReview(
@@ -225,7 +362,7 @@ export async function runPlanReview(
   deps: ReviewFlowDeps,
   turn: TurnRunner,
 ): Promise<Result<PlanReviewResult>> {
-  const { config, copilotInstructions, allowsModelOverrideOnResume, resolveModel } = deps;
+  const { config, copilotInstructions, allowsModelOverrideOnResume } = deps;
   if (!allowsModelOverrideOnResume && input.session_id && input.model) {
     return err<PlanReviewResult>(sessionModelConflictMessage());
   }
@@ -235,29 +372,50 @@ export async function runPlanReview(
     focus: config.review_standards.plan_review.focus,
     depth: config.review_standards.plan_review.depth,
   });
-  const resolved = await resolveModelLogged(resolveModel, input.model ?? config.model);
-  return turn<Omit<PlanReviewResult, 'session_id'>>({
+  const preparedResult = await prepareModel(input, deps);
+  if (!preparedResult.ok) return preparedResult;
+  const prepared = preparedResult.data;
+  const result = await turn<Omit<PlanReviewResult, 'session_id'>>({
     prompt,
     responseSchema: PlanReviewResponseSchema,
     sessionId: input.session_id,
-    model: perTurnModel(resolved, input.session_id, allowsModelOverrideOnResume),
-    resolvedModel: resolved,
+    model: perTurnModel(prepared.turnResolved, input.session_id, allowsModelOverrideOnResume),
+    resolvedModel: prepared.turnResolved,
   });
+  return enrichModelIdentity(result, deps, prepared, 'review');
 }
 
 // Resolve the model and, when the caller didn't pin one, narrate what
 // 'latest'/unset resolved to. The result schema is fixed, so stderr is the
 // surfacing point for "which model actually ran" (T-019). An explicit pin is
 // self-evident and stays quiet.
-async function resolveModelLogged(
+async function resolveModelValidated(
   resolveModel: (requested: string | undefined) => Promise<string>,
   requested: string | undefined,
-): Promise<string> {
-  const resolved = await resolveModel(requested);
-  if (requested === undefined || requested === 'latest') {
-    console.error(`[codex-bridge] resolved model: ${resolved} (requested: ${requested ?? 'default'})`);
+  quiet: boolean,
+): Promise<Result<string>> {
+  let resolvedRaw: string;
+  try {
+    resolvedRaw = await resolveModel(requested);
+  } catch {
+    return err(`${ErrorCode.MODEL_ERROR}: model resolver failed`);
   }
-  return resolved;
+
+  // Treat the resolver as an untrusted provider boundary too. Its result is used
+  // as an SDK/subprocess argument, so normalize and validate it before the first
+  // turn instead of merely nulling the response metadata after the raw value ran.
+  const resolved = ModelSelectorSchema.safeParse(resolvedRaw);
+  if (!resolved.success) {
+    return err(`${ErrorCode.MODEL_ERROR}: model resolver returned an invalid model label`);
+  }
+
+  if (!quiet && (requested === undefined || requested === 'latest')) {
+    console.error(
+      `[codex-bridge] resolved model: ${escapeTerminalControls(resolved.data)} ` +
+        `(requested: ${escapeTerminalControls(requested ?? 'default')})`,
+    );
+  }
+  return ok(resolved.data);
 }
 
 // The model to apply on a given turn. Backends that reassert model on resume
@@ -265,7 +423,7 @@ async function resolveModelLogged(
 // model it was created with. Backends that allow a mid-session model change
 // (Gemini) always send the resolved model.
 function perTurnModel(
-  resolved: string,
+  resolved: string | undefined,
   sessionId: string | undefined,
   allowsModelOverrideOnResume: boolean,
 ): string | undefined {
@@ -292,22 +450,22 @@ export async function runCodeReview(
   deps: ReviewFlowDeps,
   turn: TurnRunner,
 ): Promise<Result<CodeReviewResult>> {
-  const { config, copilotInstructions, allowsModelOverrideOnResume, resolveModel, resumesAcrossChunks } =
-    deps;
+  const { config, copilotInstructions, allowsModelOverrideOnResume, resumesAcrossChunks } = deps;
   if (!allowsModelOverrideOnResume && input.session_id && input.model) {
     return err<CodeReviewResult>(sessionModelConflictMessage());
   }
   if (input.diff.length > 20 && !looksLikeDiff(input.diff)) {
     return err<CodeReviewResult>(
       `${ErrorCode.INVALID_INPUT}: Input doesn't look like a git diff. ` +
-      `Expected unified diff format (with 'diff --git', '---/+++', or '@@' markers). ` +
-      `If reviewing a plan or description, use review_plan instead.`,
+        `Expected unified diff format (with 'diff --git', '---/+++', or '@@' markers). ` +
+        `If reviewing a plan or description, use review_plan instead.`,
     );
   }
   // Match prompt builder logic: empty array falls through to config criteria
-  const criteria = input.criteria && input.criteria.length > 0
-    ? input.criteria
-    : config.review_standards.code_review.criteria;
+  const criteria =
+    input.criteria && input.criteria.length > 0
+      ? input.criteria
+      : config.review_standards.code_review.criteria;
   const files = extractFilesFromDiff(input.diff);
   const instrText = formatForPrompt(filterByFiles(copilotInstructions, files));
   const variableOverhead = computeVariableOverhead([
@@ -319,7 +477,10 @@ export async function runCodeReview(
   // Floor of 500 prevents zero/negative budget when overhead exceeds max_chunk_tokens.
   // In practice this means very small max_chunk_tokens values may produce chunks
   // larger than configured — this is preferable to disabling chunking entirely.
-  const diffBudget = Math.max(config.max_chunk_tokens - PROMPT_OVERHEAD_TOKENS - variableOverhead, 500);
+  const diffBudget = Math.max(
+    config.max_chunk_tokens - PROMPT_OVERHEAD_TOKENS - variableOverhead,
+    500,
+  );
   const chunks = chunkDiff(input.diff, diffBudget);
 
   // Empty diff — synthetic approve (no model resolution needed)
@@ -329,10 +490,13 @@ export async function runCodeReview(
       summary: 'No changes to review.',
       findings: [],
       session_id: input.session_id ?? randomUUID(),
+      models: [],
     });
   }
 
-  const resolved = await resolveModelLogged(resolveModel, input.model ?? config.model);
+  const preparedResult = await prepareModel(input, deps);
+  if (!preparedResult.ok) return preparedResult;
+  const prepared = preparedResult.data;
 
   // Single chunk — standard path (no chunks_reviewed)
   if (chunks.length === 1) {
@@ -342,13 +506,14 @@ export async function runCodeReview(
       criteria: config.review_standards.code_review.criteria,
       require_tests: config.review_standards.code_review.require_tests,
     });
-    return turn<Omit<CodeReviewResult, 'session_id' | 'chunks_reviewed'>>({
+    const result = await turn<Omit<CodeReviewResult, 'session_id' | 'chunks_reviewed'>>({
       prompt,
       responseSchema: CodeReviewResponseSchema,
       sessionId: input.session_id,
-      model: perTurnModel(resolved, input.session_id, allowsModelOverrideOnResume),
-      resolvedModel: resolved,
+      model: perTurnModel(prepared.turnResolved, input.session_id, allowsModelOverrideOnResume),
+      resolvedModel: prepared.turnResolved,
     });
+    return enrichModelIdentity(result, deps, prepared, 'review');
   }
 
   // Multi-chunk — sequential review with per-chunk timeout
@@ -373,8 +538,8 @@ export async function runCodeReview(
       prompt,
       responseSchema: CodeReviewResponseSchema,
       sessionId: chunkSession,
-      model: perTurnModel(resolved, chunkSession, allowsModelOverrideOnResume),
-      resolvedModel: resolved,
+      model: perTurnModel(prepared.turnResolved, chunkSession, allowsModelOverrideOnResume),
+      resolvedModel: prepared.turnResolved,
     });
 
     if (!result.ok) {
@@ -395,7 +560,12 @@ export async function runCodeReview(
   }
 
   const finalSessionId = resumesAcrossChunks ? threaded : reviewSessionId;
-  return ok(mergeCodeResults(chunkResults, finalSessionId!));
+  return enrichModelIdentity(
+    ok(mergeCodeResults(chunkResults, finalSessionId!)),
+    deps,
+    prepared,
+    'review',
+  );
 }
 
 export async function runPrecommitReview(
@@ -403,16 +573,15 @@ export async function runPrecommitReview(
   deps: ReviewFlowDeps,
   turn: TurnRunner,
 ): Promise<Result<PrecommitResult>> {
-  const { config, copilotInstructions, allowsModelOverrideOnResume, resolveModel, resumesAcrossChunks } =
-    deps;
+  const { config, copilotInstructions, allowsModelOverrideOnResume, resumesAcrossChunks } = deps;
   if (!allowsModelOverrideOnResume && input.session_id && input.model) {
     return err<PrecommitResult>(sessionModelConflictMessage());
   }
   if (input.diff.length > 20 && !looksLikeDiff(input.diff)) {
     return err<PrecommitResult>(
       `${ErrorCode.INVALID_INPUT}: Input doesn't look like a git diff. ` +
-      `Expected unified diff format (with 'diff --git', '---/+++', or '@@' markers). ` +
-      `If reviewing a plan or description, use review_plan instead.`,
+        `Expected unified diff format (with 'diff --git', '---/+++', or '@@' markers). ` +
+        `If reviewing a plan or description, use review_plan instead.`,
     );
   }
   const checklist = input.checklist ?? [];
@@ -426,7 +595,10 @@ export async function runPrecommitReview(
   // Floor of 500 prevents zero/negative budget when overhead exceeds max_chunk_tokens.
   // In practice this means very small max_chunk_tokens values may produce chunks
   // larger than configured — this is preferable to disabling chunking entirely.
-  const diffBudget = Math.max(config.max_chunk_tokens - PROMPT_OVERHEAD_TOKENS - variableOverhead, 500);
+  const diffBudget = Math.max(
+    config.max_chunk_tokens - PROMPT_OVERHEAD_TOKENS - variableOverhead,
+    500,
+  );
   const chunks = chunkDiff(input.diff, diffBudget);
 
   // Empty diff — synthetic pass (no model resolution needed)
@@ -436,10 +608,13 @@ export async function runPrecommitReview(
       blockers: [],
       warnings: [],
       session_id: input.session_id ?? randomUUID(),
+      models: [],
     });
   }
 
-  const resolved = await resolveModelLogged(resolveModel, input.model ?? config.model);
+  const preparedResult = await prepareModel(input, deps);
+  if (!preparedResult.ok) return preparedResult;
+  const prepared = preparedResult.data;
 
   // Single chunk — standard path (no chunks_reviewed)
   if (chunks.length === 1) {
@@ -448,13 +623,14 @@ export async function runPrecommitReview(
       copilot_instructions: precommitInstrText,
       block_on: config.review_standards.precommit.block_on,
     });
-    return turn<Omit<PrecommitResult, 'session_id' | 'chunks_reviewed'>>({
+    const result = await turn<Omit<PrecommitResult, 'session_id' | 'chunks_reviewed'>>({
       prompt,
       responseSchema: PrecommitResponseSchema,
       sessionId: input.session_id,
-      model: perTurnModel(resolved, input.session_id, allowsModelOverrideOnResume),
-      resolvedModel: resolved,
+      model: perTurnModel(prepared.turnResolved, input.session_id, allowsModelOverrideOnResume),
+      resolvedModel: prepared.turnResolved,
     });
+    return enrichModelIdentity(result, deps, prepared, 'review');
   }
 
   // Multi-chunk — sequential review
@@ -469,14 +645,17 @@ export async function runPrecommitReview(
 
   for (let i = 0; i < chunks.length; i++) {
     const chunkHeader = `Chunk ${i + 1} of ${chunks.length}: checking the following files only.`;
-    const prompt = buildPrecommitPrompt({ ...input, diff: chunks[i], chunkHeader }, precommitConfig);
+    const prompt = buildPrecommitPrompt(
+      { ...input, diff: chunks[i], chunkHeader },
+      precommitConfig,
+    );
     const chunkSession = chunkSessionFor(i, resumesAcrossChunks, threaded, input.session_id);
     const result = await turn<Omit<PrecommitResult, 'session_id' | 'chunks_reviewed'>>({
       prompt,
       responseSchema: PrecommitResponseSchema,
       sessionId: chunkSession,
-      model: perTurnModel(resolved, chunkSession, allowsModelOverrideOnResume),
-      resolvedModel: resolved,
+      model: perTurnModel(prepared.turnResolved, chunkSession, allowsModelOverrideOnResume),
+      resolvedModel: prepared.turnResolved,
     });
 
     if (!result.ok) {
@@ -495,7 +674,12 @@ export async function runPrecommitReview(
   }
 
   const finalSessionId = resumesAcrossChunks ? threaded : reviewSessionId;
-  return ok(mergePrecommitResults(chunkResults, finalSessionId!));
+  return enrichModelIdentity(
+    ok(mergePrecommitResults(chunkResults, finalSessionId!)),
+    deps,
+    prepared,
+    'review',
+  );
 }
 
 // Cross-review (deliberate-deep): adjudicate another reviewer's findings in a
@@ -508,14 +692,17 @@ export async function runCrossReview(
 ): Promise<Result<CrossReviewResult>> {
   // Resolve quietly: cross-review only runs after this provider's primary review
   // already narrated the same resolution, so logging again just duplicates stderr.
-  const resolved = await deps.resolveModel(input.model ?? deps.config.model);
-  const result = await turn<CrossReviewResult>({
+  const preparedResult = await prepareModel({ model: input.model }, deps, true);
+  if (!preparedResult.ok) return preparedResult;
+  const prepared = preparedResult.data;
+  const result = await turn<{ adjudications: CrossReviewResult['adjudications'] }>({
     prompt: buildCrossReviewPrompt(input),
-    responseSchema: CrossReviewResultSchema,
-    model: perTurnModel(resolved, undefined, deps.allowsModelOverrideOnResume),
-    resolvedModel: resolved,
+    responseSchema: CrossReviewResponseSchema,
+    model: perTurnModel(prepared.turnResolved, undefined, deps.allowsModelOverrideOnResume),
+    resolvedModel: prepared.turnResolved,
   });
-  if (!result.ok) return result;
-  const { session_id: _sessionId, ...data } = result.data;
+  const enriched = await enrichModelIdentity(result, deps, prepared, 'adjudication');
+  if (!enriched.ok) return enriched;
+  const { session_id: _sessionId, ...data } = enriched.data;
   return ok(data);
 }

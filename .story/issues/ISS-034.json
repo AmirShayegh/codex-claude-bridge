@@ -1,0 +1,32 @@
+{
+  "components": [
+    "tools/review-status",
+    "review/lifecycle",
+    "server"
+  ],
+  "createdBy": "runnerkit-17 (peer Claude session) via triage",
+  "dedupeKey": "runnerkit-feedback-2026-09-04:4",
+  "discoveredDate": "2026-09-05",
+  "id": "ISS-034",
+  "impact": "All three review tools block until the provider returns (timeout_seconds default, up to 600 s here). Peer reports reviews routinely exceed the MCP client's ~120 s foreground window and get backgrounded by the client. review_status exists but only reports on a review the same call started, so there is no supported \"start, get session_id immediately, poll review_status, fetch result\" flow. Fix direction: add an optional `wait: false` (or `mode: \"poll\"`) parameter on review_plan/review_code/review_precommit that admits the review through the T-038 lifecycle registry, returns `{status: in_progress, session_id}` at once, and lets review_status return the completed result from the registry/history once done. Interacts with the T-038 lifecycle admission (4 global, 1 per session) and the SQLite outcome path.",
+  "location": [],
+  "phase": null,
+  "relatedTickets": [
+    "T-038"
+  ],
+  "resolution": null,
+  "resolvedDate": null,
+  "severity": "medium",
+  "sourceRefs": [
+    {
+      "contentHash": "727804cb9d34259d90349abb79b1f3f5a5924799ab6c46ef797259176a869c06",
+      "endLine": 56,
+      "path": "src/tools/review-status.ts",
+      "reviewId": "runnerkit-feedback-2026-09-04",
+      "revision": "a066fba339b032c0bd20f8bc3737bbaa404bb6b9",
+      "startLine": 20
+    }
+  ],
+  "status": "open",
+  "title": "No non-blocking review start: long reviews exceed the MCP client's foreground window and review_status cannot recover a result the client abandoned"
+}

@@ -1,0 +1,35 @@
+{
+  "components": [
+    "utils/git",
+    "utils/resolve-diff",
+    "tools/review-precommit",
+    "tools/review-code"
+  ],
+  "createdBy": "external-review:care2talk-9e (two independent seat reports; code-verified in this session)",
+  "dedupeKey": "care2talk-9e-2026-09-03:worktree-capture-cwd",
+  "discoveredDate": "2026-09-04",
+  "id": "ISS-027",
+  "impact": "Every git capture in src/utils/git.ts calls execAsync with no cwd option, so `git diff --cached` / `git diff HEAD` run in whatever directory the client spawned the stdio server in. None of the MCP tools (review_code auto_diff, review_precommit) accept a cwd/repo path, and a stdio server has no way to learn the caller's current directory. A session that later moves into a git worktree (e.g. `.claude/worktrees/<name>`) therefore captures the main checkout's index: review_precommit returns ready_to_commit with warning \"No staged changes found\" while a full staged diff exists in the worktree, and review_code auto_diff reports \"No changes found to review\". Reported independently by two external seats hours apart (care2talk-39 in ~/Developer/ReactNative, c2t-design-71 in a c2t-design worktree); each burned a review call and a from-scratch diagnosis. Affects both codex-bridge and codex-bridge-local. Workaround: pass the diff explicitly. Fix direction: accept an optional `cwd` (or `repo_path`) tool parameter validated as an existing directory inside a git work tree, thread it through resolve-diff/git helpers as execAsync's cwd, and have the CLI default it to process.cwd(). See ISS-028 for the cheaper first step of naming the capture directory in the result.",
+  "location": [
+    "src/utils/git.ts:29",
+    "src/utils/git.ts:64",
+    "src/utils/resolve-diff.ts:24"
+  ],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": null,
+  "resolvedDate": null,
+  "severity": "high",
+  "sourceRefs": [
+    {
+      "contentHash": "5d2233a4cce57d6b3027a38164cf7842a387d4baf1e1d67fcf207a6b741d42c4",
+      "endLine": 79,
+      "path": "src/utils/git.ts",
+      "reviewId": "care2talk-9e-2026-09-03",
+      "revision": "a066fba339b032c0bd20f8bc3737bbaa404bb6b9",
+      "startLine": 29
+    }
+  ],
+  "status": "open",
+  "title": "Git auto-capture runs in the MCP server's spawn cwd, not the caller's worktree; worktree sessions get a false \"No staged changes found\""
+}

@@ -60,21 +60,54 @@ Once set up, Claude Code gains five new tools:
 - **`review_status`** — Check whether a review is still in progress, completed, or failed.
 - **`review_history`** — Look up past reviews by session or count.
 
-All tools return structured JSON that Claude Code can act on directly.
+All successful review calls return structured JSON with `models[]` (the providers/models that
+contributed) and `provenance` (whether the result was durably recorded, memory-only, or synthetic).
+
+### Responding-model evidence
+
+Each `models[]` entry reports:
+
+```json
+{
+  "provider": "codex",
+  "role": "review",
+  "requested": null,
+  "resolved": "gpt-5.6-sol",
+  "observed": "gpt-5.6-sol",
+  "evidence": "runtime_session_record"
+}
+```
+
+- `requested` is the per-call/config selector considered for the turn. It is `null` for provider
+  defaults and Codex resumes where no model override is applied.
+- `resolved` is the concrete label selected or retained by the bridge.
+- `observed` is a runtime-recorded label when one is available. Codex can read this from its local
+  session record; Gemini currently reports `null` because `agy` has no equivalent observation.
+- `role` distinguishes normal review turns from deliberate-deep adjudication turns.
+- `evidence` says whether identity came from a runtime session record, bridge selection, or was
+  unavailable.
+
+This is control-plane evidence about the model labels selected and recorded by the clients. It is
+not cryptographic proof of underlying weights or an audit of a provider's internal routing.
+`models[]` lists successful contributors, not every provider that received input, so it is not a
+data-egress audit.
 
 ## Usage (MCP)
 
 In Claude Code, just describe what you want reviewed. Claude Code will pick the right tool:
 
 **Plan review:**
+
 > "Review this implementation plan before I start coding."
 > "Check my plan for security issues and scalability risks."
 
 **Code review:**
+
 > "Review the changes I just made." (Claude Code runs `git diff` and passes it)
 > "Review this diff for bugs and security issues."
 
 **Pre-commit check:**
+
 > "Run a pre-commit check on my staged changes."
 > "Check if these changes are safe to commit."
 
@@ -116,30 +149,30 @@ Add `--json` to any command for raw JSON output. Use `--help` to see all options
 
 Send an implementation plan for architectural/feasibility review.
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `plan` | string | yes | The implementation plan to review |
-| `context` | string | no | Project context and constraints |
-| `focus` | string[] | no | Review focus areas (e.g. `["architecture", "security"]`) |
-| `depth` | `"quick"` \| `"thorough"` | no | Review depth |
-| `session_id` | string | no | Continue from a previous review session |
-| `model` | string | no | Override the model for this call (e.g. `"gpt-5.5"` or `"latest"`). With Codex this can't be combined with `session_id` (a resumed thread keeps its model); Gemini allows changing model on a resumed session. |
+| Parameter    | Type                      | Required | Description                                                                                                                                                                                                                                                                 |
+| ------------ | ------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `plan`       | string                    | yes      | The implementation plan to review                                                                                                                                                                                                                                           |
+| `context`    | string                    | no       | Project context and constraints                                                                                                                                                                                                                                             |
+| `focus`      | string[]                  | no       | Review focus areas (e.g. `["architecture", "security"]`)                                                                                                                                                                                                                    |
+| `depth`      | `"quick"` \| `"thorough"` | no       | Review depth                                                                                                                                                                                                                                                                |
+| `session_id` | string                    | no       | Continue from a previous review session                                                                                                                                                                                                                                     |
+| `model`      | string                    | no       | Override the model for this call (e.g. `"gpt-5.5"` or `"latest"`). With Codex this can't be combined with `session_id`; the bridge retains the prior resolved identity and reports any different runtime-observed label. Gemini allows changing model on a resumed session. |
 
-Returns: `{ verdict, summary, findings[], session_id }`
+Returns: `{ verdict, summary, findings[], session_id, models[], provenance }`
 
 ### `review_code`
 
 Send a code diff for code review.
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `diff` | string | yes | Git diff to review |
-| `context` | string | no | Intent of the changes |
-| `session_id` | string | no | Continue from previous review (e.g. plan review session) |
-| `criteria` | string[] | no | Review criteria (e.g. `["bugs", "security", "performance"]`) |
-| `model` | string | no | Override the model for this call (e.g. `"gpt-5.5"` or `"latest"`). With Codex this can't be combined with `session_id` (a resumed thread keeps its model); Gemini allows changing model on a resumed session. |
+| Parameter    | Type     | Required | Description                                                                                                                                                                                                                                    |
+| ------------ | -------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `diff`       | string   | yes      | Git diff to review                                                                                                                                                                                                                             |
+| `context`    | string   | no       | Intent of the changes                                                                                                                                                                                                                          |
+| `session_id` | string   | no       | Continue from previous review (e.g. plan review session)                                                                                                                                                                                       |
+| `criteria`   | string[] | no       | Review criteria (e.g. `["bugs", "security", "performance"]`)                                                                                                                                                                                   |
+| `model`      | string   | no       | Override the model for this call (e.g. `"gpt-5.5"` or `"latest"`). With Codex this can't be combined with `session_id`; compare `resolved` and `observed` to see what the runtime recorded. Gemini allows changing model on a resumed session. |
 
-Returns: `{ verdict, summary, findings[], session_id }`
+Returns: `{ verdict, summary, findings[], session_id, models[], provenance }`
 
 Findings include `file` and `line` references when available.
 
@@ -147,23 +180,23 @@ Findings include `file` and `line` references when available.
 
 Quick pre-commit sanity check. Auto-captures staged git changes by default.
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `auto_diff` | boolean | no | Auto-capture `git diff --staged` (default: `true`) |
-| `diff` | string | no | Explicit diff instead of auto-capture |
-| `session_id` | string | no | Continue from previous review |
-| `checklist` | string[] | no | Custom pre-commit checks |
-| `model` | string | no | Override the model for this call (e.g. `"gpt-5.5"` or `"latest"`). With Codex this can't be combined with `session_id` (a resumed thread keeps its model); Gemini allows changing model on a resumed session. |
+| Parameter    | Type     | Required | Description                                                                                                                                                                                                                                    |
+| ------------ | -------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `auto_diff`  | boolean  | no       | Auto-capture `git diff --staged` (default: `true`)                                                                                                                                                                                             |
+| `diff`       | string   | no       | Explicit diff instead of auto-capture                                                                                                                                                                                                          |
+| `session_id` | string   | no       | Continue from previous review                                                                                                                                                                                                                  |
+| `checklist`  | string[] | no       | Custom pre-commit checks                                                                                                                                                                                                                       |
+| `model`      | string   | no       | Override the model for this call (e.g. `"gpt-5.5"` or `"latest"`). With Codex this can't be combined with `session_id`; compare `resolved` and `observed` to see what the runtime recorded. Gemini allows changing model on a resumed session. |
 
-Returns: `{ ready_to_commit, blockers[], warnings[], session_id }`
+Returns: `{ ready_to_commit, blockers[], warnings[], session_id, models[], provenance }`
 
 ### `review_status`
 
 Check status of a review session.
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `session_id` | string | yes | Session ID to check |
+| Parameter    | Type   | Required | Description         |
+| ------------ | ------ | -------- | ------------------- |
+| `session_id` | string | yes      | Session ID to check |
 
 Returns: `{ status, session_id, elapsed_seconds }`
 
@@ -171,12 +204,16 @@ Returns: `{ status, session_id, elapsed_seconds }`
 
 Query past reviews.
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `session_id` | string | no | Query reviews for a specific session |
-| `last_n` | number | no | Return last N reviews (default: 10) |
+| Parameter    | Type   | Required | Description                                                        |
+| ------------ | ------ | -------- | ------------------------------------------------------------------ |
+| `session_id` | string | no       | Query reviews for a specific session                               |
+| `last_n`     | number | no       | Return 1–100 reviews (default: 10 recent; 100 for a session)       |
+| `cursor`     | string | no       | Decimal row cursor returned as `next_cursor` by the preceding page |
 
-Returns: `{ reviews[] }` with `session_id`, `type`, `verdict`, `summary`, `timestamp` per entry.
+Returns: `{ reviews[], next_cursor }`. Recent pages are newest-first; session pages are oldest-first.
+Each entry includes `models` plus `model_metadata_status` (`recorded`, `legacy_unrecorded`, or
+`invalid`). Legacy rows are never backfilled from today's defaults, and malformed stored metadata
+is returned as `models: null`.
 
 ## Configuration
 
@@ -237,20 +274,20 @@ The CLI's `--config <dir>` flag is an explicit override: it looks only at `<dir>
 
 **Codex** — default `gpt-5.6-sol`. If Sol has not reached your account yet, pin `gpt-5.5`:
 
-| Model | Description |
-|-------|-------------|
-| `gpt-5.6-sol` | Latest flagship agentic coding model (default) |
-| `gpt-5.5` | Previous flagship. Use while Sol is still rolling out to your account. |
+| Model         | Description                                                            |
+| ------------- | ---------------------------------------------------------------------- |
+| `gpt-5.6-sol` | Latest flagship agentic coding model (default)                         |
+| `gpt-5.5`     | Previous flagship. Use while Sol is still rolling out to your account. |
 
 **Gemini** — default resolves to the latest Flash via `agy models`. Effort is part of the model name:
 
-| Model | Description |
-|-------|-------------|
+| Model                       | Description                |
+| --------------------------- | -------------------------- |
 | `Gemini 3.5 Flash (Medium)` | Default — fast review line |
-| `Gemini 3.5 Flash (High)` | Higher effort |
-| `Gemini 3.1 Pro (High)` | Heavier reasoning line |
+| `Gemini 3.5 Flash (High)`   | Higher effort              |
+| `Gemini 3.1 Pro (High)`     | Heavier reasoning line     |
 
-`"latest"` resolves to the newest Flash for Gemini, or the SDK-pinned flagship for Codex. These are the models we document and recommend; the `model` field, the `model` tool parameter, and the `--model` CLI flag accept any string and forward it as-is, so you can run others. For Gemini, an unrecognized model triggers a non-blocking stderr warning (agy may silently run a different one) — run `agy models` to see the live list.
+`"latest"` resolves to the newest Flash for Gemini, or the SDK-pinned flagship for Codex. These are the models we document and recommend; the `model` field, the `model` tool parameter, and the `--model` CLI flag accept any trimmed, control-free selector up to 200 characters, so you can run others. For Gemini, an unrecognized model triggers a non-blocking stderr warning (agy may silently run a different one) — run `agy models` to see the live list.
 
 ### Provider failover
 
@@ -279,21 +316,36 @@ The result keeps the usual shape (a merged `verdict`/`findings`, worst-verdict w
 ```json
 {
   "verdict": "reject",
-  "findings": [ /* deduped union of both providers */ ],
+  "findings": [
+    /* deduped union of both providers */
+  ],
   "deliberation": {
     "providers": ["codex", "gemini"],
-    "verdicts": [ { "provider": "codex", "verdict": "request_changes" }, { "provider": "gemini", "verdict": "reject" } ],
-    "agreement": "conflict",                 // agree | mixed | conflict
-    "agreed":    [ /* findings BOTH flagged — high confidence */ ],
-    "divergent": [ { "provider": "gemini", "finding": { /* only one flagged */ } } ]
+    "verdicts": [
+      { "provider": "codex", "verdict": "request_changes" },
+      { "provider": "gemini", "verdict": "reject" }
+    ],
+    "agreement": "conflict", // agree | mixed | conflict
+    "agreed": [
+      /* findings BOTH flagged — high confidence */
+    ],
+    "divergent": [
+      {
+        "provider": "gemini",
+        "finding": {
+          /* only one flagged */
+        }
+      }
+    ]
   }
 }
 ```
 
 Notes:
+
 - **Cost/egress:** deliberation always runs both providers and sends the diff to both vendors — best for high-stakes reviews, not every precommit. `review_precommit` stays failover under this mode.
 - **Degrades gracefully:** if one provider is out of usage, you get the other's review with `deliberation.degraded` set and `deliberation.agreement: "degraded"` (it subsumes failover).
-- **Resumed sessions deliberate too:** passing a `session_id` resumes the review on the provider that owns that session while the *other* provider reviews fresh, then the two are combined — so plan→code lifecycles keep deliberating instead of silently dropping to one provider. The combined result keeps the resumed session's id.
+- **Resumed sessions deliberate too:** passing a `session_id` resumes the review on the provider that owns that session while the _other_ provider reviews fresh, then the two are combined — so plan→code lifecycles keep deliberating instead of silently dropping to one provider. The combined result keeps the resumed session's id.
 - **Per-call toggle:** `review_plan`/`review_code` accept a `deliberate` boolean (CLI: `--deliberate` / `--no-deliberate`) that overrides the configured mode for a single call — `true` forces deliberation, `false` forces single-provider failover. Requesting `deliberate: true` under `"mode": "single"` returns an error (no second provider).
 - **`review_mode` on every result:** every review result carries a `review_mode` field (`single` / `failover` / `deliberate` / `deliberate-deep`) naming the composition that actually ran, so the absence of a `deliberation` block is never ambiguous.
 
@@ -318,8 +370,9 @@ Each divergent item gains an optional `adjudication` (the `agreed` findings and 
 ```
 
 Notes:
-- **`verdict`** is `confirmed` (a real issue), `disputed` (a false positive here), or `unsure` (can't tell from the change). `by` is the provider that adjudicated — always the one that did *not* raise the finding.
-- **Top-level `verdict` is not folded back:** under deliberate-deep the result's `verdict` still reflects both providers' *independent* reviews (worst-of-both). The per-finding `adjudication`s are advisory input for **your** synthesis — the bridge does not recompute the verdict from them (ISS-015). A `reject` resting on findings the other provider `disputed` still reports `reject`; it's up to you to weigh the adjudications.
+
+- **`verdict`** is `confirmed` (a real issue), `disputed` (a false positive here), or `unsure` (can't tell from the change). `by` is the provider that adjudicated — always the one that did _not_ raise the finding.
+- **Top-level `verdict` is not folded back:** under deliberate-deep the result's `verdict` still reflects both providers' _independent_ reviews (worst-of-both). The per-finding `adjudication`s are advisory input for **your** synthesis — the bridge does not recompute the verdict from them (ISS-015). A `reject` resting on findings the other provider `disputed` still reports `reject`; it's up to you to weigh the adjudications.
 - **Cost:** adds up to two more provider calls per review (one per side that has divergent findings). Skipped entirely when there's nothing divergent. The cross-review subject is sliced to just the files the divergent findings touch, so it stays small even on large diffs.
 - **Best-effort:** if a provider is out of usage or errors during the cross-review round, its side is simply left un-adjudicated and reported in `deliberation.cross_review_failures` — the deliberation result still returns.
 
@@ -333,21 +386,29 @@ export REVIEW_BRIDGE_DB=~/.review-bridge.db
 
 Defaults to `reviews.db` in the current directory. Set to `:memory:` for ephemeral storage.
 
+Review execution is admitted before large inputs enter a provider: at most four logical reviews may
+run globally and only one may run for a given `session_id`. Excess work returns `REVIEW_BUSY`
+immediately. If durable outcome recording fails after a provider succeeds, the successful review is
+still returned with `provenance.persistence: "memory_only"` and a sanitized warning. Synthetic
+no-change/no-staged results use `not_recorded` and do not create or mutate sessions.
+
 ## Troubleshooting
 
 Error codes are provider-neutral. With `fallback` on (default), many of these auto-recover by retrying on the other provider — the messages below apply when there's no second provider set up or `fallback` is off.
 
-| Error | Fix |
-|-------|-----|
-| `AUTH_ERROR` (Codex) | Run `codex login`, or set `OPENAI_API_KEY`. Check that `~/.codex/auth.json` exists. |
-| `AUTH_ERROR: agy is not authenticated` (Gemini) | Run `agy` once to sign in with your Google account (AI Pro), then retry. |
-| `CONFIG_ERROR: 'agy' ... not found on PATH` (Gemini) | Install the Antigravity `agy` CLI and sign in, or set `"provider": "codex"`. |
-| `MODEL_ERROR: Model "X" is not supported` | Try a different model, switch `"provider"`, or (Codex) use API-key auth. For Gemini, run `agy models` for valid ids. |
+| Error                                                     | Fix                                                                                                                                                                                                                                                                                                                                                                         |
+| --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AUTH_ERROR` (Codex)                                      | Run `codex login`, or set `OPENAI_API_KEY`. Check that `~/.codex/auth.json` exists.                                                                                                                                                                                                                                                                                         |
+| `AUTH_ERROR: agy is not authenticated` (Gemini)           | Run `agy` once to sign in with your Google account (AI Pro), then retry.                                                                                                                                                                                                                                                                                                    |
+| `CONFIG_ERROR: 'agy' ... not found on PATH` (Gemini)      | Install the Antigravity `agy` CLI and sign in, or set `"provider": "codex"`.                                                                                                                                                                                                                                                                                                |
+| `MODEL_ERROR: Model "X" is not supported`                 | Try a different model, switch `"provider"`, or (Codex) use API-key auth. For Gemini, run `agy models` for valid ids.                                                                                                                                                                                                                                                        |
 | `PROVIDER_UNAVAILABLE: The codex binary could not be run` | On macOS, XProtect can false-positively quarantine the SDK's **bundled** codex binary. The bridge auto-discovers a working system codex (PATH, `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`) and retries; the stderr log names the binary it picked. If nothing is found, install the Codex CLI (`codex login` machine) or set `"codex_path"` to a working binary. |
-| `RATE_LIMITED` (rate limit or usage cap) | Wait and retry, or rely on failover to the other provider. |
-| `NETWORK_ERROR` | Check your internet connection. |
-| `PROVIDER_MISMATCH` | The `session_id` was created by a different provider. Start a new session, or switch `"provider"` back to continue it. |
-| `REVIEW_TIMEOUT: review timed out` | Increase `"timeout_seconds"` in `.reviewbridge.json` (default: 300). |
+| `RATE_LIMITED` (rate limit or usage cap)                  | Wait and retry, or rely on failover to the other provider.                                                                                                                                                                                                                                                                                                                  |
+| `NETWORK_ERROR`                                           | Check your internet connection.                                                                                                                                                                                                                                                                                                                                             |
+| `PROVIDER_MISMATCH`                                       | The `session_id` was created by a different provider. Start a new session, or switch `"provider"` back to continue it.                                                                                                                                                                                                                                                      |
+| `REVIEW_BUSY`                                             | Four reviews are already active, or this session already has a review in progress. Retry after the active call finishes.                                                                                                                                                                                                                                                    |
+| `SESSION_ROUTING_UNAVAILABLE`                             | Resume ownership could not be read safely. Restore durable storage or start a fresh review without `session_id`; the bridge will not guess a provider.                                                                                                                                                                                                                      |
+| `REVIEW_TIMEOUT: review timed out`                        | Increase `"timeout_seconds"` in `.reviewbridge.json` (default: 300).                                                                                                                                                                                                                                                                                                        |
 
 ## Architecture
 
@@ -386,13 +447,13 @@ npm test
 npm run build
 ```
 
-| Command | Description |
-|---------|-------------|
-| `npm test` | Run tests (Vitest) |
-| `npm run build` | Bundle with tsup |
-| `npm run typecheck` | Type checking |
-| `npm run lint` | ESLint |
-| `npm run format` | Prettier |
+| Command             | Description        |
+| ------------------- | ------------------ |
+| `npm test`          | Run tests (Vitest) |
+| `npm run build`     | Bundle with tsup   |
+| `npm run typecheck` | Type checking      |
+| `npm run lint`      | ESLint             |
+| `npm run format`    | Prettier           |
 
 ## License
 

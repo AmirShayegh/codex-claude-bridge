@@ -1,0 +1,34 @@
+{
+  "components": [
+    "backends/deliberation",
+    "cli/formatter",
+    "review/types"
+  ],
+  "createdBy": "external-review:care2talk-9e (design report; code-verified and narrowed in this session)",
+  "dedupeKey": "care2talk-9e-2026-09-03:silent-deliberation-degradation",
+  "discoveredDate": "2026-09-04",
+  "id": "ISS-030",
+  "impact": "When `deliberate: true` is requested and one provider fails, degradeCode/degradePlan (src/backends/deliberation.ts:285-322) DO record it structurally: `deliberation.agreement: 'degraded'` plus a `degraded: { failed, reason }` block (schema at src/review/types.ts:92,109). So the claim that degradation is only a log line is wrong. The real gap is rendering and prominence. src/cli/formatter.ts contains no reference to `degraded` or `review_mode` at all, so the human CLI output does not surface it; an MCP caller gets a normal verdict whose degradation is a nested field it has no reason to read. Net effect at the call site is the same failure the reporter describes: a change reviewed ONCE is counted as reviewed twice independently, and the caller proceeds believing it got an adversarial second opinion. This is materially worse than a hard failure, which gets handled, and it is the instrument-failure shape this project already has lessons about (a tool reporting success at something it did not do). Reported as decision-affecting: the reporter escalated single -> deliberate precisely because a first clean round on a subtle change warranted a reviewer that could disagree, and never got one. Fix direction: render degradation prominently in the CLI formatter, mirror it into a top-level result field rather than only a nested deliberation block, and consider whether a requested-but-unachieved deliberation should be a hard error or require explicit caller opt-in to the weaker mode. Note review_mode already names the composition that ran (types.ts:133,145,157) but is not rendered either.",
+  "location": [
+    "src/backends/deliberation.ts:285",
+    "src/cli/formatter.ts",
+    "src/review/types.ts:92"
+  ],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": null,
+  "resolvedDate": null,
+  "severity": "high",
+  "sourceRefs": [
+    {
+      "contentHash": "865cc420124503ab999a80dcb11ff6a24e69342e34e456122d225b53711b5e8c",
+      "endLine": 322,
+      "path": "src/backends/deliberation.ts",
+      "reviewId": "care2talk-9e-2026-09-03",
+      "revision": "a066fba339b032c0bd20f8bc3737bbaa404bb6b9",
+      "startLine": 285
+    }
+  ],
+  "status": "open",
+  "title": "Deliberation degradation is recorded structurally but never rendered: a one-provider result reads as successful deliberation"
+}

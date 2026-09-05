@@ -16,7 +16,10 @@ vi.mock('../backends/index.js', () => ({
 vi.mock('../config/loader.js', () => ({
   loadConfig: vi.fn().mockReturnValue({
     ok: true,
-    data: { config: { review_standards: { precommit: { auto_diff: true } } }, source: { kind: 'default' } },
+    data: {
+      config: { review_standards: { precommit: { auto_diff: true } } },
+      source: { kind: 'default' },
+    },
   }),
   formatConfigSource: vi.fn(() => 'default'),
 }));
@@ -37,6 +40,7 @@ vi.mock('./stdin.js', () => ({
 
 // Mock resolve-diff
 vi.mock('../utils/resolve-diff.js', () => ({
+  NO_STAGED_CHANGES: 'NO_STAGED_CHANGES:',
   resolvePrecommitDiff: vi.fn(),
 }));
 
@@ -58,9 +62,21 @@ function createDeps(): CliDeps & { stdoutBuf: string; stderrBuf: string; exitCod
     stdoutBuf: '',
     stderrBuf: '',
     exitCode: null as number | null,
-    stdout: { write: (s: string) => { deps.stdoutBuf += s; return true; } },
-    stderr: { write: (s: string) => { deps.stderrBuf += s; return true; } },
-    exit: (code: number) => { deps.exitCode = code; },
+    stdout: {
+      write: (s: string) => {
+        deps.stdoutBuf += s;
+        return true;
+      },
+    },
+    stderr: {
+      write: (s: string) => {
+        deps.stderrBuf += s;
+        return true;
+      },
+    },
+    exit: (code: number) => {
+      deps.exitCode = code;
+    },
     env: {},
     isTTY: false,
   };
@@ -114,7 +130,20 @@ describe('review-plan command', () => {
     mockCreateClient.mockReturnValue(mockClient);
 
     const deps = createDeps();
-    await runCli(['node', 'bridge', 'review-plan', '--plan', 'f.md', '--focus', 'security,performance', '--depth', 'thorough'], deps);
+    await runCli(
+      [
+        'node',
+        'bridge',
+        'review-plan',
+        '--plan',
+        'f.md',
+        '--focus',
+        'security,performance',
+        '--depth',
+        'thorough',
+      ],
+      deps,
+    );
 
     expect(mockClient.reviewPlan).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -122,6 +151,52 @@ describe('review-plan command', () => {
         depth: 'thorough',
       }),
     );
+  });
+
+  it('trims a valid model selector before invoking the backend', async () => {
+    mockReadInput.mockResolvedValue({ ok: true, data: 'plan' });
+    const mockClient = {
+      provider: 'codex' as const,
+      providers: ['codex'] as const,
+      allowsModelOverrideOnResume: false,
+      reviewPlan: vi.fn().mockResolvedValue({
+        ok: true,
+        data: { verdict: 'approve', summary: 'ok', findings: [], session_id: 's1' },
+      }),
+      reviewCode: vi.fn(),
+      reviewPrecommit: vi.fn(),
+    };
+    mockCreateClient.mockReturnValue(mockClient);
+
+    await runCli(
+      ['node', 'bridge', 'review-plan', '--plan', 'f.md', '--model', '  gpt-5.6-sol  '],
+      createDeps(),
+    );
+
+    expect(mockClient.reviewPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'gpt-5.6-sol' }),
+    );
+  });
+
+  it('rejects control-bearing models and whitespace-mutated session ids before initialization', async () => {
+    const controls = createDeps();
+    await runCli(
+      ['node', 'bridge', 'review-plan', '--plan', 'f.md', '--model', 'gpt\nforged'],
+      controls,
+    );
+    expect(controls.exitCode).toBe(1);
+    expect(controls.stderrBuf).toContain('INVALID_INPUT');
+    expect(mockCreateClient).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+    const whitespace = createDeps();
+    await runCli(
+      ['node', 'bridge', 'review-plan', '--plan', 'f.md', '--session', ' surrounded '],
+      whitespace,
+    );
+    expect(whitespace.exitCode).toBe(1);
+    expect(whitespace.stderrBuf).toContain('INVALID_INPUT');
+    expect(mockCreateClient).not.toHaveBeenCalled();
   });
 
   it('outputs JSON when --json flag is set', async () => {
@@ -140,7 +215,10 @@ describe('review-plan command', () => {
     const deps = createDeps();
     await runCli(['node', 'bridge', 'review-plan', '--plan', 'f.md', '--json'], deps);
 
-    expect(JSON.parse(deps.stdoutBuf)).toEqual(data);
+    expect(JSON.parse(deps.stdoutBuf)).toEqual({
+      ...data,
+      provenance: { persistence: 'not_recorded', warning: null },
+    });
   });
 
   it('exits 1 when input read fails', async () => {
@@ -186,6 +264,33 @@ describe('review-code command', () => {
       expect.objectContaining({ diff: 'diff --git ...' }),
     );
     expect(deps.exitCode).toBe(0);
+  });
+
+  it('returns an unrecorded synthetic result for an empty diff without routing a session', async () => {
+    mockReadInput.mockResolvedValue({ ok: true, data: '' });
+    const reviewCode = vi.fn();
+    mockCreateClient.mockReturnValue({
+      provider: 'codex',
+      providers: ['codex'],
+      allowsModelOverrideOnResume: false,
+      reviewPlan: vi.fn(),
+      reviewCode,
+      reviewPrecommit: vi.fn(),
+    });
+    const deps = createDeps();
+
+    await runCli(
+      ['node', 'bridge', 'review-code', '--diff', 'empty.patch', '--session', 'unknown', '--json'],
+      deps,
+    );
+
+    expect(JSON.parse(deps.stdoutBuf)).toMatchObject({
+      verdict: 'approve',
+      session_id: 'unknown',
+      models: [],
+      provenance: { persistence: 'not_recorded', warning: null },
+    });
+    expect(reviewCode).not.toHaveBeenCalled();
   });
 });
 
@@ -239,7 +344,10 @@ describe('review-precommit command', () => {
     const { loadConfig } = await import('../config/loader.js');
     vi.mocked(loadConfig).mockReturnValueOnce({
       ok: true,
-      data: { config: { review_standards: { precommit: { auto_diff: false } } }, source: { kind: 'default' } },
+      data: {
+        config: { review_standards: { precommit: { auto_diff: false } } },
+        source: { kind: 'default' },
+      },
     } as never);
     mockResolveDiff.mockResolvedValue({ ok: true, data: 'staged diff' });
     mockCreateClient.mockReturnValue(precommitClient());
@@ -313,6 +421,34 @@ describe('review-precommit command', () => {
     expect(deps.exitCode).toBe(1);
     expect(deps.stderrBuf).toContain('GIT_ERROR');
   });
+
+  it('returns an unrecorded no-staged result without routing or invoking a provider', async () => {
+    mockResolveDiff.mockResolvedValue({
+      ok: false,
+      error: 'NO_STAGED_CHANGES: No staged changes found.',
+    });
+    const reviewPrecommit = vi.fn();
+    mockCreateClient.mockReturnValue({
+      provider: 'codex',
+      providers: ['codex'],
+      allowsModelOverrideOnResume: false,
+      reviewPlan: vi.fn(),
+      reviewCode: vi.fn(),
+      reviewPrecommit,
+    });
+    const deps = createDeps();
+
+    await runCli(['node', 'bridge', 'review-precommit', '--session', 'unknown', '--json'], deps);
+
+    expect(JSON.parse(deps.stdoutBuf)).toMatchObject({
+      ready_to_commit: false,
+      session_id: 'unknown',
+      models: [],
+      provenance: { persistence: 'not_recorded', warning: null },
+    });
+    expect(reviewPrecommit).not.toHaveBeenCalled();
+    expect(deps.exitCode).toBe(2);
+  });
 });
 
 describe('config errors', () => {
@@ -330,6 +466,23 @@ describe('config errors', () => {
     expect(deps.exitCode).toBe(1);
     expect(deps.stderrBuf).toContain('CONFIG_ERROR');
     expect(deps.stderrBuf).toContain('RB_CONFIG_PATH');
+  });
+
+  it('escapes controls in errors rendered before the generic handler runs', async () => {
+    const escape = String.fromCharCode(0x1b);
+    const c1 = String.fromCharCode(0x85);
+    const { loadConfig } = await import('../config/loader.js');
+    vi.mocked(loadConfig).mockReturnValueOnce({
+      ok: false,
+      error: `CONFIG_ERROR: bad\nline${escape}escape${c1}c1`,
+    });
+
+    const deps = createDeps();
+    await runCli(['node', 'bridge', 'review-plan', '--plan', '/tmp/p.md'], deps);
+
+    expect(deps.stderrBuf).toBe('Error: CONFIG_ERROR: bad\\nline\\x1Bescape\\x85c1\n');
+    expect(deps.stderrBuf).not.toContain(escape);
+    expect(deps.stderrBuf).not.toContain(c1);
   });
 });
 
@@ -373,7 +526,11 @@ describe('cross-provider resume guard (ISS-017)', () => {
     if (savedEnv === undefined) delete process.env.REVIEW_BRIDGE_DB;
     else process.env.REVIEW_BRIDGE_DB = savedEnv;
     for (const suffix of ['', '-wal', '-shm']) {
-      try { rmSync(dbPath + suffix); } catch { /* ignore */ }
+      try {
+        rmSync(dbPath + suffix);
+      } catch {
+        /* ignore */
+      }
     }
   });
 
@@ -388,7 +545,10 @@ describe('cross-provider resume guard (ISS-017)', () => {
     });
 
     const deps = createDeps();
-    await runCli(['node', 'bridge', 'review-code', '--diff', '/tmp/d.diff', '--session', 'g-sess'], deps);
+    await runCli(
+      ['node', 'bridge', 'review-code', '--diff', '/tmp/d.diff', '--session', 'g-sess'],
+      deps,
+    );
 
     expect(deps.exitCode).toBe(1);
     expect(deps.stderrBuf).toContain('PROVIDER_MISMATCH');
@@ -409,7 +569,10 @@ describe('cross-provider resume guard (ISS-017)', () => {
     });
 
     const deps = createDeps();
-    await runCli(['node', 'bridge', 'review-code', '--diff', '/tmp/d.diff', '--session', 'g-sess'], deps);
+    await runCli(
+      ['node', 'bridge', 'review-code', '--diff', '/tmp/d.diff', '--session', 'g-sess'],
+      deps,
+    );
 
     expect(reviewCode).toHaveBeenCalled();
     expect(deps.exitCode).not.toBe(1);

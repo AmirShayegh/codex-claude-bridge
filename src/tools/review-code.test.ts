@@ -1,395 +1,156 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { registerReviewCodeTool } from './review-code.js';
-import type { ReviewBackend } from '../backends/backend.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { CodeReviewResult } from '../review/types.js';
-import { ok, err } from '../utils/errors.js';
-
-vi.mock('../storage/reviews.js', () => ({
-  saveReview: vi.fn(),
-}));
-
-vi.mock('../storage/sessions.js', () => ({
-  getOrCreateSession: vi.fn(),
-  getSession: vi.fn(),
-  markSessionCompleted: vi.fn(),
-  markSessionFailed: vi.fn(),
-  activateSession: vi.fn(),
-}));
+import type { ReviewBackend } from '../backends/backend.js';
+import type { ReviewLifecycle } from '../review/lifecycle.js';
+import type { CodeReviewResult, ModelIdentity } from '../review/types.js';
+import { err, ok } from '../utils/errors.js';
+import { registerReviewCodeTool } from './review-code.js';
 
 vi.mock('../utils/resolve-diff.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../utils/resolve-diff.js')>();
-  return {
-    ...actual,
-    resolveCodeDiff: vi.fn(),
-  };
+  return { ...actual, resolveCodeDiff: vi.fn() };
 });
 
-import { saveReview } from '../storage/reviews.js';
-import { getOrCreateSession, getSession, markSessionCompleted, markSessionFailed, activateSession } from '../storage/sessions.js';
 import { resolveCodeDiff } from '../utils/resolve-diff.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type HandlerFn = (args: Record<string, unknown>, extra: unknown) => Promise<any>;
 
-let mockClient: ReviewBackend;
-let mockServer: { registerTool: ReturnType<typeof vi.fn> };
-let handler: HandlerFn;
+const MODEL: ModelIdentity = {
+  provider: 'gemini',
+  role: 'review',
+  requested: null,
+  resolved: 'Gemini 3.5 Pro (High)',
+  observed: null,
+  evidence: 'bridge_selection',
+};
 
-const validResult: CodeReviewResult = {
+const RESULT: CodeReviewResult = {
   verdict: 'request_changes',
   summary: 'Issues found',
   findings: [
     {
-      severity: 'critical',
+      severity: 'major',
       category: 'bug',
-      description: 'Null pointer dereference',
+      description: 'Null dereference',
       file: 'src/index.ts',
       line: 42,
-      suggestion: 'Add null check',
+      suggestion: 'Add a guard',
     },
   ],
-  session_id: 'thread_xyz',
+  session_id: 'code-session',
+  provider: 'gemini',
+  models: [MODEL],
+  provenance: { persistence: 'durable', warning: null },
 };
+
+let client: ReviewBackend;
+let lifecycle: ReviewLifecycle;
+let server: { registerTool: ReturnType<typeof vi.fn> };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockClient = {
+  client = {
     provider: 'codex',
-    providers: ['codex'],
+    providers: ['codex', 'gemini'],
     allowsModelOverrideOnResume: false,
     reviewPlan: vi.fn(),
     reviewCode: vi.fn(),
     reviewPrecommit: vi.fn(),
   };
-  mockServer = { registerTool: vi.fn() };
-  // Default: resolveCodeDiff passes through whatever diff is provided
-  vi.mocked(resolveCodeDiff).mockImplementation(async (args) => {
-    return ok(args.diff ?? 'auto-captured diff');
-  });
+  lifecycle = {
+    reviewPlan: vi.fn(),
+    reviewCode: vi.fn().mockResolvedValue(ok(RESULT)),
+    reviewPrecommit: vi.fn(),
+  };
+  server = { registerTool: vi.fn() };
+  vi.mocked(resolveCodeDiff).mockImplementation(async ({ diff }) => ok(diff ?? 'captured diff'));
 });
 
-function setupHandler(db?: unknown) {
-  registerReviewCodeTool(mockServer as unknown as McpServer, mockClient, db as never);
-  handler = mockServer.registerTool.mock.calls[0][2] as HandlerFn;
+function setup(useLifecycle = true): HandlerFn {
+  registerReviewCodeTool(
+    server as unknown as McpServer,
+    client,
+    undefined,
+    useLifecycle ? lifecycle : undefined,
+  );
+  return server.registerTool.mock.calls[0][2] as HandlerFn;
 }
 
 describe('registerReviewCodeTool', () => {
-  beforeEach(() => setupHandler());
-
-  it('registers tool with name review_code', () => {
-    expect(mockServer.registerTool).toHaveBeenCalledTimes(1);
-    expect(mockServer.registerTool.mock.calls[0][0]).toBe('review_code');
+  it('registers bounded model and session input schemas', () => {
+    setup();
+    expect(server.registerTool.mock.calls[0][0]).toBe('review_code');
+    const schema = server.registerTool.mock.calls[0][1].inputSchema as Record<
+      string,
+      { parse(value: unknown): unknown }
+    >;
+    expect(() => schema.model.parse('x'.repeat(201))).toThrow();
+    expect(() => schema.session_id.parse('x\u007fy')).toThrow();
   });
 
-  it('diff input returns structured review', async () => {
-    vi.mocked(mockClient.reviewCode).mockResolvedValue(ok(validResult));
+  it('resolves and forwards the exact diff to the lifecycle', async () => {
+    const response = await setup()({ diff: 'explicit diff', context: 'intent' }, {});
 
-    const result = await handler({ diff: 'some diff content' }, {});
-
-    expect(result.content).toHaveLength(1);
-    expect(result.content[0].type).toBe('text');
-    const parsed = JSON.parse(result.content[0].text);
-    expect(parsed.verdict).toBe('request_changes');
-    expect(parsed.session_id).toBe('thread_xyz');
-    expect(result.isError).toBeUndefined();
+    expect(resolveCodeDiff).toHaveBeenCalledWith({ diff: 'explicit diff', auto_diff: true });
+    expect(lifecycle.reviewCode).toHaveBeenCalledWith(
+      expect.objectContaining({ diff: 'explicit diff', context: 'intent' }),
+    );
+    expect(JSON.parse(response.content[0].text)).toEqual(RESULT);
   });
 
-  it('rejects session_id + model when the backend disallows model override on resume (Codex)', async () => {
-    const result = await handler({ diff: 'some diff', session_id: 's1', model: 'gpt-5.4' }, {});
-
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('Cannot change model on a resumed session');
-    expect(mockClient.reviewCode).not.toHaveBeenCalled();
-  });
-
-  it('allows session_id + model when the backend permits override on resume (Gemini)', async () => {
-    mockClient.allowsModelOverrideOnResume = true;
-    vi.mocked(mockClient.reviewCode).mockResolvedValue(ok(validResult));
-
-    const result = await handler({ diff: 'some diff', session_id: 's1', model: 'Gemini 3.1 Pro (High)' }, {});
-
-    expect(result.isError).toBeUndefined();
-    expect(mockClient.reviewCode).toHaveBeenCalledWith(
-      expect.objectContaining({ session_id: 's1', model: 'Gemini 3.1 Pro (High)' }),
+  it('auto-captures when diff is omitted', async () => {
+    await setup()({}, {});
+    expect(resolveCodeDiff).toHaveBeenCalledWith({ diff: undefined, auto_diff: true });
+    expect(lifecycle.reviewCode).toHaveBeenCalledWith(
+      expect.objectContaining({ diff: 'captured diff' }),
     );
   });
 
-  it('findings include file/line references', async () => {
-    vi.mocked(mockClient.reviewCode).mockResolvedValue(ok(validResult));
-
-    const result = await handler({ diff: 'some diff' }, {});
-
-    const parsed = JSON.parse(result.content[0].text);
-    expect(parsed.findings[0].file).toBe('src/index.ts');
-    expect(parsed.findings[0].line).toBe(42);
-    expect(parsed.findings[0].suggestion).toBe('Add null check');
-  });
-
-  it('Codex client error propagates as MCP error', async () => {
-    vi.mocked(mockClient.reviewCode).mockResolvedValue(
-      err('RESPONSE_PARSE_ERROR: malformed JSON in response'),
+  it('returns synthetic model/provenance metadata without lifecycle mutation', async () => {
+    vi.mocked(resolveCodeDiff).mockResolvedValue(
+      err('NO_WORKING_CHANGES: No changes found vs HEAD.'),
     );
 
-    const result = await handler({ diff: 'some diff' }, {});
+    const response = await setup()({ session_id: 'existing' }, {});
+    const parsed = JSON.parse(response.content[0].text);
 
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('RESPONSE_PARSE_ERROR');
-  });
-
-  it('unexpected thrown error returns MCP error', async () => {
-    vi.mocked(mockClient.reviewCode).mockRejectedValue(new Error('connection reset'));
-
-    const result = await handler({ diff: 'some diff' }, {});
-
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('connection reset');
-  });
-
-  it('session_id forwarded to client', async () => {
-    vi.mocked(mockClient.reviewCode).mockResolvedValue(ok(validResult));
-
-    await handler({ diff: 'some diff', session_id: 'existing_session' }, {});
-
-    expect(mockClient.reviewCode).toHaveBeenCalledWith(
-      expect.objectContaining({ session_id: 'existing_session' }),
-    );
-  });
-
-  it('does not save to storage when no db provided', async () => {
-    vi.mocked(mockClient.reviewCode).mockResolvedValue(ok(validResult));
-
-    await handler({ diff: 'some diff' }, {});
-
-    expect(saveReview).not.toHaveBeenCalled();
-  });
-});
-
-describe('registerReviewCodeTool with db', () => {
-  // transaction(fn)() invokes fn synchronously — matches better-sqlite3's
-  // shape that recordSuccess uses for atomicity (T-002).
-  const mockDb = { transaction: <T>(fn: () => T) => () => fn() };
-
-  beforeEach(() => {
-    vi.mocked(getOrCreateSession).mockReturnValue(ok({ session_id: 'thread_xyz', status: 'in_progress' as const, created_at: '2026-01-01', completed_at: null, provider: null }));
-    vi.mocked(getSession).mockReturnValue(ok(null));
-    vi.mocked(activateSession).mockReturnValue(ok({ session_id: 'thread_xyz', status: 'in_progress' as const, created_at: '2026-01-01', completed_at: null, provider: null }));
-    vi.mocked(markSessionCompleted).mockReturnValue(ok(undefined));
-    vi.mocked(markSessionFailed).mockReturnValue(ok(undefined));
-    vi.mocked(saveReview).mockReturnValue(ok(undefined));
-    setupHandler(mockDb);
-  });
-
-  it('saves review to storage on success', async () => {
-    vi.mocked(mockClient.reviewCode).mockResolvedValue(ok(validResult));
-
-    await handler({ diff: 'some diff' }, {});
-
-    expect(saveReview).toHaveBeenCalledWith(mockDb, {
-      session_id: 'thread_xyz',
-      type: 'code',
-      verdict: 'request_changes',
-      summary: 'Issues found',
-      findings_json: JSON.stringify(validResult.findings),
+    expect(parsed).toMatchObject({
+      verdict: 'approve',
+      session_id: 'existing',
+      models: [],
+      provenance: { persistence: 'not_recorded', warning: null },
     });
+    expect(lifecycle.reviewCode).not.toHaveBeenCalled();
   });
 
-  it('creates session entry on success', async () => {
-    vi.mocked(mockClient.reviewCode).mockResolvedValue(ok(validResult));
+  it('returns git and lifecycle failures as MCP errors', async () => {
+    vi.mocked(resolveCodeDiff).mockResolvedValueOnce(err('GIT_ERROR: failed'));
+    expect((await setup()({}, {})).isError).toBe(true);
 
-    await handler({ diff: 'some diff' }, {});
-
-    expect(getOrCreateSession).toHaveBeenCalledWith(mockDb, 'thread_xyz', 'codex');
+    server = { registerTool: vi.fn() };
+    vi.mocked(resolveCodeDiff).mockResolvedValueOnce(ok('diff'));
+    vi.mocked(lifecycle.reviewCode).mockResolvedValueOnce(err('REVIEW_BUSY: active'));
+    const response = await setup()({}, {});
+    expect(response.isError).toBe(true);
+    expect(response.content[0].text).toContain('REVIEW_BUSY');
   });
 
-  it('does not save on client error', async () => {
-    vi.mocked(mockClient.reviewCode).mockResolvedValue(
-      err('REVIEW_TIMEOUT: timed out'),
+  it('defers resumed model validation to the owner-aware lifecycle', async () => {
+    vi.mocked(lifecycle.reviewCode).mockResolvedValueOnce(
+      err('INVALID_INPUT: Cannot change model on a resumed session.'),
     );
-
-    await handler({ diff: 'some diff' }, {});
-
-    expect(saveReview).not.toHaveBeenCalled();
-  });
-
-  it('marks session completed after save', async () => {
-    vi.mocked(mockClient.reviewCode).mockResolvedValue(ok(validResult));
-
-    await handler({ diff: 'some diff' }, {});
-
-    expect(markSessionCompleted).toHaveBeenCalledWith(mockDb, 'thread_xyz');
-  });
-
-  it('logs warning when getOrCreateSession fails', async () => {
-    vi.mocked(mockClient.reviewCode).mockResolvedValue(ok(validResult));
-    vi.mocked(getOrCreateSession).mockReturnValue(err('STORAGE_ERROR: table missing'));
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    const result = await handler({ diff: 'some diff' }, {});
-
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to track session'));
-    expect(result.isError).toBeUndefined();
-    consoleSpy.mockRestore();
-  });
-
-  it('logs warning when markSessionCompleted fails', async () => {
-    vi.mocked(mockClient.reviewCode).mockResolvedValue(ok(validResult));
-    vi.mocked(markSessionCompleted).mockReturnValue(err('STORAGE_ERROR: readonly'));
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    const result = await handler({ diff: 'some diff' }, {});
-
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('readonly'));
-    expect(result.isError).toBeUndefined();
-    consoleSpy.mockRestore();
-  });
-
-  it('logs warning when saveReview fails but still returns success', async () => {
-    vi.mocked(mockClient.reviewCode).mockResolvedValue(ok(validResult));
-    vi.mocked(saveReview).mockReturnValue(err('STORAGE_ERROR: disk full'));
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    const result = await handler({ diff: 'some diff' }, {});
-
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('STORAGE_ERROR'));
-    expect(result.isError).toBeUndefined();
-    consoleSpy.mockRestore();
-  });
-
-  it('activates session before client call when session_id provided', async () => {
-    vi.mocked(mockClient.reviewCode).mockResolvedValue(ok(validResult));
-
-    await handler({ diff: 'some diff', session_id: 'thread_xyz' }, {});
-
-    expect(activateSession).toHaveBeenCalledWith(mockDb, 'thread_xyz', 'codex');
-    const activateOrder = vi.mocked(activateSession).mock.invocationCallOrder[0];
-    const reviewOrder = vi.mocked(mockClient.reviewCode).mock.invocationCallOrder[0];
-    expect(activateOrder).toBeLessThan(reviewOrder);
-  });
-
-  it('does not activate session when no session_id provided', async () => {
-    vi.mocked(mockClient.reviewCode).mockResolvedValue(ok(validResult));
-
-    await handler({ diff: 'some diff' }, {});
-
-    expect(activateSession).not.toHaveBeenCalled();
-    expect(getOrCreateSession).toHaveBeenCalledWith(mockDb, 'thread_xyz', 'codex');
-  });
-
-  it('marks session failed when client returns error and session_id provided', async () => {
-    vi.mocked(mockClient.reviewCode).mockResolvedValue(err('REVIEW_TIMEOUT: timed out'));
-
-    const result = await handler({ diff: 'some diff', session_id: 'thread_xyz' }, {});
-
-    expect(result.isError).toBe(true);
-    expect(markSessionFailed).toHaveBeenCalledWith(mockDb, 'thread_xyz');
-  });
-
-  it('marks session failed when handler throws and session_id provided', async () => {
-    vi.mocked(mockClient.reviewCode).mockRejectedValue(new Error('network error'));
-
-    const result = await handler({ diff: 'some diff', session_id: 'thread_xyz' }, {});
-
-    expect(result.isError).toBe(true);
-    expect(markSessionFailed).toHaveBeenCalledWith(mockDb, 'thread_xyz');
-  });
-
-  it('does not mark session failed when activateSession fails', async () => {
-    vi.mocked(activateSession).mockReturnValue(err('STORAGE_ERROR: readonly'));
-    vi.mocked(mockClient.reviewCode).mockResolvedValue(err('REVIEW_TIMEOUT: timed out'));
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    const result = await handler({ diff: 'some diff', session_id: 'thread_xyz' }, {});
-
-    expect(result.isError).toBe(true);
-    expect(markSessionFailed).not.toHaveBeenCalled();
-    consoleSpy.mockRestore();
-  });
-
-  it('uses preflightId for markSessionCompleted when session_id provided', async () => {
-    vi.mocked(activateSession).mockReturnValue(ok({ session_id: 'thread_xyz', status: 'in_progress' as const, created_at: '2026-01-01', completed_at: null, provider: null }));
-    const codexResult = { ...validResult, session_id: 'thread_different' };
-    vi.mocked(mockClient.reviewCode).mockResolvedValue(ok(codexResult));
-
-    await handler({ diff: 'some diff', session_id: 'thread_xyz' }, {});
-
-    expect(markSessionCompleted).toHaveBeenCalledWith(mockDb, 'thread_xyz');
-  });
-
-  it('rejects a cross-provider resume without calling the backend or failing the session', async () => {
-    vi.mocked(getSession).mockReturnValue(
-      ok({ session_id: 'thread_xyz', status: 'completed' as const, created_at: '2026-01-01', completed_at: '2026-01-02', provider: 'gemini' }),
-    );
-
-    const result = await handler({ diff: 'some diff', session_id: 'thread_xyz' }, {});
-
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('PROVIDER_MISMATCH');
-    expect(mockClient.reviewCode).not.toHaveBeenCalled();
-    expect(activateSession).not.toHaveBeenCalled();
-    expect(markSessionFailed).not.toHaveBeenCalled();
-  });
-});
-
-describe('review_code auto_diff', () => {
-  beforeEach(() => setupHandler());
-
-  it('auto-captures changes when diff is omitted', async () => {
-    vi.mocked(resolveCodeDiff).mockResolvedValue(ok('auto-captured diff'));
-    vi.mocked(mockClient.reviewCode).mockResolvedValue(ok(validResult));
-
-    await handler({}, {});
-
-    expect(resolveCodeDiff).toHaveBeenCalledWith({ diff: undefined, auto_diff: undefined });
-    expect(mockClient.reviewCode).toHaveBeenCalledWith(
-      expect.objectContaining({ diff: 'auto-captured diff' }),
+    const response = await setup()({ diff: 'diff', session_id: 'session-1', model: 'gpt-5.5' }, {});
+    expect(response.isError).toBe(true);
+    expect(resolveCodeDiff).toHaveBeenCalled();
+    expect(lifecycle.reviewCode).toHaveBeenCalledWith(
+      expect.objectContaining({ session_id: 'session-1', model: 'gpt-5.5' }),
     );
   });
 
-  it('passes explicit diff through resolveCodeDiff', async () => {
-    vi.mocked(resolveCodeDiff).mockResolvedValue(ok('explicit diff'));
-    vi.mocked(mockClient.reviewCode).mockResolvedValue(ok(validResult));
-
-    await handler({ diff: 'explicit diff' }, {});
-
-    expect(resolveCodeDiff).toHaveBeenCalledWith(
-      expect.objectContaining({ diff: 'explicit diff' }),
-    );
-  });
-
-  it('returns approve-shaped response when no working changes', async () => {
-    vi.mocked(resolveCodeDiff).mockResolvedValue(
-      err('NO_WORKING_CHANGES: No changes found vs HEAD.'),
-    );
-
-    const result = await handler({}, {});
-
-    expect(result.isError).toBeUndefined();
-    const parsed = JSON.parse(result.content[0].text);
-    expect(parsed.verdict).toBe('approve');
-    expect(parsed.summary).toBe('No changes found to review.');
-    expect(parsed.findings).toEqual([]);
-    expect(parsed.session_id).toBe('');
-  });
-
-  it('returns MCP error when git fails', async () => {
-    vi.mocked(resolveCodeDiff).mockResolvedValue(
-      err('GIT_ERROR: fatal: not a git repository'),
-    );
-
-    const result = await handler({}, {});
-
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('GIT_ERROR');
-  });
-
-  it('does not call client.reviewCode when no working changes', async () => {
-    vi.mocked(resolveCodeDiff).mockResolvedValue(
-      err('NO_WORKING_CHANGES: No changes found vs HEAD.'),
-    );
-
-    await handler({}, {});
-
-    expect(mockClient.reviewCode).not.toHaveBeenCalled();
+  it('retains the no-lifecycle compatibility path', async () => {
+    vi.mocked(client.reviewCode).mockResolvedValue(ok(RESULT));
+    const response = await setup(false)({ diff: 'diff' }, {});
+    expect(JSON.parse(response.content[0].text)).toEqual(RESULT);
   });
 });

@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import picomatch from 'picomatch';
+import { escapeTerminalControls } from '../utils/terminal.js';
 import { ok, err } from '../utils/errors.js';
 import type { Result } from '../utils/errors.js';
 
@@ -46,7 +47,10 @@ export function parseFrontmatter(content: string): {
   }
 
   const fmLines = lines.slice(1, closeIdx);
-  const body = lines.slice(closeIdx + 1).join('\n').trim();
+  const body = lines
+    .slice(closeIdx + 1)
+    .join('\n')
+    .trim();
 
   const frontmatter: Record<string, string> = {};
   for (const line of fmLines) {
@@ -55,8 +59,10 @@ export function parseFrontmatter(content: string): {
     const key = line.slice(0, colonIdx).trim();
     let value = line.slice(colonIdx + 1).trim();
     // Strip surrounding quotes
-    if ((value.startsWith("'") && value.endsWith("'")) ||
-        (value.startsWith('"') && value.endsWith('"'))) {
+    if (
+      (value.startsWith("'") && value.endsWith("'")) ||
+      (value.startsWith('"') && value.endsWith('"'))
+    ) {
       value = value.slice(1, -1);
     }
     if (key) frontmatter[key] = value;
@@ -97,7 +103,7 @@ export function loadCopilotInstructions(cwd?: string): Result<CopilotInstruction
   const instructionsDir = join(githubDir, 'instructions');
   let filenames: string[];
   try {
-    filenames = readdirSync(instructionsDir).filter(f => f.endsWith('.instructions.md'));
+    filenames = readdirSync(instructionsDir).filter((f) => f.endsWith('.instructions.md'));
   } catch (e: unknown) {
     if (e instanceof Error && 'code' in e && (e as NodeJS.ErrnoException).code === 'ENOENT') {
       filenames = [];
@@ -114,14 +120,14 @@ export function loadCopilotInstructions(cwd?: string): Result<CopilotInstruction
       content = readFileSync(join(instructionsDir, filename), 'utf-8');
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      console.error(`Skipping ${filename}: ${msg}`);
+      console.error(`Skipping ${escapeTerminalControls(filename)}: ${escapeTerminalControls(msg)}`);
       continue;
     }
 
     const { frontmatter, body } = parseFrontmatter(content);
 
     // Skip files excluded from code review
-    const excluded = (frontmatter.excludeAgent ?? '').split(',').map(s => s.trim());
+    const excluded = (frontmatter.excludeAgent ?? '').split(',').map((s) => s.trim());
     if (excluded.includes('code-review')) continue;
 
     // Skip files without applyTo (can't be auto-applied)
@@ -147,17 +153,20 @@ export function filterByFiles(
   if (instructions.scoped.length === 0) return instructions;
   if (files.length === 0) return { repoWide: instructions.repoWide, scoped: [] };
 
-  const matched = instructions.scoped.filter(instr => {
+  const matched = instructions.scoped.filter((instr) => {
     const matchers: picomatch.Matcher[] = [];
     for (const p of instr.applyTo.split(',')) {
       try {
         matchers.push(picomatch(p.trim()));
       } catch {
-        console.error(`Invalid applyTo glob in ${instr.filename}: ${p.trim()}`);
+        console.error(
+          `Invalid applyTo glob in ${escapeTerminalControls(instr.filename)}: ` +
+            escapeTerminalControls(p.trim()),
+        );
       }
     }
     if (matchers.length === 0) return false;
-    return files.some(file => matchers.some(m => m(file)));
+    return files.some((file) => matchers.some((m) => m(file)));
   });
 
   return { repoWide: instructions.repoWide, scoped: matched };

@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createServer } from './server.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { escapeTerminalControls } from './utils/terminal.js';
 
 function createServerOrExit(): McpServer {
   try {
@@ -9,7 +10,9 @@ function createServerOrExit(): McpServer {
     // Print just the message (no stack) for known startup failures like
     // CONFIG_ERROR. Unexpected runtime errors after this point still bubble
     // up to index.ts where they're console.error'd with full context.
-    process.stderr.write(`[codex-bridge] ${e instanceof Error ? e.message : String(e)}\n`);
+    process.stderr.write(
+      `[codex-bridge] ${escapeTerminalControls(e instanceof Error ? e.message : String(e))}\n`,
+    );
     process.exit(1);
   }
 }

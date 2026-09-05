@@ -1,0 +1,32 @@
+{
+  "components": [
+    "backends/codex",
+    "review/types",
+    "tools/review-status",
+    "tools/review-history"
+  ],
+  "createdBy": "runnerkit-17 (peer Claude session) via triage",
+  "dedupeKey": "runnerkit-feedback-2026-09-04:1",
+  "discoveredDate": "2026-09-05",
+  "id": "ISS-031",
+  "impact": "An operator cannot tell from a result which Codex CLI/SDK build produced it. The `models` array (requested/resolved/observed) from T-038 answers the \"which model ran\" half but is still uncommitted and unpublished, so users on the npx-published 1.6.0 see only provider + review_mode. Remaining gap after T-038 ships: add the bundled/resolved Codex CLI version (and SDK pin) to `provenance` on every result, and to review_status and review_history rows, so model-availability errors can be correlated with the binary that produced them.",
+  "location": [],
+  "phase": null,
+  "relatedTickets": [
+    "T-038"
+  ],
+  "resolution": null,
+  "resolvedDate": null,
+  "severity": "low",
+  "sourceRefs": [
+    {
+      "contentHash": "bc2aeea90ab0b53ef1d4321e4988f8cfdf308268dfea204ff9ccbdb39cf729c5",
+      "path": "src/backends/codex.ts",
+      "reviewId": "runnerkit-feedback-2026-09-04",
+      "revision": "a066fba339b032c0bd20f8bc3737bbaa404bb6b9",
+      "startLine": 168
+    }
+  ],
+  "status": "open",
+  "title": "Result metadata omits the Codex CLI/SDK version; peer feedback also confirms `models` is not visible from the published 1.6.0 server"
+}

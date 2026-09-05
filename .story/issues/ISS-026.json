@@ -1,0 +1,28 @@
+{
+  "components": [
+    "review-lenses"
+  ],
+  "createdBy": "review-lenses:clean-code",
+  "dedupeKey": "review-lenses:f6e7fa10fc00c85fcf264e4d10b67861aeadd36844ba122a0acd4afec088c770",
+  "discoveredDate": "2026-07-13",
+  "id": "ISS-026",
+  "impact": "`deliberatePlan` spans 89 lines and `deliberateCode` spans 84 lines, and both repeat owner resolution, resume-model validation, parallel provider invocation, primary/secondary remapping, degradation, and both-failed handling. A future resume-routing fix must be applied twice or plan and code reviews can drift. I read both complete functions plus `ownerLeafFor`, the combine helpers, and adjudication helpers; no shared executor currently centralizes this flow.",
+  "location": [
+    "src/backends/deliberation.ts:549"
+  ],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": null,
+  "resolvedDate": null,
+  "severity": "medium",
+  "sourceRefs": [
+    {
+      "contentHash": "285fee811496c7e1f457caa00f5971d360a08770be5236852bb4491bbe94c928",
+      "path": "src/backends/deliberation.ts",
+      "reviewId": "lens-mrj1j8mw",
+      "startLine": 549
+    }
+  ],
+  "status": "open",
+  "title": "[pre-existing] [long-function] `deliberatePlan` spans 89 lines and `deliberateCode` spans 8"
+}

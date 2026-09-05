@@ -3,6 +3,7 @@ import Database from 'better-sqlite3';
 import { registerReviewStatusTool } from './review-status.js';
 import { initSessionsDb, getOrCreateSession } from '../storage/sessions.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { createSessionRegistry } from '../storage/session-registry.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type HandlerFn = (args: Record<string, unknown>, extra: unknown) => Promise<any>;
@@ -93,5 +94,21 @@ describe('registerReviewStatusTool', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('Unexpected error');
+  });
+
+  it('prefers live memory-only registry status over durable storage', async () => {
+    const registry = createSessionRegistry();
+    const admission = registry.admit('memory-session');
+    const server = { registerTool: vi.fn() };
+    registerReviewStatusTool(server as unknown as McpServer, db, registry);
+    const liveHandler = server.registerTool.mock.calls[0][2] as HandlerFn;
+
+    const result = await liveHandler({ session_id: 'memory-session' }, {});
+
+    expect(JSON.parse(result.content[0].text)).toMatchObject({
+      status: 'in_progress',
+      session_id: 'memory-session',
+    });
+    if (admission.ok) admission.data.release();
   });
 });

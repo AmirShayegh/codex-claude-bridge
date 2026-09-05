@@ -1,48 +1,48 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { registerReviewPrecommitTool } from './review-precommit.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ReviewBackend } from '../backends/backend.js';
 import { DEFAULT_CONFIG } from '../config/types.js';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { PrecommitResult } from '../review/types.js';
-import { ok, err } from '../utils/errors.js';
+import type { ReviewLifecycle } from '../review/lifecycle.js';
+import type { ModelIdentity, PrecommitResult } from '../review/types.js';
+import { err, ok } from '../utils/errors.js';
+import { registerReviewPrecommitTool } from './review-precommit.js';
 
-vi.mock('../utils/git.js', () => ({
-  getStagedDiff: vi.fn(),
-}));
+vi.mock('../utils/resolve-diff.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../utils/resolve-diff.js')>();
+  return { ...actual, resolvePrecommitDiff: vi.fn() };
+});
 
-vi.mock('../storage/reviews.js', () => ({
-  saveReview: vi.fn(),
-}));
-
-vi.mock('../storage/sessions.js', () => ({
-  getOrCreateSession: vi.fn(),
-  getSession: vi.fn(),
-  markSessionCompleted: vi.fn(),
-  markSessionFailed: vi.fn(),
-  activateSession: vi.fn(),
-}));
-
-import { getStagedDiff } from '../utils/git.js';
-import { saveReview } from '../storage/reviews.js';
-import { getOrCreateSession, getSession, markSessionCompleted, markSessionFailed, activateSession } from '../storage/sessions.js';
+import { resolvePrecommitDiff } from '../utils/resolve-diff.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type HandlerFn = (args: Record<string, unknown>, extra: unknown) => Promise<any>;
 
-let mockClient: ReviewBackend;
-let mockServer: { registerTool: ReturnType<typeof vi.fn> };
-let handler: HandlerFn;
+const MODEL: ModelIdentity = {
+  provider: 'codex',
+  role: 'review',
+  requested: null,
+  resolved: 'gpt-5.6-sol',
+  observed: 'gpt-5.6-sol',
+  evidence: 'runtime_session_record',
+};
 
-const validResult: PrecommitResult = {
+const RESULT: PrecommitResult = {
   ready_to_commit: true,
   blockers: [],
-  warnings: ['Large diff'],
-  session_id: 'thread_pre',
+  warnings: [],
+  session_id: 'precommit-session',
+  provider: 'codex',
+  models: [MODEL],
+  provenance: { persistence: 'durable', warning: null },
 };
+
+let client: ReviewBackend;
+let lifecycle: ReviewLifecycle;
+let server: { registerTool: ReturnType<typeof vi.fn> };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockClient = {
+  client = {
     provider: 'codex',
     providers: ['codex'],
     allowsModelOverrideOnResume: false,
@@ -50,391 +50,113 @@ beforeEach(() => {
     reviewCode: vi.fn(),
     reviewPrecommit: vi.fn(),
   };
-  mockServer = { registerTool: vi.fn() };
+  lifecycle = {
+    reviewPlan: vi.fn(),
+    reviewCode: vi.fn(),
+    reviewPrecommit: vi.fn().mockResolvedValue(ok(RESULT)),
+  };
+  server = { registerTool: vi.fn() };
+  vi.mocked(resolvePrecommitDiff).mockImplementation(async ({ diff }) =>
+    ok(diff ?? 'captured staged diff'),
+  );
 });
 
-function setupHandler(db?: unknown, config = DEFAULT_CONFIG) {
-  registerReviewPrecommitTool(mockServer as unknown as McpServer, mockClient, db as never, config);
-  const calls = mockServer.registerTool.mock.calls;
-  handler = calls[calls.length - 1][2] as HandlerFn;
+function setup(autoDiff = true, useLifecycle = true): HandlerFn {
+  registerReviewPrecommitTool(
+    server as unknown as McpServer,
+    client,
+    undefined,
+    {
+      ...DEFAULT_CONFIG,
+      review_standards: {
+        ...DEFAULT_CONFIG.review_standards,
+        precommit: { ...DEFAULT_CONFIG.review_standards.precommit, auto_diff: autoDiff },
+      },
+    },
+    useLifecycle ? lifecycle : undefined,
+  );
+  return server.registerTool.mock.calls[0][2] as HandlerFn;
 }
 
-// A config whose precommit auto_diff default is flipped to `false`.
-const configAutoDiffFalse = {
-  ...DEFAULT_CONFIG,
-  review_standards: {
-    ...DEFAULT_CONFIG.review_standards,
-    precommit: { ...DEFAULT_CONFIG.review_standards.precommit, auto_diff: false },
-  },
-};
-
 describe('registerReviewPrecommitTool', () => {
-  beforeEach(() => setupHandler());
-
-  it('registers tool with name review_precommit', () => {
-    expect(mockServer.registerTool).toHaveBeenCalledTimes(1);
-    expect(mockServer.registerTool.mock.calls[0][0]).toBe('review_precommit');
+  it('registers bounded model and session schemas', () => {
+    setup();
+    expect(server.registerTool.mock.calls[0][0]).toBe('review_precommit');
+    const schema = server.registerTool.mock.calls[0][1].inputSchema as Record<
+      string,
+      { parse(value: unknown): unknown }
+    >;
+    expect(() => schema.model.parse('gpt\u0085forged')).toThrow();
+    expect(() => schema.session_id.parse(' x')).toThrow();
   });
 
-  it('auto_diff captures staged changes', async () => {
-    vi.mocked(getStagedDiff).mockResolvedValue(ok('staged diff content'));
-    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(validResult));
+  it('uses project auto_diff default and forwards the resolved diff', async () => {
+    const response = await setup(false)({}, {});
 
-    const result = await handler({}, {});
-
-    expect(getStagedDiff).toHaveBeenCalledTimes(1);
-    expect(mockClient.reviewPrecommit).toHaveBeenCalledWith(
-      expect.objectContaining({ diff: 'staged diff content' }),
-    );
-    const parsed = JSON.parse(result.content[0].text);
-    expect(parsed.ready_to_commit).toBe(true);
-    expect(result.isError).toBeUndefined();
-  });
-
-  it('ISS-004: falls back to config precommit.auto_diff when no arg is passed (false → no capture)', async () => {
-    setupHandler(undefined, configAutoDiffFalse); // re-register with auto_diff:false
-    vi.mocked(getStagedDiff).mockResolvedValue(ok('staged diff content'));
-
-    const result = await handler({}, {}); // no auto_diff arg → config default (false)
-
-    expect(getStagedDiff).not.toHaveBeenCalled(); // auto-capture disabled by config
-    // With auto_diff off and no explicit diff, there's nothing to review.
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('auto_diff disabled and no diff provided');
-  });
-
-  it('ISS-004: an explicit auto_diff arg overrides the config default', async () => {
-    setupHandler(undefined, configAutoDiffFalse); // config says false...
-    vi.mocked(getStagedDiff).mockResolvedValue(ok('staged diff content'));
-    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(validResult));
-
-    await handler({ auto_diff: true }, {}); // ...but the explicit arg wins
-
-    expect(getStagedDiff).toHaveBeenCalledTimes(1);
-  });
-
-  it('rejects session_id + model when the backend disallows model override on resume (Codex)', async () => {
-    const result = await handler({ session_id: 's1', model: 'gpt-5.4' }, {});
-
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('Cannot change model on a resumed session');
-    expect(mockClient.reviewPrecommit).not.toHaveBeenCalled();
-  });
-
-  it('allows session_id + model when the backend permits override on resume (Gemini)', async () => {
-    mockClient.allowsModelOverrideOnResume = true;
-    vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
-    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(validResult));
-
-    const result = await handler({ session_id: 's1', model: 'Gemini 3.1 Pro (High)' }, {});
-
-    expect(result.isError).toBeUndefined();
-    expect(mockClient.reviewPrecommit).toHaveBeenCalledWith(
-      expect.objectContaining({ session_id: 's1', model: 'Gemini 3.1 Pro (High)' }),
-    );
-  });
-
-  it('no staged changes returns warning', async () => {
-    vi.mocked(getStagedDiff).mockResolvedValue(ok(''));
-
-    const result = await handler({}, {});
-
-    expect(mockClient.reviewPrecommit).not.toHaveBeenCalled();
-    const parsed = JSON.parse(result.content[0].text);
-    expect(parsed.ready_to_commit).toBe(false);
-    expect(parsed.warnings).toContain('No staged changes found');
-  });
-
-  it('ready_to_commit is false when blockers exist', async () => {
-    vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
-    const blockedResult: PrecommitResult = {
-      ready_to_commit: false,
-      blockers: ['Missing error handling in auth module'],
-      warnings: [],
-      session_id: 'thread_blocked',
-    };
-    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(blockedResult));
-
-    const result = await handler({}, {});
-
-    const parsed = JSON.parse(result.content[0].text);
-    expect(parsed.ready_to_commit).toBe(false);
-    expect(parsed.blockers).toContain('Missing error handling in auth module');
-  });
-
-  it('explicit diff skips getStagedDiff when auto_diff is false', async () => {
-    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(validResult));
-
-    await handler({ diff: 'explicit diff', auto_diff: false }, {});
-
-    expect(getStagedDiff).not.toHaveBeenCalled();
-    expect(mockClient.reviewPrecommit).toHaveBeenCalledWith(
-      expect.objectContaining({ diff: 'explicit diff' }),
-    );
-  });
-
-  it('explicit diff takes precedence over auto_diff', async () => {
-    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(validResult));
-
-    await handler({ diff: 'explicit diff', auto_diff: true }, {});
-
-    expect(getStagedDiff).not.toHaveBeenCalled();
-    expect(mockClient.reviewPrecommit).toHaveBeenCalledWith(
-      expect.objectContaining({ diff: 'explicit diff' }),
-    );
-  });
-
-  it('forwards model override to client (T-011)', async () => {
-    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(validResult));
-
-    await handler({ diff: 'explicit diff', auto_diff: false, model: 'gpt-5.4' }, {});
-
-    expect(mockClient.reviewPrecommit).toHaveBeenCalledWith(
-      expect.objectContaining({ model: 'gpt-5.4' }),
-    );
-  });
-
-  it('auto_diff false + no diff returns error', async () => {
-    const result = await handler({ auto_diff: false }, {});
-
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('auto_diff disabled and no diff provided');
-    expect(getStagedDiff).not.toHaveBeenCalled();
-    expect(mockClient.reviewPrecommit).not.toHaveBeenCalled();
-  });
-
-  it('getStagedDiff failure returns MCP error', async () => {
-    vi.mocked(getStagedDiff).mockResolvedValue(err('GIT_ERROR: not a git repository'));
-
-    const result = await handler({}, {});
-
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('GIT_ERROR');
-    expect(mockClient.reviewPrecommit).not.toHaveBeenCalled();
-  });
-
-  it('no staged changes preserves caller session_id', async () => {
-    vi.mocked(getStagedDiff).mockResolvedValue(ok(''));
-
-    const result = await handler({ session_id: 'thread_existing' }, {});
-
-    const parsed = JSON.parse(result.content[0].text);
-    expect(parsed.session_id).toBe('thread_existing');
-    expect(parsed.ready_to_commit).toBe(false);
-  });
-
-  it('unexpected thrown error returns MCP error', async () => {
-    vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
-    vi.mocked(mockClient.reviewPrecommit).mockRejectedValue(new Error('timeout'));
-
-    const result = await handler({}, {});
-
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('timeout');
-  });
-
-  it('does not save to storage when no db provided', async () => {
-    vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
-    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(validResult));
-
-    await handler({}, {});
-
-    expect(saveReview).not.toHaveBeenCalled();
-  });
-});
-
-describe('registerReviewPrecommitTool with db', () => {
-  // transaction(fn)() invokes fn synchronously — matches better-sqlite3's
-  // shape that recordSuccess uses for atomicity (T-002).
-  const mockDb = { transaction: <T>(fn: () => T) => () => fn() };
-
-  beforeEach(() => {
-    vi.mocked(getOrCreateSession).mockReturnValue(ok({ session_id: 'thread_pre', status: 'in_progress' as const, created_at: '2026-01-01', completed_at: null, provider: null }));
-    vi.mocked(getSession).mockReturnValue(ok(null));
-    vi.mocked(activateSession).mockReturnValue(ok({ session_id: 'thread_pre', status: 'in_progress' as const, created_at: '2026-01-01', completed_at: null, provider: null }));
-    vi.mocked(markSessionCompleted).mockReturnValue(ok(undefined));
-    vi.mocked(markSessionFailed).mockReturnValue(ok(undefined));
-    vi.mocked(saveReview).mockReturnValue(ok(undefined));
-    setupHandler(mockDb);
-  });
-
-  it('saves review to storage on success', async () => {
-    vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
-    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(validResult));
-
-    await handler({}, {});
-
-    expect(saveReview).toHaveBeenCalledWith(mockDb, {
-      session_id: 'thread_pre',
-      type: 'precommit',
-      verdict: 'approve',
-      summary: 'Large diff',
-      findings_json: '[]',
+    expect(resolvePrecommitDiff).toHaveBeenCalledWith({ diff: undefined, auto_diff: false });
+    expect(lifecycle.reviewPrecommit).toHaveBeenCalledWith({
+      diff: 'captured staged diff',
+      checklist: undefined,
+      session_id: undefined,
+      model: undefined,
     });
+    expect(JSON.parse(response.content[0].text)).toEqual(RESULT);
   });
 
-  it('creates session entry on success', async () => {
-    vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
-    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(validResult));
-
-    await handler({}, {});
-
-    expect(getOrCreateSession).toHaveBeenCalledWith(mockDb, 'thread_pre', 'codex');
+  it('lets an explicit auto_diff value override config', async () => {
+    await setup(false)({ auto_diff: true }, {});
+    expect(resolvePrecommitDiff).toHaveBeenCalledWith({ diff: undefined, auto_diff: true });
   });
 
-  it('rejected review with blockers uses blockers for summary', async () => {
-    vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
-    const blockedResult: PrecommitResult = {
+  it('returns no-staged synthetic metadata before lifecycle admission', async () => {
+    vi.mocked(resolvePrecommitDiff).mockResolvedValue(
+      err('NO_STAGED_CHANGES: No staged changes found.'),
+    );
+    const response = await setup()({ session_id: 'existing' }, {});
+    expect(JSON.parse(response.content[0].text)).toMatchObject({
       ready_to_commit: false,
-      blockers: ['Missing error handling', 'SQL injection risk'],
-      warnings: [],
-      session_id: 'thread_blocked',
-    };
-    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(blockedResult));
-
-    await handler({}, {});
-
-    expect(saveReview).toHaveBeenCalledWith(mockDb, expect.objectContaining({
-      verdict: 'reject',
-      summary: 'Missing error handling; SQL injection risk',
-    }));
+      session_id: 'existing',
+      models: [],
+      provenance: { persistence: 'not_recorded', warning: null },
+    });
+    expect(lifecycle.reviewPrecommit).not.toHaveBeenCalled();
   });
 
-  it('does not save on client error', async () => {
-    vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
-    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(
-      err('REVIEW_TIMEOUT: timed out'),
+  it('returns diff and lifecycle failures as MCP errors', async () => {
+    vi.mocked(resolvePrecommitDiff).mockResolvedValueOnce(err('GIT_ERROR: failed'));
+    expect((await setup()({}, {})).isError).toBe(true);
+
+    server = { registerTool: vi.fn() };
+    vi.mocked(resolvePrecommitDiff).mockResolvedValueOnce(ok('diff'));
+    vi.mocked(lifecycle.reviewPrecommit).mockResolvedValueOnce(err('REVIEW_BUSY: active'));
+    const response = await setup()({}, {});
+    expect(response.isError).toBe(true);
+    expect(response.content[0].text).toContain('REVIEW_BUSY');
+  });
+
+  it('defers resumed model validation to the owner-aware lifecycle', async () => {
+    vi.mocked(lifecycle.reviewPrecommit).mockResolvedValueOnce(
+      err('INVALID_INPUT: Cannot change model on a resumed session.'),
     );
-
-    await handler({}, {});
-
-    expect(saveReview).not.toHaveBeenCalled();
-  });
-
-  it('marks session completed after save', async () => {
-    vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
-    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(validResult));
-
-    await handler({}, {});
-
-    expect(markSessionCompleted).toHaveBeenCalledWith(mockDb, 'thread_pre');
-  });
-
-  it('logs warning when getOrCreateSession fails', async () => {
-    vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
-    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(validResult));
-    vi.mocked(getOrCreateSession).mockReturnValue(err('STORAGE_ERROR: table missing'));
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    const result = await handler({}, {});
-
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to track session'));
-    expect(result.isError).toBeUndefined();
-    consoleSpy.mockRestore();
-  });
-
-  it('logs warning when markSessionCompleted fails', async () => {
-    vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
-    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(validResult));
-    vi.mocked(markSessionCompleted).mockReturnValue(err('STORAGE_ERROR: readonly'));
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    const result = await handler({}, {});
-
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('readonly'));
-    expect(result.isError).toBeUndefined();
-    consoleSpy.mockRestore();
-  });
-
-  it('logs warning when saveReview fails but still returns success', async () => {
-    vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
-    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(validResult));
-    vi.mocked(saveReview).mockReturnValue(err('STORAGE_ERROR: disk full'));
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    const result = await handler({}, {});
-
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('STORAGE_ERROR'));
-    expect(result.isError).toBeUndefined();
-    consoleSpy.mockRestore();
-  });
-
-  it('activates session before client call when session_id provided', async () => {
-    vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
-    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(validResult));
-
-    await handler({ session_id: 'thread_pre' }, {});
-
-    expect(activateSession).toHaveBeenCalledWith(mockDb, 'thread_pre', 'codex');
-    const activateOrder = vi.mocked(activateSession).mock.invocationCallOrder[0];
-    const reviewOrder = vi.mocked(mockClient.reviewPrecommit).mock.invocationCallOrder[0];
-    expect(activateOrder).toBeLessThan(reviewOrder);
-  });
-
-  it('does not activate session when no session_id provided', async () => {
-    vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
-    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(validResult));
-
-    await handler({}, {});
-
-    expect(activateSession).not.toHaveBeenCalled();
-    expect(getOrCreateSession).toHaveBeenCalledWith(mockDb, 'thread_pre', 'codex');
-  });
-
-  it('marks session failed when client returns error and session_id provided', async () => {
-    vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
-    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(err('REVIEW_TIMEOUT: timed out'));
-
-    const result = await handler({ session_id: 'thread_pre' }, {});
-
-    expect(result.isError).toBe(true);
-    expect(markSessionFailed).toHaveBeenCalledWith(mockDb, 'thread_pre');
-  });
-
-  it('does not activate session for no-staged-changes early return', async () => {
-    vi.mocked(getStagedDiff).mockResolvedValue(ok(''));
-
-    await handler({ session_id: 'thread_pre' }, {});
-
-    expect(activateSession).not.toHaveBeenCalled();
-  });
-
-  it('does not mark session failed when activateSession fails', async () => {
-    vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
-    vi.mocked(activateSession).mockReturnValue(err('STORAGE_ERROR: readonly'));
-    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(err('REVIEW_TIMEOUT: timed out'));
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    const result = await handler({ session_id: 'thread_pre' }, {});
-
-    expect(result.isError).toBe(true);
-    expect(markSessionFailed).not.toHaveBeenCalled();
-    consoleSpy.mockRestore();
-  });
-
-  it('uses preflightId for markSessionCompleted when session_id provided', async () => {
-    vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
-    vi.mocked(activateSession).mockReturnValue(ok({ session_id: 'thread_pre', status: 'in_progress' as const, created_at: '2026-01-01', completed_at: null, provider: null }));
-    const codexResult = { ...validResult, session_id: 'thread_different' };
-    vi.mocked(mockClient.reviewPrecommit).mockResolvedValue(ok(codexResult));
-
-    await handler({ session_id: 'thread_pre' }, {});
-
-    expect(markSessionCompleted).toHaveBeenCalledWith(mockDb, 'thread_pre');
-  });
-
-  it('rejects a cross-provider resume without calling the backend or failing the session', async () => {
-    vi.mocked(getStagedDiff).mockResolvedValue(ok('some diff'));
-    vi.mocked(getSession).mockReturnValue(
-      ok({ session_id: 'thread_pre', status: 'completed' as const, created_at: '2026-01-01', completed_at: '2026-01-02', provider: 'gemini' }),
+    const response = await setup()({ session_id: 'session-1', model: 'gpt-5.5' }, {});
+    expect(response.isError).toBe(true);
+    expect(resolvePrecommitDiff).toHaveBeenCalled();
+    expect(lifecycle.reviewPrecommit).toHaveBeenCalledWith(
+      expect.objectContaining({ session_id: 'session-1', model: 'gpt-5.5' }),
     );
+  });
 
-    const result = await handler({ session_id: 'thread_pre' }, {});
+  it('allows Gemini model changes and forwards the selector', async () => {
+    client.allowsModelOverrideOnResume = true;
+    await setup()({ session_id: 'session-1', model: 'Gemini 3.5 Pro (High)' }, {});
+    expect(lifecycle.reviewPrecommit).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'Gemini 3.5 Pro (High)' }),
+    );
+  });
 
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('PROVIDER_MISMATCH');
-    expect(mockClient.reviewPrecommit).not.toHaveBeenCalled();
-    expect(activateSession).not.toHaveBeenCalled();
-    expect(markSessionFailed).not.toHaveBeenCalled();
+  it('retains the no-lifecycle compatibility path', async () => {
+    vi.mocked(client.reviewPrecommit).mockResolvedValue(ok(RESULT));
+    const response = await setup(true, false)({}, {});
+    expect(JSON.parse(response.content[0].text)).toEqual(RESULT);
   });
 });

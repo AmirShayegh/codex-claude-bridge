@@ -1,0 +1,19 @@
+{
+  "content": "On resumed Codex reviews, retain the bridge's prior resolved identity but always prefer a fresh runtime-session observation for `observed`; never replace either with the current default. A mismatch is meaningful control-plane evidence and should be reported once without changing the review verdict.",
+  "context": "T-038 live acceptance resumed a thread created with gpt-5.5 while gpt-5.6-sol was the default: the bridge correctly retained resolved=gpt-5.5 while the rollout recorded observed=gpt-5.6-sol.",
+  "createdDate": "2026-07-13",
+  "id": "L-015",
+  "lastValidated": "2026-07-13",
+  "reinforcements": 0,
+  "source": "review",
+  "status": "active",
+  "supersedes": null,
+  "tags": [
+    "models",
+    "codex-sdk",
+    "observability",
+    "sessions"
+  ],
+  "title": "Treat Codex resolved and observed models as separate evidence",
+  "updatedDate": "2026-07-13"
+}

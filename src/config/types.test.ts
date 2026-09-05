@@ -15,10 +15,7 @@ describe('ReviewBridgeConfigSchema', () => {
       expect(config.timeout_seconds).toBe(300);
       expect(config.max_chunk_tokens).toBe(8000);
       expect(config.project_context).toBe('');
-      expect(config.review_standards.plan_review.focus).toEqual([
-        'architecture',
-        'feasibility',
-      ]);
+      expect(config.review_standards.plan_review.focus).toEqual(['architecture', 'feasibility']);
       expect(config.review_standards.plan_review.depth).toBe('thorough');
       expect(config.review_standards.code_review.criteria).toEqual([
         'bugs',
@@ -74,6 +71,32 @@ describe('ReviewBridgeConfigSchema', () => {
       if (result.success) {
         expect(result.data.model).toBe(model);
       }
+    }
+  });
+
+  it('trims a model selector before storing it', () => {
+    const result = ReviewBridgeConfigSchema.safeParse({ model: '  experimental-model-x  ' });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.model).toBe('experimental-model-x');
+  });
+
+  it('accepts a model selector at the 200-character boundary after trimming', () => {
+    const model = 'x'.repeat(200);
+    const result = ReviewBridgeConfigSchema.safeParse({ model: `  ${model}  ` });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.model).toBe(model);
+  });
+
+  it('rejects empty, overlong, and control-character model selectors', () => {
+    for (const model of [
+      '',
+      '   ',
+      'x'.repeat(201),
+      'safe\nforged',
+      `safe${String.fromCharCode(0x7f)}forged`,
+      `safe${String.fromCharCode(0x85)}forged`,
+    ]) {
+      expect(ReviewBridgeConfigSchema.safeParse({ model }).success).toBe(false);
     }
   });
 
@@ -186,10 +209,7 @@ describe('DEFAULT_CONFIG', () => {
     expect(DEFAULT_CONFIG.timeout_seconds).toBe(300);
     expect(DEFAULT_CONFIG.max_chunk_tokens).toBe(8000);
     expect(DEFAULT_CONFIG.project_context).toBe('');
-    expect(DEFAULT_CONFIG.review_standards.precommit.block_on).toEqual([
-      'critical',
-      'major',
-    ]);
+    expect(DEFAULT_CONFIG.review_standards.precommit.block_on).toEqual(['critical', 'major']);
   });
 
   it('matches parsing an empty object', () => {

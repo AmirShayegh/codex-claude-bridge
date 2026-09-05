@@ -1,0 +1,29 @@
+{
+  "components": [
+    "backends/codex",
+    "utils/errors"
+  ],
+  "createdBy": "runnerkit-17 (peer Claude session) via triage",
+  "dedupeKey": "runnerkit-feedback-2026-09-04:3",
+  "discoveredDate": "2026-09-05",
+  "id": "ISS-033",
+  "impact": "Verified at a066fba: neither src/backends/codex.ts nor src/utils/errors.ts matches the Codex \"requires a newer version of Codex\" error, so it falls to the generic path with no tip about the installed vs required CLI (L-013 documents that the effective CLI is the SDK-pinned bundle, not PATH, which is exactly the fact the user needs). Unverified peer report from before the 0.153.4 bump: on both codex-bridge and codex-bridge-local every model override, including \"latest\" and \"gpt-5.5\", failed with the gpt-6-astra version error. \"latest\" resolving to the default is by design, but \"gpt-5.5\" failing that way is unexplained and needs a repro: candidates are a session_id resume (model stripped on resume per L-010), or a Codex-internal background call (ISS-003 class) surfacing the internal model. Fix direction: classify the message as a new VERSION_ERROR (or MODEL_ERROR subtype) that reports the bundled CLI version, the codex_path override if any, and the SDK pin, and tips \"upgrade codex-claude-bridge\" rather than \"change model\"; then reproduce the override claim.",
+  "location": [],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": null,
+  "resolvedDate": null,
+  "severity": "medium",
+  "sourceRefs": [
+    {
+      "contentHash": "ce9e1d918b24ce35185433599bdd9e8de6064c7dc20702de9c3fd87aa23b7d56",
+      "endLine": 110,
+      "path": "src/backends/codex.ts",
+      "reviewId": "runnerkit-feedback-2026-09-04",
+      "revision": "a066fba339b032c0bd20f8bc3737bbaa404bb6b9",
+      "startLine": 90
+    }
+  ],
+  "status": "open",
+  "title": "\"requires a newer version of Codex\" is unclassified: error names neither installed nor required CLI version, and reportedly fired for non-default model overrides"
+}

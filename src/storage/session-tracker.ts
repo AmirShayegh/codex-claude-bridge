@@ -1,9 +1,12 @@
 import type Database from 'better-sqlite3';
 import type { SaveReviewInput } from './reviews.js';
-import { saveReview } from './reviews.js';
-import { activateSession, getOrCreateSession, getSession, markSessionCompleted, markSessionFailed } from './sessions.js';
+import { getOrCreateSession, getSessionProvider, markSessionFailed } from './sessions.js';
+import { recordReviewOutcome } from './review-outcome.js';
 import { ok, err, ErrorCode } from '../utils/errors.js';
 import type { Result } from '../utils/errors.js';
+import { escapeTerminalControls } from '../utils/terminal.js';
+import type { ReviewProvider } from '../config/types.js';
+import { toReviewProvider } from '../config/types.js';
 
 export interface SessionTracker {
   // Returns an error when the resumed session was created by a different
@@ -13,7 +16,12 @@ export interface SessionTracker {
   // (may differ from the tracker's configured provider under failover). It tags
   // a NEW session's provenance so a failed-over session is owned by the provider
   // that served it. Falls back to the configured provider when omitted.
-  recordSuccess(resultSessionId: string, review: SaveReviewInput, servingProvider?: string): void;
+  recordSuccess(
+    resultSessionId: string,
+    review: SaveReviewInput,
+    servingProvider?: ReviewProvider,
+    ownerModelIdentity?: unknown,
+  ): Result<void>;
   // sessionId surfaces partial-chunk failures where chunk 1 created a
   // Codex thread but a later chunk errored — the tool layer must mark
   // that thread's session failed rather than orphaning it (T-001).
@@ -23,110 +31,107 @@ export interface SessionTracker {
 
 const NULL_TRACKER: SessionTracker = {
   preflight: () => ok(undefined),
-  recordSuccess() {},
+  recordSuccess: () => ok(undefined),
   recordFailure() {},
   recordFailureBestEffort() {},
 };
 
-// Read-only cross-provider guard: a session created by one provider cannot be
-// resumed under a backend that doesn't serve that provider (their thread/
-// conversation ids are not interchangeable). Fails OPEN — returns ok when there
-// is no db, no session id, a read error, or an unknown/legacy-null owner — so a
-// guard we can't evaluate never blocks a review. Shared by the MCP tracker
-// (below) and the CLI, which has no tracker/recording of its own.
+// Read-only cross-provider guard. An absent/legacy row may fall back to the
+// configured primary, but an unavailable lookup cannot safely guess which
+// provider owns the conversation.
+function inspectSessionProvider(
+  db: Database.Database | undefined,
+  sessionId: string | undefined,
+  providers: readonly string[],
+): Result<ReviewProvider | null> {
+  if (typeof sessionId !== 'string') return ok(null);
+  // No shared database at all (CLI run without a reviews.db, ISS-018) is not a
+  // failed lookup: there is nothing to consult, so the guard fails OPEN and the
+  // backend resolves routing itself. A database we HAVE but cannot read is the
+  // unsafe case below.
+  if (!db) return ok(null);
+  let existing: ReturnType<typeof getSessionProvider>;
+  try {
+    existing = getSessionProvider(db, sessionId);
+  } catch {
+    return err(
+      `${ErrorCode.SESSION_ROUTING_UNAVAILABLE}: session ownership could not be established safely`,
+    );
+  }
+  if (!existing.ok) {
+    return err(
+      `${ErrorCode.SESSION_ROUTING_UNAVAILABLE}: session ownership could not be established safely`,
+    );
+  }
+  if (!existing.data?.provider) return ok(null);
+  const storedOwner = existing.data.provider;
+  const owner = toReviewProvider(storedOwner);
+  if (!owner) {
+    return err(
+      `${ErrorCode.SESSION_ROUTING_UNAVAILABLE}: session ownership could not be established safely`,
+    );
+  }
+  if (!providers.includes(owner)) {
+    return err(
+      `${ErrorCode.PROVIDER_MISMATCH}: session ${sessionId} was created by the '${storedOwner}' provider, ` +
+        `which is not active (available: ${providers.join(', ')}). Start a new session, or configure ` +
+        `the '${storedOwner}' provider to continue this one.`,
+    );
+  }
+  return ok(owner);
+}
+
 export function checkSessionProvider(
   db: Database.Database | undefined,
   sessionId: string | undefined,
   providers: readonly string[],
 ): Result<void> {
-  if (!db || typeof sessionId !== 'string') return ok(undefined);
-  // getSession is already Result-safe, but guard against any future throw so the
-  // fail-open contract holds no matter what the read does.
-  let existing: ReturnType<typeof getSession>;
-  try {
-    existing = getSession(db, sessionId);
-  } catch {
-    return ok(undefined);
-  }
-  if (!existing.ok || !existing.data || !existing.data.provider) return ok(undefined);
-  const owner = existing.data.provider;
-  if (!providers.includes(owner)) {
-    return err(
-      `${ErrorCode.PROVIDER_MISMATCH}: session ${sessionId} was created by the '${owner}' provider, ` +
-        `which is not active (available: ${providers.join(', ')}). Start a new session, or configure ` +
-        `the '${owner}' provider to continue this one.`,
-    );
-  }
-  return ok(undefined);
+  const inspected = inspectSessionProvider(db, sessionId, providers);
+  return inspected.ok ? ok(undefined) : inspected;
 }
 
 // providers is the guard set (every provider this backend serves); taggingProvider
 // is the provider stamped on NEW sessions (a composite presents as its primary).
 export function createSessionTracker(
   db: Database.Database | undefined,
-  providers: readonly string[],
-  taggingProvider: string,
+  providers: readonly ReviewProvider[],
+  taggingProvider: ReviewProvider,
 ): SessionTracker {
   if (!db) return NULL_TRACKER;
 
   let preflightId: string | undefined;
+  let preflightProvider: ReviewProvider | undefined;
 
   return {
     preflight(sessionId) {
       if (typeof sessionId !== 'string') return ok(undefined);
-      // Cross-provider guard runs before activateSession so a rejected resume
-      // never mutates the session's state.
-      const guard = checkSessionProvider(db, sessionId, providers);
+      // Preflight is deliberately read-only. Persisting an in-progress row here
+      // would claim durable state before the provider has produced anything and
+      // would leave stale rows when the review or storage later fails.
+      const guard = inspectSessionProvider(db, sessionId, providers);
       if (!guard.ok) return guard;
-      const result = activateSession(db, sessionId, taggingProvider);
-      if (result.ok) {
-        preflightId = sessionId;
-      } else {
-        console.error(`Failed to activate session: ${result.error}`);
-      }
+      preflightId = sessionId;
+      preflightProvider = guard.data ?? taggingProvider;
       return ok(undefined);
     },
 
-    recordSuccess(resultSessionId, review, servingProvider) {
-      if (!preflightId) {
-        // Fresh review: tag provenance with the provider that actually served
-        // (failover may have switched it), defaulting to the configured one.
-        const sessionResult = getOrCreateSession(db, resultSessionId, servingProvider ?? taggingProvider);
-        if (!sessionResult.ok) {
-          console.error(`Failed to track session: ${sessionResult.error}`);
-        }
-      }
-      const completeId = preflightId ?? resultSessionId;
-      // saveReview and markSessionCompleted must succeed or fail together —
-      // otherwise a save failure would leave the session marked complete with
-      // no review row, producing inconsistent state across review_history /
-      // review_status.
-      try {
-        db.transaction(() => {
-          const saveResult = saveReview(db, review);
-          if (!saveResult.ok) throw new Error(saveResult.error);
-          const completeResult = markSessionCompleted(db, completeId);
-          if (!completeResult.ok) throw new Error(completeResult.error);
-        })();
-      } catch (e) {
-        console.error(`recordSuccess transaction failed: ${e instanceof Error ? e.message : String(e)}`);
-      }
+    recordSuccess(resultSessionId, review, servingProvider, ownerModelIdentity) {
+      return recordReviewOutcome(db, {
+        preflightSessionId: preflightId,
+        preflightProvider,
+        resultSessionId,
+        servingProvider: servingProvider ?? taggingProvider,
+        ownerModelIdentity,
+        review,
+      });
     },
 
     recordFailure(sessionId) {
       const id = preflightId ?? sessionId;
       if (!id) return;
-      // Preflight path: row already exists from activateSession — single UPDATE.
-      if (preflightId) {
-        const failResult = markSessionFailed(db, preflightId);
-        if (!failResult.ok) {
-          console.error(`Failed to mark session failed: ${failResult.error}`);
-        }
-        return;
-      }
-      // Fresh-session path (T-001): chunk 1 created a Codex thread but no DB
-      // row exists. Create-then-fail must be atomic so we never persist a row
-      // that's missing the failed status.
+      // No row is created during preflight. Once the provider actually fails,
+      // create-if-absent and mark failed atomically so review_status still has a
+      // durable terminal state for both resumed and fresh partial sessions.
       try {
         db.transaction(() => {
           const sessionResult = getOrCreateSession(db, id, taggingProvider);
@@ -135,13 +140,25 @@ export function createSessionTracker(
           if (!failResult.ok) throw new Error(failResult.error);
         })();
       } catch (e) {
-        console.error(`recordFailure transaction failed: ${e instanceof Error ? e.message : String(e)}`);
+        console.error(
+          `recordFailure transaction failed: ${escapeTerminalControls(e instanceof Error ? e.message : String(e))}`,
+        );
       }
     },
 
     recordFailureBestEffort() {
       if (!preflightId) return;
-      try { markSessionFailed(db, preflightId); } catch { /* best-effort */ }
+      const id = preflightId;
+      try {
+        db.transaction(() => {
+          const sessionResult = getOrCreateSession(db, id, taggingProvider);
+          if (!sessionResult.ok) throw new Error(sessionResult.error);
+          const failResult = markSessionFailed(db, id);
+          if (!failResult.ok) throw new Error(failResult.error);
+        })();
+      } catch {
+        /* best-effort */
+      }
     },
   };
 }

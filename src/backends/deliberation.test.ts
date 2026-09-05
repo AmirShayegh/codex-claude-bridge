@@ -36,12 +36,31 @@ const codeResult = (verdict: string, findings: ReturnType<typeof f>[], session_i
   findings,
   session_id,
 });
+const model = (provider: ReviewProvider, role: 'review' | 'adjudication' = 'review') => ({
+  provider,
+  role,
+  requested: null,
+  resolved: provider === 'codex' ? 'gpt-5.6-sol' : 'Gemini 3.5 Flash (High)',
+  observed: provider === 'codex' ? 'gpt-5.6-sol' : null,
+  evidence:
+    provider === 'codex' ? ('runtime_session_record' as const) : ('bridge_selection' as const),
+});
 const DIFF = 'diff --git a/f b/f\n@@ -1 +1 @@\n-a\n+b';
+const REJECTED_PROVIDER_ERROR = `${ErrorCode.UNKNOWN_ERROR}: provider call failed unexpectedly`;
+const PRIVATE_REJECTION = new Error(
+  'provider exploded at /Users/alice/private/reviewer.ts\nsecret=super-secret',
+);
 
 describe('computeAgreement', () => {
   it('splits findings into agreed (both flagged) and divergent (one flagged / keyless)', () => {
-    const a = { provider: 'codex' as const, findings: [f('a.ts', 1, 'security', 'major'), f(null, null, 'style', 'minor')] };
-    const b = { provider: 'gemini' as const, findings: [f('a.ts', 1, 'security', 'critical'), f('b.ts', 2, 'perf', 'major')] };
+    const a = {
+      provider: 'codex' as const,
+      findings: [f('a.ts', 1, 'security', 'major'), f(null, null, 'style', 'minor')],
+    };
+    const b = {
+      provider: 'gemini' as const,
+      findings: [f('a.ts', 1, 'security', 'critical'), f('b.ts', 2, 'perf', 'major')],
+    };
 
     const { agreed, divergent } = computeAgreement(a, b, rank);
 
@@ -57,7 +76,10 @@ describe('computeAgreement', () => {
     // Surfaced by deliberating on this feature's own code: same-key dupes from one
     // provider must collapse to the higher severity, not the last-seen.
     const { agreed, divergent } = computeAgreement(
-      { provider: 'codex', findings: [f('a.ts', 1, 'security', 'minor'), f('a.ts', 1, 'security', 'critical')] },
+      {
+        provider: 'codex',
+        findings: [f('a.ts', 1, 'security', 'minor'), f('a.ts', 1, 'security', 'critical')],
+      },
       { provider: 'gemini', findings: [] },
       rank,
     );
@@ -113,7 +135,10 @@ describe('computeAgreement', () => {
     const { agreed, divergent } = computeAgreement(
       {
         provider: 'codex',
-        findings: [f('payment.js', 17, 'security', 'critical'), f('payment.js', 17, 'error handling', 'major')],
+        findings: [
+          f('payment.js', 17, 'security', 'critical'),
+          f('payment.js', 17, 'error handling', 'major'),
+        ],
       },
       { provider: 'gemini', findings: [f('payment.js', 17, 'Security', 'critical')] },
       rank,
@@ -138,7 +163,10 @@ describe('computeAgreement', () => {
       },
       {
         provider: 'gemini',
-        findings: [f('payment.js', 17, 'security', 'critical'), f('payment.js', 17, 'error handling', 'major')],
+        findings: [
+          f('payment.js', 17, 'security', 'critical'),
+          f('payment.js', 17, 'error handling', 'major'),
+        ],
       },
       rank,
     );
@@ -190,11 +218,29 @@ describe('computeAgreement', () => {
 });
 
 describe('createDeliberationBackend', () => {
+  it('orders and preserves both successful reviewer model identities', async () => {
+    const primaryResult = { ...codeResult('approve', [], 'cdx'), models: [model('codex')] };
+    const secondaryResult = { ...codeResult('approve', [], 'gem'), models: [model('gemini')] };
+    const primary = backend('codex', {
+      reviewCode: vi.fn().mockResolvedValue(ok(primaryResult)),
+    });
+    const secondary = backend('gemini', {
+      reviewCode: vi.fn().mockResolvedValue(ok(secondaryResult)),
+    });
+
+    const res = await createDeliberationBackend(primary, secondary).reviewCode({ diff: DIFF });
+
+    expect(res.ok && res.data.models).toEqual([model('codex'), model('gemini')]);
+  });
   it('both agree → agreement "agree", agreed populated, divergent empty, verdicts per provider', async () => {
     const shared = [f('a.ts', 1, 'security', 'major')];
-    const primary = backend('codex', { reviewCode: vi.fn().mockResolvedValue(ok(codeResult('approve', shared, 'cdx'))) });
+    const primary = backend('codex', {
+      reviewCode: vi.fn().mockResolvedValue(ok(codeResult('approve', shared, 'cdx'))),
+    });
     const secondary = backend('gemini', {
-      reviewCode: vi.fn().mockResolvedValue(ok(codeResult('approve', [f('a.ts', 1, 'security', 'major')], 'gem'))),
+      reviewCode: vi
+        .fn()
+        .mockResolvedValue(ok(codeResult('approve', [f('a.ts', 1, 'security', 'major')], 'gem'))),
     });
 
     const res = await createDeliberationBackend(primary, secondary).reviewCode({ diff: DIFF });
@@ -214,10 +260,28 @@ describe('createDeliberationBackend', () => {
 
   it('partial overlap → agreement "mixed", one-sided findings are divergent', async () => {
     const primary = backend('codex', {
-      reviewCode: vi.fn().mockResolvedValue(ok(codeResult('request_changes', [f('a.ts', 1, 'security', 'critical'), f('a.ts', 5, 'bugs', 'major')]))),
+      reviewCode: vi
+        .fn()
+        .mockResolvedValue(
+          ok(
+            codeResult('request_changes', [
+              f('a.ts', 1, 'security', 'critical'),
+              f('a.ts', 5, 'bugs', 'major'),
+            ]),
+          ),
+        ),
     });
     const secondary = backend('gemini', {
-      reviewCode: vi.fn().mockResolvedValue(ok(codeResult('request_changes', [f('a.ts', 1, 'security', 'critical'), f('b.ts', 2, 'perf', 'minor')]))),
+      reviewCode: vi
+        .fn()
+        .mockResolvedValue(
+          ok(
+            codeResult('request_changes', [
+              f('a.ts', 1, 'security', 'critical'),
+              f('b.ts', 2, 'perf', 'minor'),
+            ]),
+          ),
+        ),
     });
 
     const res = await createDeliberationBackend(primary, secondary).reviewCode({ diff: DIFF });
@@ -233,8 +297,12 @@ describe('createDeliberationBackend', () => {
   });
 
   it('conflicting verdicts → agreement "conflict"; top-level verdict is the worst', async () => {
-    const primary = backend('codex', { reviewCode: vi.fn().mockResolvedValue(ok(codeResult('approve', []))) });
-    const secondary = backend('gemini', { reviewCode: vi.fn().mockResolvedValue(ok(codeResult('reject', []))) });
+    const primary = backend('codex', {
+      reviewCode: vi.fn().mockResolvedValue(ok(codeResult('approve', []))),
+    });
+    const secondary = backend('gemini', {
+      reviewCode: vi.fn().mockResolvedValue(ok(codeResult('reject', []))),
+    });
 
     const res = await createDeliberationBackend(primary, secondary).reviewCode({ diff: DIFF });
 
@@ -248,15 +316,24 @@ describe('createDeliberationBackend', () => {
   it('runs both providers in parallel (both review methods called once)', async () => {
     const pReview = vi.fn().mockResolvedValue(ok(codeResult('approve', [])));
     const sReview = vi.fn().mockResolvedValue(ok(codeResult('approve', [])));
-    await createDeliberationBackend(backend('codex', { reviewCode: pReview }), backend('gemini', { reviewCode: sReview })).reviewCode({ diff: DIFF });
+    await createDeliberationBackend(
+      backend('codex', { reviewCode: pReview }),
+      backend('gemini', { reviewCode: sReview }),
+    ).reviewCode({ diff: DIFF });
     expect(pReview).toHaveBeenCalledOnce();
     expect(sReview).toHaveBeenCalledOnce();
     expect(sReview).toHaveBeenCalledWith(expect.objectContaining({ model: undefined })); // secondary model cleared
   });
 
   it('degrades to the survivor + a `degraded` marker when one provider fails', async () => {
-    const primary = backend('codex', { reviewCode: vi.fn().mockResolvedValue(err(`${ErrorCode.RATE_LIMITED}: out of usage`)) });
-    const secondary = backend('gemini', { reviewCode: vi.fn().mockResolvedValue(ok(codeResult('reject', [f('a.ts', 1, 'security', 'critical')], 'gem'))) });
+    const primary = backend('codex', {
+      reviewCode: vi.fn().mockResolvedValue(err(`${ErrorCode.RATE_LIMITED}: out of usage`)),
+    });
+    const secondary = backend('gemini', {
+      reviewCode: vi
+        .fn()
+        .mockResolvedValue(ok(codeResult('reject', [f('a.ts', 1, 'security', 'critical')], 'gem'))),
+    });
 
     const res = await createDeliberationBackend(primary, secondary).reviewCode({ diff: DIFF });
 
@@ -264,16 +341,140 @@ describe('createDeliberationBackend', () => {
     if (res.ok) {
       expect(res.data.provider).toBe('gemini'); // survivor
       expect(res.data.verdict).toBe('reject');
-      expect(res.data.deliberation?.degraded).toEqual({ failed: 'codex', reason: expect.stringContaining('RATE_LIMITED') });
+      expect(res.data.deliberation?.degraded).toEqual({
+        failed: 'codex',
+        reason: expect.stringContaining('RATE_LIMITED'),
+      });
       expect(res.data.deliberation?.providers).toEqual(['gemini']);
       // ISS-016: a single-provider degraded result must NOT claim 'agree'.
       expect(res.data.deliberation?.agreement).toBe('degraded');
     }
   });
 
+  it('fresh code: sanitizes a rejected reviewer promise and preserves the successful peer', async () => {
+    const survivor = {
+      ...codeResult('approve', [], 'codex-session'),
+      models: [model('codex')],
+    };
+    const primary = backend('codex', {
+      reviewCode: vi.fn().mockResolvedValue(ok(survivor)),
+    });
+    const secondary = backend('gemini', {
+      reviewCode: vi.fn().mockRejectedValue(PRIVATE_REJECTION),
+    });
+
+    const result = await createDeliberationBackend(primary, secondary).reviewCode({ diff: DIFF });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.session_id).toBe('codex-session');
+    expect(result.data.models).toEqual([model('codex')]);
+    expect(result.data.deliberation?.degraded).toEqual({
+      failed: 'gemini',
+      reason: REJECTED_PROVIDER_ERROR,
+    });
+    expect(result.data.deliberation?.degraded?.reason).not.toContain('/Users/alice');
+    expect(result.data.deliberation?.degraded?.reason).not.toContain('super-secret');
+  });
+
+  it('resumed code: sanitizes a rejected owner promise and preserves the fresh peer', async () => {
+    const primary = backend('codex', {
+      reviewCode: vi.fn().mockRejectedValue(PRIVATE_REJECTION),
+    });
+    const survivor = {
+      ...codeResult('approve', [], 'gemini-fresh'),
+      models: [model('gemini')],
+    };
+    const secondary = backend('gemini', {
+      reviewCode: vi.fn().mockResolvedValue(ok(survivor)),
+    });
+
+    const result = await createDeliberationBackend(primary, secondary).reviewCode({
+      diff: DIFF,
+      session_id: 'codex-resumed',
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.session_id).toBe('gemini-fresh');
+    expect(result.data.models).toEqual([model('gemini')]);
+    expect(result.data.deliberation?.degraded).toEqual({
+      failed: 'codex',
+      reason: REJECTED_PROVIDER_ERROR,
+    });
+    expect(result.data.deliberation?.degraded?.reason).not.toContain('/Users/alice');
+    expect(result.data.deliberation?.degraded?.reason).not.toContain('super-secret');
+  });
+
+  it('fresh plan: sanitizes a rejected reviewer promise and preserves the successful peer', async () => {
+    const survivor = {
+      verdict: 'approve' as const,
+      summary: 'safe plan',
+      findings: [],
+      session_id: 'gemini-plan',
+      models: [model('gemini')],
+    };
+    const primary = backend('codex', {
+      reviewPlan: vi.fn().mockRejectedValue(PRIVATE_REJECTION),
+    });
+    const secondary = backend('gemini', {
+      reviewPlan: vi.fn().mockResolvedValue(ok(survivor)),
+    });
+
+    const result = await createDeliberationBackend(primary, secondary).reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.session_id).toBe('gemini-plan');
+    expect(result.data.models).toEqual([model('gemini')]);
+    expect(result.data.deliberation?.degraded).toEqual({
+      failed: 'codex',
+      reason: REJECTED_PROVIDER_ERROR,
+    });
+    expect(result.data.deliberation?.degraded?.reason).not.toContain('/Users/alice');
+    expect(result.data.deliberation?.degraded?.reason).not.toContain('super-secret');
+  });
+
+  it('resumed plan: sanitizes a rejected fresh-peer promise and preserves the owner', async () => {
+    const primary = backend('codex', {
+      reviewPlan: vi.fn().mockRejectedValue(PRIVATE_REJECTION),
+    });
+    const survivor = {
+      verdict: 'approve' as const,
+      summary: 'owner plan',
+      findings: [],
+      session_id: 'gemini-resumed',
+      models: [model('gemini')],
+    };
+    const secondary = backend('gemini', {
+      reviewPlan: vi.fn().mockResolvedValue(ok(survivor)),
+    });
+    const lookup = vi.fn().mockReturnValue({ status: 'found', value: 'gemini' });
+
+    const result = await createDeliberationBackend(primary, secondary, { lookup }).reviewPlan({
+      plan: 'plan',
+      session_id: 'gemini-resumed',
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.session_id).toBe('gemini-resumed');
+    expect(result.data.models).toEqual([model('gemini')]);
+    expect(result.data.deliberation?.degraded).toEqual({
+      failed: 'codex',
+      reason: REJECTED_PROVIDER_ERROR,
+    });
+    expect(result.data.deliberation?.degraded?.reason).not.toContain('/Users/alice');
+    expect(result.data.deliberation?.degraded?.reason).not.toContain('super-secret');
+  });
+
   it('returns a combined error when both providers fail', async () => {
-    const primary = backend('codex', { reviewCode: vi.fn().mockResolvedValue(err(`${ErrorCode.RATE_LIMITED}: usage`)) });
-    const secondary = backend('gemini', { reviewCode: vi.fn().mockResolvedValue(err(`${ErrorCode.AUTH_ERROR}: not signed in`)) });
+    const primary = backend('codex', {
+      reviewCode: vi.fn().mockResolvedValue(err(`${ErrorCode.RATE_LIMITED}: usage`)),
+    });
+    const secondary = backend('gemini', {
+      reviewCode: vi.fn().mockResolvedValue(err(`${ErrorCode.AUTH_ERROR}: not signed in`)),
+    });
 
     const res = await createDeliberationBackend(primary, secondary).reviewCode({ diff: DIFF });
 
@@ -315,19 +516,101 @@ describe('createDeliberationBackend', () => {
     const sReview = vi.fn().mockResolvedValue(ok(codeResult('approve', [], 'gemini-sess')));
     const primary = backend('codex', { reviewCode: pReview });
     const secondary = backend('gemini', { reviewCode: sReview });
-    const lookup = vi.fn().mockReturnValue('gemini');
+    const lookup = vi.fn().mockReturnValue({ status: 'found', value: 'gemini' });
 
     const res = await createDeliberationBackend(primary, secondary, { lookup }).reviewCode({
       diff: DIFF,
       session_id: 'gemini-sess',
+      model: 'Gemini 3.1 Pro (High)',
     });
 
     expect(lookup).toHaveBeenCalledWith('gemini-sess');
-    expect(sReview).toHaveBeenCalledWith(expect.objectContaining({ session_id: 'gemini-sess' })); // owner resumes
-    expect(pReview).toHaveBeenCalledWith(expect.objectContaining({ session_id: undefined })); // primary fresh
+    expect(sReview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session_id: 'gemini-sess',
+        model: 'Gemini 3.1 Pro (High)',
+      }),
+    ); // owner resumes with its override
+    expect(pReview).toHaveBeenCalledWith(
+      expect.objectContaining({ session_id: undefined, model: undefined }),
+    ); // primary fresh on its own default
     expect(res.ok && res.data.provider).toBe('codex'); // composite presents as primary
     expect(res.ok && res.data.session_id).toBe('gemini-sess'); // combined = resumed owner session
     expect(res.ok && res.data.deliberation).toBeDefined();
+  });
+
+  it('deliberate plan resume applies the model override to a secondary owner, not the fresh primary', async () => {
+    const primaryReview = vi.fn().mockResolvedValue(
+      ok({
+        verdict: 'approve' as const,
+        summary: 'fresh',
+        findings: [],
+        session_id: 'codex-fresh',
+      }),
+    );
+    const secondaryReview = vi.fn().mockResolvedValue(
+      ok({
+        verdict: 'approve' as const,
+        summary: 'owner',
+        findings: [],
+        session_id: 'gemini-sess',
+      }),
+    );
+    const lookup = vi.fn().mockReturnValue({ status: 'found', value: 'gemini' });
+
+    await createDeliberationBackend(
+      backend('codex', { reviewPlan: primaryReview }),
+      backend('gemini', { reviewPlan: secondaryReview }),
+      { lookup },
+    ).reviewPlan({
+      plan: 'plan',
+      session_id: 'gemini-sess',
+      model: 'Gemini 3.1 Pro (High)',
+    });
+
+    expect(secondaryReview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session_id: 'gemini-sess',
+        model: 'Gemini 3.1 Pro (High)',
+      }),
+    );
+    expect(primaryReview).toHaveBeenCalledWith(
+      expect.objectContaining({ session_id: undefined, model: undefined }),
+    );
+  });
+
+  it('rejects a model override for a resumed Codex owner before either reviewer runs', async () => {
+    const primaryReview = vi.fn();
+    const secondaryReview = vi.fn();
+    const lookup = vi.fn().mockReturnValue({ status: 'found', value: 'codex' });
+
+    const result = await createDeliberationBackend(
+      backend('codex', { reviewCode: primaryReview }),
+      backend('gemini', { reviewCode: secondaryReview }),
+      { lookup },
+    ).reviewCode({ diff: DIFF, session_id: 'codex-session', model: 'gpt-5.5' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain('Cannot change model on a resumed session');
+    expect(primaryReview).not.toHaveBeenCalled();
+    expect(secondaryReview).not.toHaveBeenCalled();
+  });
+
+  it('does not call either reviewer when resume ownership is unavailable', async () => {
+    const pReview = vi.fn();
+    const sReview = vi.fn();
+    const lookup = vi.fn().mockReturnValue({ status: 'unavailable' });
+
+    const res = await createDeliberationBackend(
+      backend('codex', { reviewCode: pReview }),
+      backend('gemini', { reviewCode: sReview }),
+      { lookup },
+    ).reviewCode({ diff: DIFF, session_id: 'unknown-owner' });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/^SESSION_ROUTING_UNAVAILABLE:/);
+    expect(pReview).not.toHaveBeenCalled();
+    expect(sReview).not.toHaveBeenCalled();
   });
 
   it('deliberate-on-resume: if the owner fails, degrade to the fresh other leaf with its NEW session id', async () => {
@@ -339,13 +622,19 @@ describe('createDeliberationBackend', () => {
     const primary = backend('codex', { reviewCode: pReview });
     const secondary = backend('gemini', { reviewCode: sReview });
 
-    const res = await createDeliberationBackend(primary, secondary).reviewCode({ diff: DIFF, session_id: 'codex-sess' });
+    const res = await createDeliberationBackend(primary, secondary).reviewCode({
+      diff: DIFF,
+      session_id: 'codex-sess',
+    });
 
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.data.provider).toBe('gemini'); // survivor
     expect(res.data.session_id).toBe('gem-fresh'); // fresh NEW session, not the dead 'codex-sess'
-    expect(res.data.deliberation?.degraded).toEqual({ failed: 'codex', reason: expect.stringContaining('RATE_LIMITED') });
+    expect(res.data.deliberation?.degraded).toEqual({
+      failed: 'codex',
+      reason: expect.stringContaining('RATE_LIMITED'),
+    });
     expect(res.data.deliberation?.agreement).toBe('degraded');
   });
 
@@ -353,11 +642,18 @@ describe('createDeliberationBackend', () => {
     // Owner is the secondary (gemini) via lookup; both fail. The combined error
     // must still be primary-led and name gemini as the "also failed" side — not
     // swap them by owner/other order.
-    const primary = backend('codex', { reviewCode: vi.fn().mockResolvedValue(err(`${ErrorCode.AUTH_ERROR}: codex not signed in`)) });
-    const secondary = backend('gemini', { reviewCode: vi.fn().mockResolvedValue(err(`${ErrorCode.RATE_LIMITED}: gemini out of usage`)) });
-    const lookup = vi.fn().mockReturnValue('gemini');
+    const primary = backend('codex', {
+      reviewCode: vi.fn().mockResolvedValue(err(`${ErrorCode.AUTH_ERROR}: codex not signed in`)),
+    });
+    const secondary = backend('gemini', {
+      reviewCode: vi.fn().mockResolvedValue(err(`${ErrorCode.RATE_LIMITED}: gemini out of usage`)),
+    });
+    const lookup = vi.fn().mockReturnValue({ status: 'found', value: 'gemini' });
 
-    const res = await createDeliberationBackend(primary, secondary, { lookup }).reviewCode({ diff: DIFF, session_id: 'gemini-sess' });
+    const res = await createDeliberationBackend(primary, secondary, { lookup }).reviewCode({
+      diff: DIFF,
+      session_id: 'gemini-sess',
+    });
 
     expect(res.ok).toBe(false);
     if (!res.ok) {
@@ -371,13 +667,21 @@ describe('createDeliberationBackend', () => {
     const pre = { ready_to_commit: true, blockers: [], warnings: [], session_id: 'p' };
     const sPre = vi.fn();
     const primary = backend('codex', { reviewPrecommit: vi.fn().mockResolvedValue(ok(pre)) });
-    const res = await createDeliberationBackend(primary, backend('gemini', { reviewPrecommit: sPre })).reviewPrecommit({ diff: DIFF });
+    const res = await createDeliberationBackend(
+      primary,
+      backend('gemini', { reviewPrecommit: sPre }),
+    ).reviewPrecommit({ diff: DIFF });
     expect(res.ok).toBe(true);
     expect(sPre).not.toHaveBeenCalled(); // primary succeeded → no second call (failover semantics)
   });
 
   it('reviewPlan deliberates too', async () => {
-    const planA = { verdict: 'revise', summary: 's', findings: [f('p.ts', 1, 'feasibility', 'major')], session_id: 'a' };
+    const planA = {
+      verdict: 'revise',
+      summary: 's',
+      findings: [f('p.ts', 1, 'feasibility', 'major')],
+      session_id: 'a',
+    };
     const planB = { verdict: 'approve', summary: 's', findings: [], session_id: 'b' };
     const res = await createDeliberationBackend(
       backend('codex', { reviewPlan: vi.fn().mockResolvedValue(ok(planA)) }),
@@ -395,26 +699,89 @@ describe('createDeliberationBackend', () => {
 // A mixed code review where each provider flags one one-sided (divergent) finding:
 //   divergent[0] = codex's a.ts:5:bugs  (judged by the gemini secondary)
 //   divergent[1] = gemini's b.ts:2:perf (judged by the codex primary)
-const cross = (verdict: string, reason: string) => ({ adjudications: [{ index: 0, verdict, reason }] });
+const cross = (verdict: string, reason: string) => ({
+  adjudications: [{ index: 0, verdict, reason }],
+});
 function mixedPair(pMethods: Methods = {}, sMethods: Methods = {}) {
   const primary = backend('codex', {
-    reviewCode: vi.fn().mockResolvedValue(ok(codeResult('request_changes', [f('a.ts', 1, 'security', 'critical'), f('a.ts', 5, 'bugs', 'major')]))),
+    reviewCode: vi
+      .fn()
+      .mockResolvedValue(
+        ok(
+          codeResult('request_changes', [
+            f('a.ts', 1, 'security', 'critical'),
+            f('a.ts', 5, 'bugs', 'major'),
+          ]),
+        ),
+      ),
     ...pMethods,
   });
   const secondary = backend('gemini', {
-    reviewCode: vi.fn().mockResolvedValue(ok(codeResult('request_changes', [f('a.ts', 1, 'security', 'critical'), f('b.ts', 2, 'perf', 'minor')]))),
+    reviewCode: vi
+      .fn()
+      .mockResolvedValue(
+        ok(
+          codeResult('request_changes', [
+            f('a.ts', 1, 'security', 'critical'),
+            f('b.ts', 2, 'perf', 'minor'),
+          ]),
+        ),
+      ),
     ...sMethods,
   });
   return { primary, secondary };
 }
 
 describe('createDeliberationBackend — deliberate-deep (cross-review round)', () => {
-  it('adjudicates each provider\'s divergent findings with the OTHER provider', async () => {
+  it('appends successful adjudication identities after reviewer identities in provider order', async () => {
+    const primaryReview = {
+      ...codeResult('request_changes', [f('a.ts', 5, 'bugs', 'major')], 'cdx'),
+      models: [model('codex')],
+    };
+    const secondaryReview = {
+      ...codeResult('request_changes', [f('b.ts', 2, 'perf', 'minor')], 'gem'),
+      models: [model('gemini')],
+    };
+    const primary = backend('codex', {
+      reviewCode: vi.fn().mockResolvedValue(ok(primaryReview)),
+      crossReview: vi
+        .fn()
+        .mockResolvedValue(
+          ok({ ...cross('confirmed', 'real'), models: [model('codex', 'adjudication')] }),
+        ),
+    });
+    const secondary = backend('gemini', {
+      reviewCode: vi.fn().mockResolvedValue(ok(secondaryReview)),
+      crossReview: vi
+        .fn()
+        .mockResolvedValue(
+          ok({ ...cross('confirmed', 'real'), models: [model('gemini', 'adjudication')] }),
+        ),
+    });
+
+    const res = await createDeliberationBackend(primary, secondary, {
+      crossReview: true,
+    }).reviewCode({ diff: DIFF });
+
+    expect(res.ok && res.data.models).toEqual([
+      model('codex'),
+      model('gemini'),
+      model('codex', 'adjudication'),
+      model('gemini', 'adjudication'),
+    ]);
+  });
+
+  it("adjudicates each provider's divergent findings with the OTHER provider", async () => {
     const secReview = vi.fn().mockResolvedValue(ok(cross('confirmed', 'yes real'))); // gemini judges codex's finding
     const priReview = vi.fn().mockResolvedValue(ok(cross('disputed', 'false positive'))); // codex judges gemini's finding
-    const { primary, secondary } = mixedPair({ crossReview: priReview }, { crossReview: secReview });
+    const { primary, secondary } = mixedPair(
+      { crossReview: priReview },
+      { crossReview: secReview },
+    );
 
-    const res = await createDeliberationBackend(primary, secondary, { crossReview: true }).reviewCode({ diff: DIFF });
+    const res = await createDeliberationBackend(primary, secondary, {
+      crossReview: true,
+    }).reviewCode({ diff: DIFF });
 
     expect(res.ok).toBe(true);
     if (!res.ok) return;
@@ -425,22 +792,70 @@ describe('createDeliberationBackend — deliberate-deep (cross-review round)', (
     expect(div[0].adjudication).toEqual({ by: 'gemini', verdict: 'confirmed', reason: 'yes real' });
     // gemini's divergent finding, adjudicated by codex.
     expect(div[1].provider).toBe('gemini');
-    expect(div[1].adjudication).toEqual({ by: 'codex', verdict: 'disputed', reason: 'false positive' });
+    expect(div[1].adjudication).toEqual({
+      by: 'codex',
+      verdict: 'disputed',
+      reason: 'false positive',
+    });
     // Each judge saw the diff and only the OTHER provider's one finding.
-    expect(secReview).toHaveBeenCalledWith(expect.objectContaining({ content: DIFF, findings: [expect.objectContaining({ file: 'a.ts', line: 5 })] }));
-    expect(priReview).toHaveBeenCalledWith(expect.objectContaining({ content: DIFF, findings: [expect.objectContaining({ file: 'b.ts', line: 2 })] }));
+    expect(secReview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: DIFF,
+        findings: [expect.objectContaining({ file: 'a.ts', line: 5 })],
+      }),
+    );
+    expect(priReview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: DIFF,
+        findings: [expect.objectContaining({ file: 'b.ts', line: 2 })],
+      }),
+    );
   });
 
   it('ISS-014: forwards the caller model to the PRIMARY judge only', async () => {
     const secReview = vi.fn().mockResolvedValue(ok(cross('confirmed', 'r'))); // gemini judge
     const priReview = vi.fn().mockResolvedValue(ok(cross('disputed', 'r'))); // codex judge
-    const { primary, secondary } = mixedPair({ crossReview: priReview }, { crossReview: secReview });
+    const { primary, secondary } = mixedPair(
+      { crossReview: priReview },
+      { crossReview: secReview },
+    );
 
-    await createDeliberationBackend(primary, secondary, { crossReview: true }).reviewCode({ diff: DIFF, model: 'gpt-5.4' });
+    await createDeliberationBackend(primary, secondary, { crossReview: true }).reviewCode({
+      diff: DIFF,
+      model: 'gpt-5.4',
+    });
 
     // codex is the primary → its adjudication turn gets the override; gemini resolves its own default.
     expect(priReview).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-5.4' }));
     expect(secReview).toHaveBeenCalledWith(expect.objectContaining({ model: undefined }));
+  });
+
+  it('routes a resumed secondary owner model to that provider review and adjudication turns', async () => {
+    const primaryJudge = vi.fn().mockResolvedValue(ok(cross('disputed', 'r')));
+    const secondaryJudge = vi.fn().mockResolvedValue(ok(cross('confirmed', 'r')));
+    const { primary, secondary } = mixedPair(
+      { crossReview: primaryJudge },
+      { crossReview: secondaryJudge },
+    );
+    const lookup = vi.fn().mockReturnValue({ status: 'found', value: 'gemini' });
+
+    await createDeliberationBackend(primary, secondary, {
+      crossReview: true,
+      lookup,
+    }).reviewCode({
+      diff: DIFF,
+      session_id: 'sid',
+      model: 'Gemini 3.1 Pro (High)',
+    });
+
+    expect(secondary.reviewCode).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'Gemini 3.1 Pro (High)' }),
+    );
+    expect(primary.reviewCode).toHaveBeenCalledWith(expect.objectContaining({ model: undefined }));
+    expect(secondaryJudge).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'Gemini 3.1 Pro (High)' }),
+    );
+    expect(primaryJudge).toHaveBeenCalledWith(expect.objectContaining({ model: undefined }));
   });
 
   it('ISS-012: slices the cross-review subject to the files each finding touches', async () => {
@@ -449,9 +864,14 @@ describe('createDeliberationBackend — deliberate-deep (cross-review round)', (
       'diff --git a/b.ts b/b.ts\n--- a/b.ts\n+++ b/b.ts\n@@ -1 +1 @@\n-b\n+B';
     const secReview = vi.fn().mockResolvedValue(ok(cross('confirmed', 'r'))); // judges codex's a.ts finding
     const priReview = vi.fn().mockResolvedValue(ok(cross('disputed', 'r'))); // judges gemini's b.ts finding
-    const { primary, secondary } = mixedPair({ crossReview: priReview }, { crossReview: secReview });
+    const { primary, secondary } = mixedPair(
+      { crossReview: priReview },
+      { crossReview: secReview },
+    );
 
-    await createDeliberationBackend(primary, secondary, { crossReview: true }).reviewCode({ diff: twoFile });
+    await createDeliberationBackend(primary, secondary, { crossReview: true }).reviewCode({
+      diff: twoFile,
+    });
 
     // gemini judges the a.ts finding → subject sliced to the a.ts section only.
     const secArg = secReview.mock.calls[0][0];
@@ -466,10 +886,16 @@ describe('createDeliberationBackend — deliberate-deep (cross-review round)', (
   it('ISS-012: an over-budget cross-review subject fails cleanly (cross_review_failures, no judge call)', async () => {
     const secReview = vi.fn().mockResolvedValue(ok(cross('confirmed', 'r')));
     const priReview = vi.fn().mockResolvedValue(ok(cross('disputed', 'r')));
-    const { primary, secondary } = mixedPair({ crossReview: priReview }, { crossReview: secReview });
+    const { primary, secondary } = mixedPair(
+      { crossReview: priReview },
+      { crossReview: secReview },
+    );
 
     // maxChunkTokens:1 → any subject blows the budget → both judges skipped.
-    const res = await createDeliberationBackend(primary, secondary, { crossReview: true, maxChunkTokens: 1 }).reviewCode({ diff: DIFF });
+    const res = await createDeliberationBackend(primary, secondary, {
+      crossReview: true,
+      maxChunkTokens: 1,
+    }).reviewCode({ diff: DIFF });
 
     expect(res.ok).toBe(true);
     if (!res.ok) return;
@@ -483,7 +909,10 @@ describe('createDeliberationBackend — deliberate-deep (cross-review round)', (
   it('does not cross-review by default (plain deliberate leaves divergent un-adjudicated)', async () => {
     const secReview = vi.fn();
     const priReview = vi.fn();
-    const { primary, secondary } = mixedPair({ crossReview: priReview }, { crossReview: secReview });
+    const { primary, secondary } = mixedPair(
+      { crossReview: priReview },
+      { crossReview: secReview },
+    );
 
     const res = await createDeliberationBackend(primary, secondary).reviewCode({ diff: DIFF });
 
@@ -500,7 +929,9 @@ describe('createDeliberationBackend — deliberate-deep (cross-review round)', (
     const priReview = vi.fn().mockResolvedValue(ok(cross('confirmed', 'real')));
     const { primary, secondary } = mixedPair({ crossReview: priReview }, {});
 
-    const res = await createDeliberationBackend(primary, secondary, { crossReview: true }).reviewCode({ diff: DIFF });
+    const res = await createDeliberationBackend(primary, secondary, {
+      crossReview: true,
+    }).reviewCode({ diff: DIFF });
 
     expect(res.ok).toBe(true);
     if (!res.ok) return;
@@ -512,9 +943,14 @@ describe('createDeliberationBackend — deliberate-deep (cross-review round)', (
   it('surfaces a failed crossReview call as cross_review_failures, not silently (ISS-012)', async () => {
     const secReview = vi.fn().mockResolvedValue(err(`${ErrorCode.RATE_LIMITED}: out of usage`));
     const priReview = vi.fn().mockResolvedValue(ok(cross('confirmed', 'real')));
-    const { primary, secondary } = mixedPair({ crossReview: priReview }, { crossReview: secReview });
+    const { primary, secondary } = mixedPair(
+      { crossReview: priReview },
+      { crossReview: secReview },
+    );
 
-    const res = await createDeliberationBackend(primary, secondary, { crossReview: true }).reviewCode({ diff: DIFF });
+    const res = await createDeliberationBackend(primary, secondary, {
+      crossReview: true,
+    }).reviewCode({ diff: DIFF });
 
     expect(res.ok).toBe(true);
     if (!res.ok) return;
@@ -527,14 +963,74 @@ describe('createDeliberationBackend — deliberate-deep (cross-review round)', (
     ]);
   });
 
+  it('preserves the completed main review when a judge promise rejects', async () => {
+    const primary = backend('codex', {
+      reviewCode: vi.fn().mockResolvedValue(
+        ok({
+          ...codeResult('request_changes', [f('a.ts', 5, 'bugs', 'major')], 'codex-main'),
+          models: [model('codex')],
+        }),
+      ),
+      crossReview: vi.fn().mockResolvedValue(
+        ok({
+          ...cross('confirmed', 'real'),
+          models: [model('codex', 'adjudication')],
+        }),
+      ),
+    });
+    const secondary = backend('gemini', {
+      reviewCode: vi.fn().mockResolvedValue(
+        ok({
+          ...codeResult('request_changes', [f('b.ts', 2, 'perf', 'minor')], 'gemini-main'),
+          models: [model('gemini')],
+        }),
+      ),
+      crossReview: vi.fn().mockRejectedValue(PRIVATE_REJECTION),
+    });
+
+    const result = await createDeliberationBackend(primary, secondary, {
+      crossReview: true,
+    }).reviewCode({ diff: DIFF });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.verdict).toBe('request_changes');
+    expect(result.data.session_id).toBe('codex-main');
+    expect(result.data.findings).toHaveLength(2);
+    expect(result.data.models).toEqual([
+      model('codex'),
+      model('gemini'),
+      model('codex', 'adjudication'),
+    ]);
+    expect(result.data.deliberation?.cross_review_failures).toEqual([
+      { by: 'gemini', reason: REJECTED_PROVIDER_ERROR },
+    ]);
+    expect(result.data.deliberation?.cross_review_failures?.[0].reason).not.toContain(
+      '/Users/alice',
+    );
+    expect(result.data.deliberation?.cross_review_failures?.[0].reason).not.toContain(
+      'super-secret',
+    );
+  });
+
   it('skips cross-review entirely when there are no divergent findings', async () => {
     const secReview = vi.fn();
     const priReview = vi.fn();
     const shared = [f('a.ts', 1, 'security', 'major')];
-    const primary = backend('codex', { reviewCode: vi.fn().mockResolvedValue(ok(codeResult('approve', shared))), crossReview: priReview });
-    const secondary = backend('gemini', { reviewCode: vi.fn().mockResolvedValue(ok(codeResult('approve', [f('a.ts', 1, 'security', 'major')]))), crossReview: secReview });
+    const primary = backend('codex', {
+      reviewCode: vi.fn().mockResolvedValue(ok(codeResult('approve', shared))),
+      crossReview: priReview,
+    });
+    const secondary = backend('gemini', {
+      reviewCode: vi
+        .fn()
+        .mockResolvedValue(ok(codeResult('approve', [f('a.ts', 1, 'security', 'major')]))),
+      crossReview: secReview,
+    });
 
-    const res = await createDeliberationBackend(primary, secondary, { crossReview: true }).reviewCode({ diff: DIFF });
+    const res = await createDeliberationBackend(primary, secondary, {
+      crossReview: true,
+    }).reviewCode({ diff: DIFF });
 
     expect(res.ok).toBe(true);
     if (!res.ok) return;
@@ -544,14 +1040,32 @@ describe('createDeliberationBackend — deliberate-deep (cross-review round)', (
   });
 
   it('cross-reviews plan divergent findings against the plan text', async () => {
-    const planA = { verdict: 'revise', summary: 's', findings: [f('p.ts', 1, 'feasibility', 'major')], session_id: 'a' };
-    const planB = { verdict: 'revise', summary: 's', findings: [f('q.ts', 9, 'security', 'major')], session_id: 'b' };
+    const planA = {
+      verdict: 'revise',
+      summary: 's',
+      findings: [f('p.ts', 1, 'feasibility', 'major')],
+      session_id: 'a',
+    };
+    const planB = {
+      verdict: 'revise',
+      summary: 's',
+      findings: [f('q.ts', 9, 'security', 'major')],
+      session_id: 'b',
+    };
     const secReview = vi.fn().mockResolvedValue(ok(cross('confirmed', 'agreed'))); // gemini judges codex's finding
     const priReview = vi.fn().mockResolvedValue(ok(cross('unsure', 'cannot tell'))); // codex judges gemini's finding
-    const primary = backend('codex', { reviewPlan: vi.fn().mockResolvedValue(ok(planA)), crossReview: priReview });
-    const secondary = backend('gemini', { reviewPlan: vi.fn().mockResolvedValue(ok(planB)), crossReview: secReview });
+    const primary = backend('codex', {
+      reviewPlan: vi.fn().mockResolvedValue(ok(planA)),
+      crossReview: priReview,
+    });
+    const secondary = backend('gemini', {
+      reviewPlan: vi.fn().mockResolvedValue(ok(planB)),
+      crossReview: secReview,
+    });
 
-    const res = await createDeliberationBackend(primary, secondary, { crossReview: true }).reviewPlan({ plan: 'do a thing' });
+    const res = await createDeliberationBackend(primary, secondary, {
+      crossReview: true,
+    }).reviewPlan({ plan: 'do a thing' });
 
     expect(res.ok).toBe(true);
     if (!res.ok) return;
@@ -564,14 +1078,33 @@ describe('createDeliberationBackend — deliberate-deep (cross-review round)', (
 
   it('ISS-014: a FRESH plan review also forwards the model to the primary judge only', async () => {
     // Regression: the fresh deliberatePlan path must thread input.model too.
-    const planA = { verdict: 'revise', summary: 's', findings: [f('p.ts', 1, 'feasibility', 'major')], session_id: 'a' };
-    const planB = { verdict: 'revise', summary: 's', findings: [f('q.ts', 9, 'security', 'major')], session_id: 'b' };
+    const planA = {
+      verdict: 'revise',
+      summary: 's',
+      findings: [f('p.ts', 1, 'feasibility', 'major')],
+      session_id: 'a',
+    };
+    const planB = {
+      verdict: 'revise',
+      summary: 's',
+      findings: [f('q.ts', 9, 'security', 'major')],
+      session_id: 'b',
+    };
     const secReview = vi.fn().mockResolvedValue(ok(cross('confirmed', 'r'))); // gemini judge
     const priReview = vi.fn().mockResolvedValue(ok(cross('unsure', 'r'))); // codex judge
-    const primary = backend('codex', { reviewPlan: vi.fn().mockResolvedValue(ok(planA)), crossReview: priReview });
-    const secondary = backend('gemini', { reviewPlan: vi.fn().mockResolvedValue(ok(planB)), crossReview: secReview });
+    const primary = backend('codex', {
+      reviewPlan: vi.fn().mockResolvedValue(ok(planA)),
+      crossReview: priReview,
+    });
+    const secondary = backend('gemini', {
+      reviewPlan: vi.fn().mockResolvedValue(ok(planB)),
+      crossReview: secReview,
+    });
 
-    await createDeliberationBackend(primary, secondary, { crossReview: true }).reviewPlan({ plan: 'do a thing', model: 'gpt-5.4' });
+    await createDeliberationBackend(primary, secondary, { crossReview: true }).reviewPlan({
+      plan: 'do a thing',
+      model: 'gpt-5.4',
+    });
 
     expect(priReview).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-5.4' })); // primary judge gets it
     expect(secReview).toHaveBeenCalledWith(expect.objectContaining({ model: undefined })); // secondary resolves own

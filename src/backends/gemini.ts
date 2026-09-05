@@ -7,6 +7,8 @@ import type { Result } from '../utils/errors.js';
 import type { ReviewBridgeConfig } from '../config/types.js';
 import { RECOMMENDED_MODELS } from '../config/types.js';
 import type { CopilotInstructions } from '../config/copilot-instructions.js';
+import { escapeTerminalControls } from '../utils/terminal.js';
+import { SessionIdSchema } from '../utils/input-validation.js';
 import type { ReviewBackend } from './backend.js';
 import {
   runPlanReview,
@@ -230,7 +232,8 @@ export function readConversationId(cwd: string): string | undefined {
   try {
     const map = JSON.parse(content) as Record<string, unknown>;
     const id = map[cwd];
-    return typeof id === 'string' ? id : undefined;
+    const parsed = SessionIdSchema.safeParse(id);
+    return parsed.success ? parsed.data : undefined;
   } catch {
     return undefined;
   }
@@ -271,6 +274,9 @@ const GEMINI_DEFAULT_MODEL = 'Gemini 3.5 Flash (Medium)';
 // `agy models` is a quick metadata call; bound it well under a review timeout so
 // a hung query degrades to the fallback fast.
 const MODEL_QUERY_TIMEOUT_MS = 15_000;
+const MODEL_CATALOG_TTL_MS = 5 * 60 * 1000;
+let modelCatalogCache: { output: string | null; expiresAt: number } | undefined;
+let modelCatalogInFlight: Promise<string | null> | undefined;
 
 // `latest` for gemini means the newest Flash, at the same effort tier we default
 // to where available. Flash is the fast review line; Pro is a heavier, separate
@@ -361,10 +367,36 @@ export function runAgyModels(timeoutMs: number = MODEL_QUERY_TIMEOUT_MS): Promis
   });
 }
 
+async function getAgyModelCatalog(timeoutMs?: number): Promise<string | null> {
+  const now = Date.now();
+  if (modelCatalogCache && modelCatalogCache.expiresAt > now) {
+    return modelCatalogCache.output;
+  }
+  if (modelCatalogInFlight) return modelCatalogInFlight;
+
+  modelCatalogInFlight = runAgyModels(timeoutMs).then((output) => {
+    // Cache unavailable catalogs too. Otherwise a missing or unhealthy agy
+    // binary would spawn another bounded metadata process for every review,
+    // defeating the process-wide five-minute catalog cache.
+    modelCatalogCache = { output, expiresAt: Date.now() + MODEL_CATALOG_TTL_MS };
+    return output;
+  });
+  try {
+    return await modelCatalogInFlight;
+  } finally {
+    modelCatalogInFlight = undefined;
+  }
+}
+
+export function clearGeminiModelCatalogCache(): void {
+  modelCatalogCache = undefined;
+  modelCatalogInFlight = undefined;
+}
+
 // Resolve gemini's `latest`: the newest Flash from `agy models`, degrading to the
 // known-good fallback if the query fails or yields no parseable Flash line.
 export async function resolveLatestGeminiModel(timeoutMs?: number): Promise<string> {
-  const output = await runAgyModels(timeoutMs);
+  const output = await getAgyModelCatalog(timeoutMs);
   if (!output) return GEMINI_DEFAULT_MODEL;
   return pickLatestFlashModel(output) ?? GEMINI_DEFAULT_MODEL;
 }
@@ -394,12 +426,12 @@ function isRecommendedGeminiModel(model: string): boolean {
 // miss. Non-blocking: we still forward the user's model as-is (L-006). Stays silent
 // when the model list is unavailable (can't validate → no false alarm).
 export async function warnIfUnknownModel(requested: string): Promise<void> {
-  const output = await runAgyModels();
+  const output = await getAgyModelCatalog();
   if (!output) return;
   const known = parseAgyModels(output).map(normalizeModelName);
   if (!known.includes(normalizeModelName(requested))) {
     console.error(
-      `[codex-bridge] warning: model "${requested}" is not in agy's model list ` +
+      `[codex-bridge] warning: model "${escapeTerminalControls(requested)}" is not in agy's model list ` +
         `(run \`agy models\` to see options). agy may silently run a different model.`,
     );
   }
@@ -412,7 +444,20 @@ export async function warnIfUnknownModel(requested: string): Promise<void> {
 async function runAgyReview<T extends Record<string, unknown>>(
   params: TurnParams & { config: ReviewBridgeConfig; cwd: string },
 ): Promise<Result<T & { session_id: string }>> {
-  const { prompt, responseSchema, sessionId, resolvedModel, config, cwd } = params;
+  const { prompt, responseSchema, sessionId: rawSessionId, resolvedModel, config, cwd } = params;
+  let sessionId: string | undefined;
+  if (rawSessionId !== undefined) {
+    const parsedSessionId = SessionIdSchema.safeParse(rawSessionId);
+    if (!parsedSessionId.success) {
+      return err<T & { session_id: string }>(`${ErrorCode.INVALID_INPUT}: invalid session ID`);
+    }
+    sessionId = parsedSessionId.data;
+  }
+  if (!resolvedModel) {
+    return err<T & { session_id: string }>(
+      `${ErrorCode.MODEL_ERROR}: no model was resolved for the Gemini review`,
+    );
+  }
   // One shared deadline across both attempts (total budget), mirroring Codex's
   // single AbortSignal.timeout — a fresh per-attempt timeout would grant up to
   // ~2× timeout_seconds of wall-clock (m2).
@@ -426,7 +471,13 @@ async function runAgyReview<T extends Record<string, unknown>>(
       // The retry gets only the budget remaining after attempt 1 (floored at 1ms
       // so setTimeout never goes negative — an exhausted budget aborts at once).
       const timeoutMs = Math.max(deadline - Date.now(), 1);
-      const run = await runAgyPrint({ prompt, model: resolvedModel, conversationId: sessionId, cwd, timeoutMs });
+      const run = await runAgyPrint({
+        prompt,
+        model: resolvedModel,
+        conversationId: sessionId,
+        cwd,
+        timeoutMs,
+      });
       if (!run.ok) {
         // A retry that timed out AFTER a prior parse failure: the malformed
         // response — not the clock — is the actionable cause, so surface it as a
@@ -465,8 +516,15 @@ async function runAgyReview<T extends Record<string, unknown>>(
             `Check that ~/.gemini/antigravity-cli is readable.`,
         );
       }
+      const parsedSessionId = SessionIdSchema.safeParse(resolvedId);
+      if (!parsedSessionId.success) {
+        return err<T & { session_id: string }>(
+          `${ErrorCode.STORAGE_ERROR}: agy review succeeded but captured an invalid conversation id. ` +
+            `Check that ~/.gemini/antigravity-cli is readable.`,
+        );
+      }
       // Single cast justified: safeParse validated result.data matches the schema.
-      return ok({ ...(result.data as T), session_id: resolvedId });
+      return ok({ ...(result.data as T), session_id: parsedSessionId.data });
     }
     return err<T & { session_id: string }>(`${ErrorCode.RESPONSE_PARSE_ERROR}: ${lastError}`);
   });
@@ -483,7 +541,7 @@ export function createGeminiBackend(
   // quiet to avoid noise on every gemini startup.
   if (config.reasoning_effort !== 'medium') {
     console.error(
-      `[codex-bridge] note: reasoning_effort "${config.reasoning_effort}" is ignored by the Gemini backend — ` +
+      `[codex-bridge] note: reasoning_effort "${escapeTerminalControls(config.reasoning_effort)}" is ignored by the Gemini backend — ` +
         `effort is part of the agy model name (e.g. "Gemini 3.5 Flash (High)"). Pin a higher-effort model instead.`,
     );
   }
@@ -492,6 +550,7 @@ export function createGeminiBackend(
     runAgyReview<T>({ ...params, config, cwd: process.cwd() });
   const deps = {
     config,
+    provider: 'gemini' as const,
     copilotInstructions,
     // agy accepts a model on resume (nothing reasserts it), and persists each
     // conversation natively — so chunks review independently (resumesAcrossChunks

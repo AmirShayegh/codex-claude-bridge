@@ -19,6 +19,9 @@ vi.mock('@modelcontextprotocol/sdk/server/mcp.js', () => {
 
 vi.mock('./backends/index.js', () => ({
   createBackend: vi.fn(() => ({
+    provider: 'codex',
+    providers: ['codex'],
+    allowsModelOverrideOnResume: false,
     reviewPlan: vi.fn(),
     reviewCode: vi.fn(),
     reviewPrecommit: vi.fn(),
@@ -45,7 +48,16 @@ vi.mock('better-sqlite3', () => {
       shouldThrow = false;
       throw new Error('SQLITE_CANTOPEN');
     }
-    return { exec: vi.fn(), prepare: vi.fn(), close: vi.fn(), pragma: vi.fn() };
+    return {
+      exec: vi.fn(),
+      prepare: vi.fn(),
+      close: vi.fn(),
+      pragma: vi.fn((query: string) => {
+        if (query === 'table_info(reviews)') return [{ name: 'models_json' }];
+        if (query === 'table_info(sessions)') return [{ name: 'model_identity_json' }];
+        return [];
+      }),
+    };
   });
   return { default: MockDatabase };
 });
@@ -94,9 +106,7 @@ describe('createServer', () => {
     const registerTool = (server as any).registerTool as ReturnType<typeof vi.fn>;
     expect(registerTool).toHaveBeenCalledTimes(5);
 
-    const toolNames = registerTool.mock.calls.map(
-      (call: unknown[]) => call[0] as string,
-    );
+    const toolNames = registerTool.mock.calls.map((call: unknown[]) => call[0] as string);
     expect(toolNames).toContain('review_plan');
     expect(toolNames).toContain('review_code');
     expect(toolNames).toContain('review_precommit');
@@ -105,7 +115,9 @@ describe('createServer', () => {
   });
 
   it('config error aborts startup', () => {
-    vi.mocked(loadConfig).mockReturnValue(err('CONFIG_ERROR: invalid JSON in /repo/.reviewbridge.json'));
+    vi.mocked(loadConfig).mockReturnValue(
+      err('CONFIG_ERROR: invalid JSON in /repo/.reviewbridge.json'),
+    );
 
     expect(() => createServer()).toThrow(/CONFIG_ERROR/);
   });
@@ -117,7 +129,9 @@ describe('createServer', () => {
   });
 
   it('table init failure logs warning but server still starts', () => {
-    vi.mocked(initDb).mockImplementationOnce(() => { throw new Error('SQLITE_READONLY'); });
+    vi.mocked(initDb).mockImplementationOnce(() => {
+      throw new Error('SQLITE_READONLY');
+    });
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const server = createServer();
@@ -179,9 +193,9 @@ describe('createServer', () => {
   it('advertises the package.json version (no hardcoded drift)', async () => {
     const { readFileSync } = await import('node:fs');
     const expectedVersion = (
-      JSON.parse(
-        readFileSync(new URL('../package.json', import.meta.url), 'utf-8'),
-      ) as { version: string }
+      JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf-8')) as {
+        version: string;
+      }
     ).version;
 
     createServer();

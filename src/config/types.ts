@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ModelSelectorSchema } from '../utils/input-validation.js';
 
 // Config-local severity enum — avoids cross-layer import from review/types.ts
 const BlockOnSeveritySchema = z.enum(['critical', 'major', 'minor', 'suggestion', 'nitpick']);
@@ -53,7 +54,7 @@ export const ReviewBridgeConfigSchema = z.object({
   provider: ProviderSchema.default('codex'),
   // No schema-level default — each backend resolves its own default model at
   // construction. A config value or per-call override takes precedence.
-  model: z.string().optional(),
+  model: ModelSelectorSchema.optional(),
   // Path to a `codex` binary to spawn instead of the one bundled with
   // @openai/codex-sdk. Escape hatch for when the vendored binary is missing or
   // unusable — e.g. macOS XProtect trashing it as a false positive — so the

@@ -4,6 +4,7 @@ import {
   initSessionsDb,
   getOrCreateSession,
   getSession,
+  getSessionProvider,
   markSessionCompleted,
   markSessionFailed,
   activateSession,
@@ -28,6 +29,14 @@ describe('initSessionsDb', () => {
     expect(() => initSessionsDb(db)).not.toThrow();
   });
 
+  it('creates the nullable model identity column', () => {
+    const columns = db.pragma('table_info(sessions)') as Array<{ name: string }>;
+    expect(columns.map((column) => column.name)).toContain('model_identity_json');
+
+    const result = getOrCreateSession(db, 'model-null');
+    expect(result.ok && result.data.model_identity_json).toBeNull();
+  });
+
   it('migrates old schema by adding completed_at column', () => {
     const oldDb = new Database(':memory:');
     oldDb.exec(`
@@ -46,6 +55,30 @@ describe('initSessionsDb', () => {
       .prepare('SELECT completed_at FROM sessions WHERE session_id = ?')
       .get('test') as { completed_at: string | null };
     expect(row.completed_at).toBeNull();
+  });
+
+  it('migrates a populated schema with model identity null without changing existing fields', () => {
+    const oldDb = new Database(':memory:');
+    oldDb.exec(`
+      CREATE TABLE sessions (
+        session_id TEXT PRIMARY KEY,
+        status TEXT NOT NULL DEFAULT 'in_progress',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        completed_at TEXT,
+        provider TEXT
+      );
+      INSERT INTO sessions (session_id, status, provider)
+      VALUES ('legacy-model', 'completed', 'codex');
+    `);
+
+    initSessionsDb(oldDb);
+
+    expect(
+      oldDb
+        .prepare('SELECT status, provider, model_identity_json FROM sessions WHERE session_id = ?')
+        .get('legacy-model'),
+    ).toEqual({ status: 'completed', provider: 'codex', model_identity_json: null });
+    oldDb.close();
   });
 });
 
@@ -283,7 +316,9 @@ describe('provider provenance', () => {
         completed_at TEXT
       )
     `);
-    oldDb.prepare("INSERT INTO sessions (session_id, status) VALUES (?, 'completed')").run('legacy-1');
+    oldDb
+      .prepare("INSERT INTO sessions (session_id, status) VALUES (?, 'completed')")
+      .run('legacy-1');
 
     expect(() => initSessionsDb(oldDb)).not.toThrow();
 
@@ -311,5 +346,27 @@ describe('getSession', () => {
     const result = getSession(db, 'nope');
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.data).toBeNull();
+  });
+});
+
+describe('getSessionProvider', () => {
+  it('reads provider without requiring the model metadata column', () => {
+    const legacy = new Database(':memory:');
+    legacy.exec(`
+      CREATE TABLE sessions (
+        session_id TEXT PRIMARY KEY,
+        status TEXT NOT NULL DEFAULT 'in_progress',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        completed_at TEXT,
+        provider TEXT
+      );
+      INSERT INTO sessions (session_id, provider) VALUES ('legacy', 'gemini');
+    `);
+
+    expect(getSessionProvider(legacy, 'legacy')).toEqual({
+      ok: true,
+      data: { provider: 'gemini' },
+    });
+    legacy.close();
   });
 });

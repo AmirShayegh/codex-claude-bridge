@@ -5,7 +5,11 @@ import { join } from 'node:path';
 import { ok, err, ErrorCode } from '../utils/errors.js';
 import type { Result } from '../utils/errors.js';
 import type { ReviewBridgeConfig } from '../config/types.js';
-import { RECOMMENDED_MODELS } from '../config/types.js';
+import {
+  RECOMMENDED_MODELS,
+  TIER_MODELS,
+  isReviewTier,
+} from '../config/types.js';
 import type { CopilotInstructions } from '../config/copilot-instructions.js';
 import { escapeTerminalControls } from '../utils/terminal.js';
 import { SessionIdSchema } from '../utils/input-validation.js';
@@ -562,6 +566,7 @@ export function createGeminiBackend(
     // `agy models` and warn on a miss, since agy silently substitutes for an
     // unknown model (ISS-006). Recommended pins are known-good → skip the query.
     resolveModel: async (requested: string | undefined) => {
+      if (isReviewTier(requested)) return TIER_MODELS.gemini[requested];
       if (!requested || requested === 'latest') return resolveLatestGeminiModel();
       if (!isRecommendedGeminiModel(requested)) await warnIfUnknownModel(requested);
       return requested;

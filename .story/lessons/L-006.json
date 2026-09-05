@@ -1,6 +1,6 @@
 {
-  "content": "codex-claude-bridge documents and recommends exactly two Codex models: `gpt-5.6-sol` as the default current flagship and `gpt-5.5` as the fallback. This recommendation boundary scopes defaults, README/model tables, error tips, and CLI/MCP help; explicitly configured other model IDs are still forwarded unchanged rather than blocked. Curate recommendations without gating user autonomy.",
-  "context": "Policy originally captured after the 2026-04-23 model cleanup and recommend-not-enforce rollback. Updated 2026-07-09 after GPT-5.6 general availability: Codex's live model catalog identifies `gpt-5.6-sol` as the latest frontier agentic coding model, so the supported recommendation pair advanced from 5.5/5.4 to Sol/5.5. Keep this lesson, README, RECOMMENDED_MODELS, backend default, SDK pin, and help/error examples synchronized on future flagship releases.",
+  "content": "codex-claude-bridge documents and recommends exactly two Codex models: `gpt-6-astra` as the default current flagship and `gpt-5.6-sol` as the fallback. This recommendation boundary scopes defaults, README/model tables, error tips, and CLI/MCP help; explicitly configured other model IDs are still forwarded unchanged rather than blocked. Curate recommendations without gating user autonomy.",
+  "context": "Policy originally captured after the 2026-04-23 model cleanup and recommend-not-enforce rollback. Updated 2026-07-09 for GPT-5.6 Sol, and again 2026-09-04 after GPT-6 Astra release: the Codex CLI 0.153.4 catalog lists `gpt-6-astra` as the newest flagship, so the pair advanced from Sol/5.5 to Astra/Sol and the SDK pin moved 0.144.0 -> 0.153.4. Same day, provider-neutral tiers were added (`TIER_MODELS` in src/config/types.ts): max/balanced/fast map to Astra/Sol/Luna on Codex and 3.1 Pro (High)/3.5 Flash (High)/3.5 Flash (Medium) on Gemini. Luna is a tier target, not a third recommended model: RECOMMENDED_MODELS stays the pair for error tips. Keep this lesson, README, RECOMMENDED_MODELS, TIER_MODELS, backend default, SDK pin, and help/error examples synchronized on future flagship releases.",
   "createdDate": "2026-04-23",
   "displayId": "L-006",
   "id": "L-006",
@@ -15,6 +15,6 @@
     "user-preference",
     "policy"
   ],
-  "title": "Recommend gpt-5.6-sol + gpt-5.5 only; never block the user's model choice",
-  "updatedDate": "2026-07-09"
+  "title": "Recommend gpt-6-astra + gpt-5.6-sol only; never block the user's model choice",
+  "updatedDate": "2026-09-04"
 }

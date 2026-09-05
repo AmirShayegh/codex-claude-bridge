@@ -1,3 +1,4 @@
+import { isReviewTier } from '../config/types.js';
 import { ok, err, ErrorCode } from '../utils/errors.js';
 import type { Result } from '../utils/errors.js';
 import type { ReviewProvider } from '../config/types.js';
@@ -120,8 +121,13 @@ export async function withFailover<
     `[codex-bridge] ${primary.provider} unavailable (${code}); falling back to ${secondary.provider}`,
   );
   // Drop any per-call model override — a model chosen for the primary is
-  // meaningless for the secondary, which resolves its own default.
-  const second = await run(secondary, { ...input, model: undefined });
+  // meaningless for the secondary, which resolves its own default. A tier
+  // ('max' / 'balanced' / 'fast') is provider-neutral, so it carries over and
+  // the secondary maps it to its own model.
+  const second = await run(secondary, {
+    ...input,
+    model: isReviewTier(input.model) ? input.model : undefined,
+  });
   if (second.ok) return tag(secondary.provider, second);
 
   // Both failed: lead with the primary's error (its code/prefix), note the

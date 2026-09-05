@@ -10,7 +10,12 @@ import type {
   CrossReviewResult,
   ModelIdentity,
 } from '../review/types.js';
-import { RECOMMENDED_MODELS, type ReviewBridgeConfig } from '../config/types.js';
+import {
+  RECOMMENDED_MODELS,
+  TIER_MODELS,
+  isReviewTier,
+  type ReviewBridgeConfig,
+} from '../config/types.js';
 import { estimateTokens } from '../utils/chunking.js';
 import type { CopilotInstructions } from '../config/copilot-instructions.js';
 import type { ReviewBackend } from './backend.js';
@@ -382,8 +387,10 @@ export function createCodexBackend(
     // deliberately do NOT chase the newest announced model — that bundled-binary
     // mismatch is the L-008 trap. CODEX_DEFAULT_MODEL moves only when the SDK pin
     // moves. An explicit pin is forwarded unchanged (L-006).
-    resolveModel: async (requested: string | undefined) =>
-      requested && requested !== 'latest' ? requested : CODEX_DEFAULT_MODEL,
+    resolveModel: async (requested: string | undefined) => {
+      if (isReviewTier(requested)) return TIER_MODELS.codex[requested];
+      return requested && requested !== 'latest' ? requested : CODEX_DEFAULT_MODEL;
+    },
     lookupSessionModel: runtime.lookupSessionModel,
     observeSessionModel:
       runtime.observeSessionModel ??

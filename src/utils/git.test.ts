@@ -262,3 +262,75 @@ describe('command verification', () => {
     expect(cmd).toBe('git diff --no-color main HEAD');
   });
 });
+
+// ISS-028: the directory a capture reports must be the directory git actually
+// ran in, so every child command of a capture — including the HEAD probe and the
+// unborn-HEAD fallback — has to receive the same cwd.
+describe('cwd forwarding', () => {
+  function cwdOf(callIndex: number): string | undefined {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (mockExec.mock.calls[callIndex][1] as any).cwd;
+  }
+
+  it('runs the staged capture in the supplied directory', async () => {
+    mockSuccess('');
+    await getStagedDiff('/work/repo-b');
+    expect(cwdOf(0)).toBe('/work/repo-b');
+  });
+
+  it('runs the unstaged capture in the supplied directory', async () => {
+    mockSuccess('');
+    await getUnstagedDiff('/work/repo-b');
+    expect(cwdOf(0)).toBe('/work/repo-b');
+  });
+
+  it('runs a ref-to-ref diff in the supplied directory', async () => {
+    mockSuccess('');
+    await getDiffBetween('main', 'HEAD', '/work/repo-b');
+    expect(cwdOf(0)).toBe('/work/repo-b');
+  });
+
+  it('runs the work-tree probe in the supplied directory', async () => {
+    mockSuccess('true');
+    await isGitRepo('/work/repo-b');
+    expect(cwdOf(0)).toBe('/work/repo-b');
+  });
+
+  it('runs BOTH the HEAD probe and the working diff in the supplied directory', async () => {
+    mockSuccess('');
+    await getWorkingDiff('/work/repo-b');
+    expect(mockExec).toHaveBeenCalledTimes(2);
+    expect(cwdOf(0)).toBe('/work/repo-b');
+    expect(cwdOf(1)).toBe('/work/repo-b');
+  });
+
+  it('runs the unborn-HEAD fallback commands in the supplied directory', async () => {
+    // First call (the HEAD probe) fails the way an unborn repo does; the two
+    // fallback captures must not silently drift back to the process cwd.
+    let call = 0;
+    mockExec.mockImplementation(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ((cmd: string, opts: any, cb: (e: Error | null, out: string, errOut: string) => void) => {
+        if (call++ === 0) {
+          const stderr = "fatal: Needed a single revision: HEAD";
+          cb(Object.assign(new Error(stderr), { stderr }), '', stderr);
+          return;
+        }
+        cb(null, '', '');
+      }) as typeof exec,
+    );
+
+    const result = await getWorkingDiff('/work/repo-b');
+
+    expect(result.ok).toBe(true);
+    expect(mockExec).toHaveBeenCalledTimes(3);
+    expect(cwdOf(1)).toBe('/work/repo-b');
+    expect(cwdOf(2)).toBe('/work/repo-b');
+  });
+
+  it('leaves cwd undefined when none is supplied (inherits the process cwd)', async () => {
+    mockSuccess('');
+    await getStagedDiff();
+    expect(cwdOf(0)).toBeUndefined();
+  });
+});

@@ -154,3 +154,94 @@ describe('registerReviewCodeTool', () => {
     expect(JSON.parse(response.content[0].text)).toEqual(RESULT);
   });
 });
+
+// ISS-028: an auto-captured review names the directory git ran in. The value is
+// stamped at the response boundary, so it reaches the caller but never the
+// reviewer, the lifecycle input, or persisted history.
+describe('capture location reporting (ISS-028)', () => {
+  it('stamps the resolver capture location onto a lifecycle result', async () => {
+    vi.mocked(resolveCodeDiff).mockResolvedValue({
+      ok: true,
+      data: 'captured diff',
+      capturedFrom: '/work/repo-b',
+    });
+
+    const response = await setup()({}, {});
+
+    expect(JSON.parse(response.content[0].text)).toEqual({
+      ...RESULT,
+      captured_from: '/work/repo-b',
+    });
+  });
+
+  it('keeps the capture location out of the persisted review input', async () => {
+    vi.mocked(resolveCodeDiff).mockResolvedValue({
+      ok: true,
+      data: 'captured diff',
+      capturedFrom: '/work/repo-b',
+    });
+
+    await setup()({}, {});
+
+    expect(lifecycle.reviewCode).toHaveBeenCalledWith(
+      expect.not.objectContaining({ captured_from: expect.anything() }),
+    );
+  });
+
+  it('stamps the capture location on the no-lifecycle compatibility path', async () => {
+    vi.mocked(resolveCodeDiff).mockResolvedValue({
+      ok: true,
+      data: 'captured diff',
+      capturedFrom: '/work/repo-b',
+    });
+    vi.mocked(client.reviewCode).mockResolvedValue(ok(RESULT));
+
+    const response = await setup(false)({}, {});
+
+    expect(JSON.parse(response.content[0].text).captured_from).toBe('/work/repo-b');
+  });
+
+  it('omits captured_from entirely for an explicit diff', async () => {
+    const response = await setup()({ diff: 'explicit diff' }, {});
+    expect(JSON.parse(response.content[0].text)).not.toHaveProperty('captured_from');
+  });
+
+  it('discards a capture location the backend supplied', async () => {
+    vi.mocked(resolveCodeDiff).mockResolvedValue(ok('explicit diff'));
+    vi.mocked(lifecycle.reviewCode).mockResolvedValueOnce(
+      ok({ ...RESULT, captured_from: '/forged/by/provider' }),
+    );
+
+    const response = await setup()({ diff: 'explicit diff' }, {});
+
+    expect(JSON.parse(response.content[0].text)).not.toHaveProperty('captured_from');
+  });
+
+  it('names the capture directory when there is nothing to review', async () => {
+    vi.mocked(resolveCodeDiff).mockResolvedValue({
+      ok: false,
+      error: 'NO_WORKING_CHANGES: No changes found vs HEAD in /work/repo-b.',
+      capturedFrom: '/work/repo-b',
+    });
+
+    const parsed = JSON.parse((await setup()({}, {})).content[0].text);
+
+    expect(parsed.summary).toBe('No changes found to review in /work/repo-b.');
+    expect(parsed.captured_from).toBe('/work/repo-b');
+    expect(lifecycle.reviewCode).not.toHaveBeenCalled();
+  });
+
+  it('escapes controls in the message while keeping the field raw', async () => {
+    vi.mocked(resolveCodeDiff).mockResolvedValue({
+      ok: false,
+      error: 'NO_WORKING_CHANGES: nothing',
+      capturedFrom: '/work/re\u001bpo',
+    });
+
+    const parsed = JSON.parse((await setup()({}, {})).content[0].text);
+
+    expect(parsed.summary).toContain('\\x1B');
+    expect(parsed.summary).not.toContain('\u001b');
+    expect(parsed.captured_from).toBe('/work/re\u001bpo');
+  });
+});

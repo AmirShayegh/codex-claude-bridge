@@ -374,3 +374,43 @@ describe('formatPrecommitResult', () => {
     expect(out).not.toContain(escape);
   });
 });
+
+// ISS-028: the human CLI names the capture directory so an empty or surprising
+// result is self-diagnosing at a glance.
+describe('capture location rendering (ISS-028)', () => {
+  const precommit = {
+    ready_to_commit: false,
+    blockers: [],
+    warnings: ['No staged changes found in /work/repo-b'],
+    session_id: 's',
+  };
+
+  it('prints the capture directory when present', () => {
+    const out = formatPrecommitResult({ ...precommit, captured_from: '/work/repo-b' }, false);
+    expect(out).toContain('Captured from: /work/repo-b');
+  });
+
+  it('prints nothing when the result carries no capture directory', () => {
+    expect(formatPrecommitResult(precommit, false)).not.toContain('Captured from:');
+  });
+
+  it('prints the capture directory on a code review too', () => {
+    const out = formatCodeResult(
+      {
+        verdict: 'approve',
+        summary: 'ok',
+        findings: [],
+        session_id: 's',
+        captured_from: '/work/repo-b',
+      },
+      false,
+    );
+    expect(out).toContain('Captured from: /work/repo-b');
+  });
+
+  it('escapes terminal controls in the rendered directory', () => {
+    const out = formatPrecommitResult({ ...precommit, captured_from: '/work/re\u001bpo' }, false);
+    expect(out).toContain('Captured from: /work/re\\x1Bpo');
+    expect(out).not.toContain('\u001b');
+  });
+});

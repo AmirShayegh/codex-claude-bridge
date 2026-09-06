@@ -679,3 +679,49 @@ describe('ReviewHistoryEntrySchema', () => {
     expect(result.success).toBe(false);
   });
 });
+
+// ISS-028: capture location is a live-response field only. Persisted history
+// must never carry it — a stored review is about the code, not about where the
+// host happened to be standing when it captured the diff.
+describe('captured_from is response-only (ISS-028)', () => {
+  it('is accepted on code and precommit results', () => {
+    expect(
+      CodeReviewResultSchema.parse({
+        verdict: 'approve',
+        summary: 'ok',
+        findings: [],
+        session_id: 's',
+        captured_from: '/work/repo-b',
+      }).captured_from,
+    ).toBe('/work/repo-b');
+
+    expect(
+      PrecommitResultSchema.parse({
+        ready_to_commit: true,
+        blockers: [],
+        warnings: [],
+        session_id: 's',
+        captured_from: '/work/repo-b',
+      }).captured_from,
+    ).toBe('/work/repo-b');
+  });
+
+  it('is absent from plan results', () => {
+    expect(Object.keys(PlanReviewResultSchema.shape)).not.toContain('captured_from');
+  });
+
+  it('is stripped from a stored history entry', () => {
+    const parsed = ReviewHistoryEntrySchema.parse({
+      session_id: 's',
+      type: 'code',
+      verdict: 'approve',
+      timestamp: '2026-09-05T00:00:00Z',
+      summary: 'ok',
+      provider: 'codex',
+      models: [],
+      model_metadata_status: 'recorded',
+      captured_from: '/work/repo-b',
+    });
+    expect(parsed).not.toHaveProperty('captured_from');
+  });
+});

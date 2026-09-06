@@ -160,3 +160,79 @@ describe('registerReviewPrecommitTool', () => {
     expect(JSON.parse(response.content[0].text)).toEqual(RESULT);
   });
 });
+
+// ISS-028: see review-code.test.ts. An empty staged capture is the case that
+// motivated this — it used to read as a clean index no matter where it ran.
+describe('capture location reporting (ISS-028)', () => {
+  it('stamps the resolver capture location onto a lifecycle result', async () => {
+    vi.mocked(resolvePrecommitDiff).mockResolvedValue({
+      ok: true,
+      data: 'captured staged diff',
+      capturedFrom: '/work/repo-b',
+    });
+
+    const response = await setup()({}, {});
+
+    expect(JSON.parse(response.content[0].text)).toEqual({
+      ...RESULT,
+      captured_from: '/work/repo-b',
+    });
+  });
+
+  it('keeps the capture location out of the persisted review input', async () => {
+    vi.mocked(resolvePrecommitDiff).mockResolvedValue({
+      ok: true,
+      data: 'captured staged diff',
+      capturedFrom: '/work/repo-b',
+    });
+
+    await setup()({}, {});
+
+    expect(lifecycle.reviewPrecommit).toHaveBeenCalledWith(
+      expect.not.objectContaining({ captured_from: expect.anything() }),
+    );
+  });
+
+  it('stamps the capture location on the no-lifecycle compatibility path', async () => {
+    vi.mocked(resolvePrecommitDiff).mockResolvedValue({
+      ok: true,
+      data: 'captured staged diff',
+      capturedFrom: '/work/repo-b',
+    });
+    vi.mocked(client.reviewPrecommit).mockResolvedValue(ok(RESULT));
+
+    const response = await setup(true, false)({}, {});
+
+    expect(JSON.parse(response.content[0].text).captured_from).toBe('/work/repo-b');
+  });
+
+  it('omits captured_from entirely for an explicit diff', async () => {
+    const response = await setup()({ diff: 'explicit diff' }, {});
+    expect(JSON.parse(response.content[0].text)).not.toHaveProperty('captured_from');
+  });
+
+  it('discards a capture location the backend supplied', async () => {
+    vi.mocked(resolvePrecommitDiff).mockResolvedValue(ok('explicit diff'));
+    vi.mocked(lifecycle.reviewPrecommit).mockResolvedValueOnce(
+      ok({ ...RESULT, captured_from: '/forged/by/provider' }),
+    );
+
+    const response = await setup()({ diff: 'explicit diff' }, {});
+
+    expect(JSON.parse(response.content[0].text)).not.toHaveProperty('captured_from');
+  });
+
+  it('names the capture directory when nothing is staged', async () => {
+    vi.mocked(resolvePrecommitDiff).mockResolvedValue({
+      ok: false,
+      error: 'NO_STAGED_CHANGES: No staged changes found in /work/repo-b.',
+      capturedFrom: '/work/repo-b',
+    });
+
+    const parsed = JSON.parse((await setup()({}, {})).content[0].text);
+
+    expect(parsed.warnings).toEqual(['No staged changes found in /work/repo-b']);
+    expect(parsed.captured_from).toBe('/work/repo-b');
+    expect(lifecycle.reviewPrecommit).not.toHaveBeenCalled();
+  });
+});

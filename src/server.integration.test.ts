@@ -37,12 +37,13 @@ vi.mock('@openai/codex-sdk', () => {
 // --- Git mock ---
 vi.mock('./utils/git.js', () => ({
   getStagedDiff: vi.fn(),
+  getWorkingDiff: vi.fn(),
   getUnstagedDiff: vi.fn(),
   getDiffBetween: vi.fn(),
   isGitRepo: vi.fn(),
 }));
 
-import { getStagedDiff } from './utils/git.js';
+import { getStagedDiff, getWorkingDiff } from './utils/git.js';
 
 // --- Valid Codex responses (without session_id — injected by client) ---
 const validPlanResponse = {
@@ -227,12 +228,28 @@ describe('MCP integration — review_precommit', () => {
 
     const result = await client.callTool({ name: 'review_precommit', arguments: {} });
 
-    expect(getStagedDiff).toHaveBeenCalled();
+    // The directory reported back must be the one git was actually handed.
+    expect(getStagedDiff).toHaveBeenCalledWith(process.cwd());
     const parsed = parseToolResult(result) as Record<string, unknown>;
     expect(parsed.ready_to_commit).toBe(true);
     expect(parsed.session_id).toBe('thread_integ_001');
+    expect(parsed.captured_from).toBe(process.cwd());
     expect(parsed.models).toHaveLength(1);
     expect(parsed.provenance).toEqual({ persistence: 'memory_only', warning: null });
+  });
+
+  it('omits captured_from when the caller supplies an explicit diff', async () => {
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPrecommitResponse) });
+    client = await startServer();
+
+    const result = await client.callTool({
+      name: 'review_precommit',
+      arguments: { diff: 'diff --git a/x b/x\n@@ -1 +1 @@\n-a\n+b' },
+    });
+
+    expect(getStagedDiff).not.toHaveBeenCalled();
+    const parsed = parseToolResult(result) as Record<string, unknown>;
+    expect(parsed).not.toHaveProperty('captured_from');
   });
 
   it('empty staged diff returns warning', async () => {
@@ -242,9 +259,57 @@ describe('MCP integration — review_precommit', () => {
     const result = await client.callTool({ name: 'review_precommit', arguments: {} });
 
     const parsed = parseToolResult(result) as Record<string, unknown>;
-    expect(parsed.warnings as string[]).toContain('No staged changes found');
+    // ISS-028: an empty capture names where it looked, so a capture that ran in
+    // the wrong repository is visible instead of reading as a clean index.
+    expect(parsed.warnings as string[]).toContain(`No staged changes found in ${process.cwd()}`);
+    expect(parsed.captured_from).toBe(process.cwd());
     expect(parsed.models).toEqual([]);
     expect(parsed.provenance).toEqual({ persistence: 'not_recorded', warning: null });
+  });
+});
+
+describe('MCP integration — review_code auto-capture (ISS-028)', () => {
+  it('reports the capture directory on an auto-captured review', async () => {
+    vi.mocked(getWorkingDiff).mockResolvedValue({
+      ok: true,
+      data: 'diff --git a/a b/a\n@@ -1 +1 @@\n-a\n+b',
+    });
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validCodeResponse) });
+    client = await startServer();
+
+    const result = await client.callTool({ name: 'review_code', arguments: {} });
+
+    expect(getWorkingDiff).toHaveBeenCalledWith(process.cwd());
+    const parsed = parseToolResult(result) as Record<string, unknown>;
+    expect(parsed.captured_from).toBe(process.cwd());
+  });
+
+  it('names the capture directory when there is nothing to review', async () => {
+    vi.mocked(getWorkingDiff).mockResolvedValue({ ok: true, data: '' });
+    client = await startServer();
+
+    const result = await client.callTool({ name: 'review_code', arguments: {} });
+
+    const parsed = parseToolResult(result) as Record<string, unknown>;
+    expect(parsed.verdict).toBe('approve');
+    expect(parsed.summary).toBe(`No changes found to review in ${process.cwd()}.`);
+    expect(parsed.captured_from).toBe(process.cwd());
+    // A provider-free synthetic answer never reaches the model.
+    expect(mockRun).not.toHaveBeenCalled();
+  });
+
+  it('omits captured_from when the caller supplies an explicit diff', async () => {
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validCodeResponse) });
+    client = await startServer();
+
+    const result = await client.callTool({
+      name: 'review_code',
+      arguments: { diff: 'diff --git a/a b/a\n@@ -1 +1 @@\n-a\n+b' },
+    });
+
+    expect(getWorkingDiff).not.toHaveBeenCalled();
+    const parsed = parseToolResult(result) as Record<string, unknown>;
+    expect(parsed).not.toHaveProperty('captured_from');
   });
 });
 

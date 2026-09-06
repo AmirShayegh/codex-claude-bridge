@@ -51,6 +51,10 @@ ACTING ON RESULTS:
 TIPS:
 - review_code auto-captures working changes (git diff HEAD) — pass diff explicitly only for PR or branch diffs.
 - review_precommit auto-captures staged changes — no need to pass a diff manually.
+- Auto-captured results carry 'captured_from': the absolute directory the bridge ran git in. The server
+  captures in ITS OWN working directory, which may not be yours (e.g. when you are in a git worktree).
+  If captured_from is not the repository you are working in — or an empty result surprises you — pass
+  the diff explicitly instead of trusting the capture.
 - You do not need to review every change. Use your judgement on when a review adds value.
 - review_plan and review_code accept a 'deliberate' boolean that overrides the configured mode for
   one call: true = both providers review (deliberation), false = single provider with failover.

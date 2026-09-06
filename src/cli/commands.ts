@@ -13,7 +13,7 @@ import { checkSessionProvider } from '../storage/session-tracker.js';
 import { loadCopilotInstructions } from '../config/copilot-instructions.js';
 import type { CopilotInstructions } from '../config/copilot-instructions.js';
 import { readInput, resetStdinGuard } from './stdin.js';
-import { NO_STAGED_CHANGES, resolvePrecommitDiff } from '../utils/resolve-diff.js';
+import { NO_STAGED_CHANGES, resolvePrecommitDiff, stampCapture } from '../utils/resolve-diff.js';
 import { createHandler } from './handlers.js';
 import type { HandlerIO } from './handlers.js';
 import {
@@ -209,7 +209,10 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
     .option('--focus <items>', 'Comma-separated focus areas')
     .addOption(new Option('--depth <level>', 'Review depth').choices(['quick', 'thorough']))
     .option('--session <id>', 'Resume session')
-    .option('--model <name>', 'Override the configured default model (e.g., gpt-5.6-sol, or a tier: max | balanced | fast)')
+    .option(
+      '--model <name>',
+      'Override the configured default model (e.g., gpt-5.6-sol, or a tier: max | balanced | fast)',
+    )
     .option('--deliberate', 'Force deliberation (both providers) for this call')
     .option('--no-deliberate', 'Force single-provider failover for this call')
     .option('--config <path>', 'Path to .reviewbridge.json directory')
@@ -265,7 +268,10 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
     .requiredOption('--diff <path>', 'File path or "-" for stdin')
     .option('--focus <items>', 'Comma-separated review criteria')
     .option('--session <id>', 'Resume session')
-    .option('--model <name>', 'Override the configured default model (e.g., gpt-5.6-sol, or a tier: max | balanced | fast)')
+    .option(
+      '--model <name>',
+      'Override the configured default model (e.g., gpt-5.6-sol, or a tier: max | balanced | fast)',
+    )
     .option('--deliberate', 'Force deliberation (both providers) for this call')
     .option('--no-deliberate', 'Force single-provider failover for this call')
     .option('--config <path>', 'Path to .reviewbridge.json directory')
@@ -295,29 +301,33 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
       if (!synthetic && !guardSession(init, selectors.data.session, io, deps)) return;
 
       const handler = createHandler<CodeReviewResult>({
-        execute: () =>
-          synthetic
-            ? Promise.resolve(
-                ok<CodeReviewResult>({
-                  verdict: 'approve',
-                  summary: 'No changes to review.',
-                  findings: [],
-                  session_id: selectors.data.session ?? randomUUID(),
-                  models: [],
-                }),
-              )
-            : client.reviewCode({
-                diff: inputResult.data,
-                criteria: opts.focus
-                  ? opts.focus
-                      .split(',')
-                      .map((s: string) => s.trim())
-                      .filter(Boolean)
-                  : undefined,
-                session_id: selectors.data.session,
-                model: selectors.data.model,
-                deliberate: opts.deliberate,
-              }),
+        execute: async () => {
+          if (synthetic) {
+            return ok<CodeReviewResult>({
+              verdict: 'approve',
+              summary: 'No changes to review.',
+              findings: [],
+              session_id: selectors.data.session ?? randomUUID(),
+              models: [],
+            });
+          }
+          const result = await client.reviewCode({
+            diff: inputResult.data,
+            criteria: opts.focus
+              ? opts.focus
+                  .split(',')
+                  .map((s: string) => s.trim())
+                  .filter(Boolean)
+              : undefined,
+            session_id: selectors.data.session,
+            model: selectors.data.model,
+            deliberate: opts.deliberate,
+          });
+          // The CLI's review-code is an explicit-input command — it never
+          // auto-captures — so there is no capture location to report, and a
+          // backend-supplied one is discarded (ISS-028).
+          return stampCapture(result, undefined);
+        },
         format: formatCodeResult,
         exitCode: () => 0,
       });
@@ -330,7 +340,10 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
     .description('Quick pre-commit sanity check on staged changes')
     .option('--diff <path>', 'Override auto-capture (path or "-" for stdin)')
     .option('--session <id>', 'Resume session')
-    .option('--model <name>', 'Override the configured default model (e.g., gpt-5.6-sol, or a tier: max | balanced | fast)')
+    .option(
+      '--model <name>',
+      'Override the configured default model (e.g., gpt-5.6-sol, or a tier: max | balanced | fast)',
+    )
     .option('--auto-diff', 'Force auto-capture of staged changes for this call')
     .option('--no-auto-diff', 'Skip auto-capture for this call')
     .option('--config <path>', 'Path to .reviewbridge.json directory')
@@ -373,6 +386,8 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
         diff: explicitDiff,
         auto_diff: autoDiff,
       });
+      // Set only when git actually ran (omitted for an explicit --diff).
+      const capturedFrom = diffResult.capturedFrom;
       if (!diffResult.ok) {
         if (!diffResult.error.startsWith(NO_STAGED_CHANGES)) {
           io.stderr.write(`Error: ${escapeTerminalControls(diffResult.error)}\n`);
@@ -382,13 +397,20 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
         const syntheticHandler = createHandler<PrecommitResult>({
           execute: () =>
             Promise.resolve(
-              ok<PrecommitResult>({
-                ready_to_commit: false,
-                blockers: [],
-                warnings: ['No staged changes found'],
-                session_id: selectors.data.session ?? randomUUID(),
-                models: [],
-              }),
+              stampCapture(
+                ok<PrecommitResult>({
+                  ready_to_commit: false,
+                  blockers: [],
+                  warnings: [
+                    capturedFrom
+                      ? `No staged changes found in ${escapeTerminalControls(capturedFrom)}`
+                      : 'No staged changes found',
+                  ],
+                  session_id: selectors.data.session ?? randomUUID(),
+                  models: [],
+                }),
+                capturedFrom,
+              ),
             ),
           format: formatPrecommitResult,
           exitCode: () => 2,
@@ -399,12 +421,15 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
       if (!guardSession(init, selectors.data.session, io, deps)) return;
 
       const handler = createHandler<PrecommitResult>({
-        execute: () =>
-          client.reviewPrecommit({
-            diff: diffResult.data,
-            session_id: selectors.data.session,
-            model: selectors.data.model,
-          }),
+        execute: async () =>
+          stampCapture(
+            await client.reviewPrecommit({
+              diff: diffResult.data,
+              session_id: selectors.data.session,
+              model: selectors.data.model,
+            }),
+            capturedFrom,
+          ),
         format: formatPrecommitResult,
         exitCode: (result) => (result.ready_to_commit ? 0 : 2),
       });

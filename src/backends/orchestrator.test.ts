@@ -732,3 +732,25 @@ describe('merge helpers', () => {
     }
   });
 });
+
+// ISS-028 + ISS-019: capture location is host knowledge stamped at the response
+// boundary. Leaving it in a model-facing schema would both let a reviewer forge
+// it and make toJSONSchema emit a non-required property, which OpenAI structured
+// outputs reject outright.
+describe('capture metadata is never model-facing (ISS-028)', () => {
+  it('omits captured_from from the code and precommit response schemas', () => {
+    expect(Object.keys(RESPONSE_SCHEMAS.code.shape)).not.toContain('captured_from');
+    expect(Object.keys(RESPONSE_SCHEMAS.precommit.shape)).not.toContain('captured_from');
+  });
+
+  it('drops a captured_from a model tried to emit', () => {
+    const forged = {
+      verdict: 'approve',
+      summary: 'ok',
+      findings: [],
+      captured_from: '/forged/by/model',
+    };
+    const parsed = RESPONSE_SCHEMAS.code.parse(forged);
+    expect(parsed).not.toHaveProperty('captured_from');
+  });
+});

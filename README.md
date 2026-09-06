@@ -166,13 +166,15 @@ Send a code diff for code review.
 
 | Parameter    | Type     | Required | Description                                                                                                                                                                                                                                    |
 | ------------ | -------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `diff`       | string   | yes      | Git diff to review                                                                                                                                                                                                                             |
+| `diff`       | string   | no       | Git diff to review. Omit to auto-capture `git diff HEAD`.                                                                                                                                                                                      |
+| `auto_diff`  | boolean  | no       | Auto-capture working-tree changes via `git diff HEAD` when `diff` is omitted or blank (default: `true`)                                                                                                                                        |
 | `context`    | string   | no       | Intent of the changes                                                                                                                                                                                                                          |
 | `session_id` | string   | no       | Continue from previous review (e.g. plan review session)                                                                                                                                                                                       |
 | `criteria`   | string[] | no       | Review criteria (e.g. `["bugs", "security", "performance"]`)                                                                                                                                                                                   |
 | `model`      | string   | no       | Override the model for this call (e.g. `"gpt-5.6-sol"` or `"latest"`). With Codex this can't be combined with `session_id`; compare `resolved` and `observed` to see what the runtime recorded. Gemini allows changing model on a resumed session. |
 
-Returns: `{ verdict, summary, findings[], session_id, models[], provenance }`
+Returns: `{ verdict, summary, findings[], session_id, models[], provenance }`, plus `captured_from`
+when the diff was auto-captured.
 
 Findings include `file` and `line` references when available.
 
@@ -188,7 +190,26 @@ Quick pre-commit sanity check. Auto-captures staged git changes by default.
 | `checklist`  | string[] | no       | Custom pre-commit checks                                                                                                                                                                                                                       |
 | `model`      | string   | no       | Override the model for this call (e.g. `"gpt-5.6-sol"` or `"latest"`). With Codex this can't be combined with `session_id`; compare `resolved` and `observed` to see what the runtime recorded. Gemini allows changing model on a resumed session. |
 
-Returns: `{ ready_to_commit, blockers[], warnings[], session_id, models[], provenance }`
+Returns: `{ ready_to_commit, blockers[], warnings[], session_id, models[], provenance }`, plus
+`captured_from` when the diff was auto-captured.
+
+#### Where the diff came from
+
+Auto-captured results (`review_code` without a `diff`, `review_precommit` without a `diff`) carry
+`captured_from`: the absolute directory the bridge ran git in. The server captures in **its own**
+working directory, which is wherever the MCP client launched it — not necessarily where you are
+working. A session that later moves into a git worktree still captures the original checkout, and an
+empty result there means "nothing staged **there**", not "nothing staged".
+
+Empty auto-captures say so explicitly — `No staged changes found in /path/to/repo` — and git failures
+append `capture attempted from "/path/to/repo"`. When `captured_from` is not the repository you are
+working in, pass the diff explicitly:
+
+```bash
+git diff --staged | <your client's review_precommit with an explicit diff>
+```
+
+Explicit diffs never carry `captured_from`, and the field is never persisted to review history.
 
 ### `review_status`
 

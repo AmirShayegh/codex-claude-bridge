@@ -5,7 +5,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import type { ReviewBackend } from '../backends/backend.js';
 import { sessionModelConflictMessage } from '../backends/orchestrator.js';
-import { resolveCodeDiff, NO_WORKING_CHANGES } from '../utils/resolve-diff.js';
+import { resolveCodeDiff, withCapturedFrom, NO_WORKING_CHANGES } from '../utils/resolve-diff.js';
+import { escapeTerminalControls } from '../utils/terminal.js';
 import { createSessionTracker } from '../storage/session-tracker.js';
 import type { ReviewLifecycle } from '../review/lifecycle.js';
 import { ModelSelectorSchema, SessionIdSchema } from '../utils/input-validation.js';
@@ -25,7 +26,9 @@ export function registerReviewCodeTool(
         'The diff parameter MUST contain actual git diff output (from git diff, gh pr diff, etc.), ' +
         'NOT a summary or description of changes. ' +
         'If you reviewed a plan first, pass the same session_id so the reviewer checks the code against the plan. ' +
-        'Returns a verdict, findings, responding models, and persistence provenance.',
+        'Returns a verdict, findings, responding models, and persistence provenance. ' +
+        'An auto-captured review also returns captured_from: the absolute directory the bridge ran ' +
+        'git in. If that is not the repository you are working in, pass the diff explicitly.',
       inputSchema: {
         diff: z
           .string()
@@ -79,22 +82,29 @@ export function registerReviewCodeTool(
           diff: args.diff,
           auto_diff: args.auto_diff ?? true,
         });
+        // Set only when git actually ran. Every capture-derived field below comes
+        // from this one value, never from a fresh cwd read (ISS-028).
+        const capturedFrom = diffResult.capturedFrom;
         if (!diffResult.ok) {
           if (diffResult.error.startsWith(NO_WORKING_CHANGES)) {
+            // An empty capture is a real (approving) answer, so it must still say
+            // WHERE it looked — otherwise it is indistinguishable from a capture
+            // that ran in the wrong repository.
+            const emptyCapture = withCapturedFrom(
+              {
+                verdict: 'approve',
+                summary: capturedFrom
+                  ? `No changes found to review in ${escapeTerminalControls(capturedFrom)}.`
+                  : 'No changes found to review.',
+                findings: [],
+                session_id: args.session_id ?? randomUUID(),
+                models: [],
+                provenance: { persistence: 'not_recorded', warning: null },
+              },
+              capturedFrom,
+            );
             return {
-              content: [
-                {
-                  type: 'text' as const,
-                  text: JSON.stringify({
-                    verdict: 'approve',
-                    summary: 'No changes found to review.',
-                    findings: [],
-                    session_id: args.session_id ?? randomUUID(),
-                    models: [],
-                    provenance: { persistence: 'not_recorded', warning: null },
-                  }),
-                },
-              ],
+              content: [{ type: 'text' as const, text: JSON.stringify(emptyCapture) }],
             };
           }
           return { content: [{ type: 'text' as const, text: diffResult.error }], isError: true };
@@ -106,7 +116,16 @@ export function registerReviewCodeTool(
           if (!result.ok) {
             return { content: [{ type: 'text' as const, text: result.error }], isError: true };
           }
-          return { content: [{ type: 'text' as const, text: JSON.stringify(result.data) }] };
+          // Decorate after persistence: history stores the review, not where the
+          // host happened to capture it.
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify(withCapturedFrom(result.data, capturedFrom)),
+              },
+            ],
+          };
         }
 
         const preflight = tracker.preflight(args.session_id);
@@ -132,7 +151,14 @@ export function registerReviewCodeTool(
           result.data.provider,
         );
 
-        return { content: [{ type: 'text' as const, text: JSON.stringify(result.data) }] };
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify(withCapturedFrom(result.data, capturedFrom)),
+            },
+          ],
+        };
       } catch (e) {
         tracker.recordFailureBestEffort();
         return {

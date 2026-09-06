@@ -158,6 +158,9 @@ const PlanReviewResponseSchema = PlanReviewResultSchema.omit({
 const CodeReviewResponseSchema = CodeReviewResultSchema.omit({
   session_id: true,
   chunks_reviewed: true,
+  // Where the bridge captured the diff is host knowledge, not a review finding:
+  // omitted so the reviewer can neither read it nor forge it (ISS-028).
+  captured_from: true,
   provider: true,
   review_mode: true,
   deliberation: true,
@@ -167,6 +170,8 @@ const CodeReviewResponseSchema = CodeReviewResultSchema.omit({
 const PrecommitResponseSchema = PrecommitResultSchema.omit({
   session_id: true,
   chunks_reviewed: true,
+  // See CodeReviewResponseSchema.
+  captured_from: true,
   provider: true,
   review_mode: true,
   models: true,

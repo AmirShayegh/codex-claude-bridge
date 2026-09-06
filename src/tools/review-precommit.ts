@@ -6,7 +6,12 @@ import type Database from 'better-sqlite3';
 import type { ReviewBackend } from '../backends/backend.js';
 import type { ReviewBridgeConfig } from '../config/types.js';
 import { sessionModelConflictMessage } from '../backends/orchestrator.js';
-import { resolvePrecommitDiff, NO_STAGED_CHANGES } from '../utils/resolve-diff.js';
+import {
+  resolvePrecommitDiff,
+  withCapturedFrom,
+  NO_STAGED_CHANGES,
+} from '../utils/resolve-diff.js';
+import { escapeTerminalControls } from '../utils/terminal.js';
 import { createSessionTracker } from '../storage/session-tracker.js';
 import type { ReviewLifecycle } from '../review/lifecycle.js';
 import { ModelSelectorSchema, SessionIdSchema } from '../utils/input-validation.js';
@@ -24,7 +29,9 @@ export function registerReviewPrecommitTool(
       description:
         'Final sanity check right before committing. Auto-captures staged git changes. ' +
         'Call this after git add and before git commit to catch last-minute issues. ' +
-        'Returns ready_to_commit, blockers, warnings, responding models, and persistence provenance.',
+        'Returns ready_to_commit, blockers, warnings, responding models, and persistence provenance. ' +
+        'An auto-captured check also returns captured_from: the absolute directory the bridge ran ' +
+        'git in. If that is not the repository you are working in, pass the diff explicitly.',
       inputSchema: {
         auto_diff: z
           .boolean()
@@ -60,23 +67,31 @@ export function registerReviewPrecommitTool(
         // field is always present — no optional chaining needed).
         const autoDiff = args.auto_diff ?? config.review_standards.precommit.auto_diff;
         const diffResult = await resolvePrecommitDiff({ diff: args.diff, auto_diff: autoDiff });
+        // Set only when git actually ran. Every capture-derived field below comes
+        // from this one value, never from a fresh cwd read (ISS-028).
+        const capturedFrom = diffResult.capturedFrom;
         if (!diffResult.ok) {
-          // "No staged changes" is not an error — return structured response
+          // "No staged changes" is not an error — return structured response. It
+          // names the directory it looked in, so a capture that ran in the wrong
+          // repository is visible instead of reading as a clean index.
           if (diffResult.error.startsWith(NO_STAGED_CHANGES)) {
+            const emptyCapture = withCapturedFrom(
+              {
+                ready_to_commit: false,
+                blockers: [],
+                warnings: [
+                  capturedFrom
+                    ? `No staged changes found in ${escapeTerminalControls(capturedFrom)}`
+                    : 'No staged changes found',
+                ],
+                session_id: args.session_id ?? randomUUID(),
+                models: [],
+                provenance: { persistence: 'not_recorded', warning: null },
+              },
+              capturedFrom,
+            );
             return {
-              content: [
-                {
-                  type: 'text' as const,
-                  text: JSON.stringify({
-                    ready_to_commit: false,
-                    blockers: [],
-                    warnings: ['No staged changes found'],
-                    session_id: args.session_id ?? randomUUID(),
-                    models: [],
-                    provenance: { persistence: 'not_recorded', warning: null },
-                  }),
-                },
-              ],
+              content: [{ type: 'text' as const, text: JSON.stringify(emptyCapture) }],
             };
           }
           return { content: [{ type: 'text' as const, text: diffResult.error }], isError: true };
@@ -93,7 +108,16 @@ export function registerReviewPrecommitTool(
           if (!result.ok) {
             return { content: [{ type: 'text' as const, text: result.error }], isError: true };
           }
-          return { content: [{ type: 'text' as const, text: JSON.stringify(result.data) }] };
+          // Decorate after persistence: history stores the review, not where the
+          // host happened to capture it.
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify(withCapturedFrom(result.data, capturedFrom)),
+              },
+            ],
+          };
         }
 
         // Pre-flight: guard cross-provider resume, then activate session after
@@ -126,7 +150,14 @@ export function registerReviewPrecommitTool(
           result.data.provider,
         );
 
-        return { content: [{ type: 'text' as const, text: JSON.stringify(result.data) }] };
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify(withCapturedFrom(result.data, capturedFrom)),
+            },
+          ],
+        };
       } catch (e) {
         tracker.recordFailureBestEffort();
         return {

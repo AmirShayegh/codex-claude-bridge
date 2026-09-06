@@ -38,11 +38,12 @@ vi.mock('./stdin.js', () => ({
   resetStdinGuard: vi.fn(),
 }));
 
-// Mock resolve-diff
-vi.mock('../utils/resolve-diff.js', () => ({
-  NO_STAGED_CHANGES: 'NO_STAGED_CHANGES:',
-  resolvePrecommitDiff: vi.fn(),
-}));
+// Mock only the resolver entry point — withCapturedFrom/stampCapture beside it
+// are product logic these tests exercise, so they must not be stubbed out.
+vi.mock('../utils/resolve-diff.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../utils/resolve-diff.js')>();
+  return { ...actual, resolvePrecommitDiff: vi.fn() };
+});
 
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -318,6 +319,58 @@ describe('review-precommit command', () => {
     expect(deps.exitCode).toBe(0);
   });
 
+  it('prints the capture directory when the resolver reports one (ISS-028)', async () => {
+    mockResolveDiff.mockResolvedValue({
+      ok: true,
+      data: 'staged diff',
+      capturedFrom: '/work/repo-b',
+    });
+    mockCreateClient.mockReturnValue({
+      provider: 'codex',
+      providers: ['codex'],
+      allowsModelOverrideOnResume: false,
+      reviewPlan: vi.fn(),
+      reviewCode: vi.fn(),
+      reviewPrecommit: vi.fn().mockResolvedValue({
+        ok: true,
+        data: { ready_to_commit: true, blockers: [], warnings: [], session_id: 's-cap' },
+      }),
+    });
+
+    const deps = createDeps();
+    await runCli(['node', 'bridge', 'review-precommit'], deps);
+
+    expect(deps.stdoutBuf).toContain('Captured from: /work/repo-b');
+  });
+
+  it('discards a capture location the backend tried to supply (ISS-028)', async () => {
+    mockResolveDiff.mockResolvedValue({ ok: true, data: 'explicit diff' });
+    mockReadInput.mockResolvedValue({ ok: true, data: 'explicit diff' });
+    mockCreateClient.mockReturnValue({
+      provider: 'codex',
+      providers: ['codex'],
+      allowsModelOverrideOnResume: false,
+      reviewPlan: vi.fn(),
+      reviewCode: vi.fn(),
+      reviewPrecommit: vi.fn().mockResolvedValue({
+        ok: true,
+        data: {
+          ready_to_commit: true,
+          blockers: [],
+          warnings: [],
+          session_id: 's-forged',
+          captured_from: '/forged/by/provider',
+        },
+      }),
+    });
+
+    const deps = createDeps();
+    await runCli(['node', 'bridge', 'review-precommit', '--diff', '/tmp/d.diff', '--json'], deps);
+
+    const parsed = JSON.parse(deps.stdoutBuf) as Record<string, unknown>;
+    expect(parsed).not.toHaveProperty('captured_from');
+  });
+
   const precommitClient = () => ({
     provider: 'codex' as const,
     providers: ['codex'] as const,
@@ -447,6 +500,32 @@ describe('review-precommit command', () => {
       provenance: { persistence: 'not_recorded', warning: null },
     });
     expect(reviewPrecommit).not.toHaveBeenCalled();
+    expect(deps.exitCode).toBe(2);
+  });
+
+  it('names the capture directory in a no-staged-changes result (ISS-028)', async () => {
+    mockResolveDiff.mockResolvedValue({
+      ok: false,
+      error: 'NO_STAGED_CHANGES: No staged changes found in /work/repo-b.',
+      capturedFrom: '/work/repo-b',
+    });
+    mockCreateClient.mockReturnValue({
+      provider: 'codex',
+      providers: ['codex'],
+      allowsModelOverrideOnResume: false,
+      reviewPlan: vi.fn(),
+      reviewCode: vi.fn(),
+      reviewPrecommit: vi.fn(),
+    });
+    const deps = createDeps();
+
+    await runCli(['node', 'bridge', 'review-precommit', '--json'], deps);
+
+    expect(JSON.parse(deps.stdoutBuf)).toMatchObject({
+      ready_to_commit: false,
+      warnings: ['No staged changes found in /work/repo-b'],
+      captured_from: '/work/repo-b',
+    });
     expect(deps.exitCode).toBe(2);
   });
 });

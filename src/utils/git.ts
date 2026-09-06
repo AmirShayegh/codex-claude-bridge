@@ -124,8 +124,13 @@ function gitExitError<T>(outcome: { code: number; stderr: string }, fallback: st
 // whose text IS the actionable part, and must never be flattened into
 // "not a repository", which would send the reader after the wrong fix.
 // Reliable ONLY because runGit pins LC_ALL=C — see the note there.
+//
+// Anchored to the start of a `fatal:` line. A bare substring test would also
+// match a REAL failure that merely quotes a path containing these words — a
+// dubious-ownership refusal naming a directory called "not a git repository"
+// — and rewrite it into "no repository here", which is actively wrong advice.
 function meansNoRepository(stderr: string): boolean {
-  return /not a git repository/i.test(stderr);
+  return /(?:^|\n)fatal: not a git repository(?:[ :(]|$)/i.test(stderr);
 }
 
 async function capture(args: string[], cwd: string): Promise<Result<string>> {

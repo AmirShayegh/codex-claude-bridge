@@ -401,6 +401,42 @@ describe('getWorkingDiff', () => {
 });
 
 describe('getRepositoryRoot', () => {
+  // The adversarial case: a dubious-ownership error naming a directory that
+  // happens to be called "not a git repository". An unanchored substring test
+  // matches it and answers "no repository here" — actively wrong, since the fix
+  // is `git config --global --add safe.directory`, not a different cwd.
+  it('does not misclassify a real error whose PATH contains "not a git repository"', async () => {
+    const trickyPath = '/tmp/not a git repository/repo';
+    program({
+      exit: 128,
+      stderr:
+        `fatal: detected dubious ownership in repository at '${trickyPath}'\n` +
+        'To add an exception for this directory, call:\n\n' +
+        `\tgit config --global --add safe.directory '${trickyPath}'`,
+    });
+
+    const result = await getRepositoryRoot(trickyPath);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/^GIT_ERROR:/);
+      expect(result.error).toContain('dubious ownership');
+      expect(result.error).toContain('safe.directory');
+    }
+  });
+
+  it('still recognizes the real "not a git repository" fatal line', async () => {
+    program({
+      exit: 128,
+      stderr: 'fatal: not a git repository (or any of the parent directories): .git',
+    });
+
+    const result = await getRepositoryRoot(CWD);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data).toBeNull();
+  });
+
   it('returns the canonical work-tree root', async () => {
     program({ exit: 0, stdout: 'true\n' }, { exit: 0, stdout: '/work/repo-b\n' });
     expect(await getRepositoryRoot(CWD)).toEqual({ ok: true, data: '/work/repo-b' });

@@ -514,6 +514,18 @@ async function runAgyReview<T extends Record<string, unknown>>(
 
       // Resume → reuse the conversation we resumed; fresh → capture the new id
       // agy just recorded for this cwd.
+      //
+      // Cross-directory resume safety: this cwd-keyed cache lookup is reachable
+      // ONLY on the fresh branch — `??` short-circuits it whenever sessionId is
+      // present, so a resumed call always returns the caller's OWN id verbatim
+      // and the cache can never substitute a different one. A resume can't
+      // silently fork through this mechanism, whatever cwd accompanies it.
+      // A resume DOES still run agy in whatever directory THIS call names while
+      // continuing conversation `sessionId`; if that differs from where the
+      // session started, the review's content may be incoherent with the
+      // conversation's history — the same caller-coherence concern as passing
+      // an unrelated diff to a resumed session, not an identity one. That is
+      // why callers must repeat cwd on resume. Analysis from #7.
       const resolvedId = sessionId ?? readConversationId(cwd);
       if (!resolvedId) {
         // The review itself parsed fine — this is a storage read failure (agy's

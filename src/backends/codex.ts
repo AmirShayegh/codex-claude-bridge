@@ -186,6 +186,17 @@ const CODEX_DEFAULT_MODEL = RECOMMENDED_MODELS.codex[0];
 // RESUME as well as a start, so both wrappers take it from one place: a resume
 // that kept the server's directory would read a different repository than the
 // start did, on the same thread.
+//
+// Verified against the SDK's compiled output (@openai/codex-sdk/dist/index.js),
+// not assumed: `--cd <dir>` is forwarded unconditionally whenever set, built into
+// the command args independently of whether a `resume <id>` subcommand is also
+// appended, and `ThreadOptions` — the one type both startThread and resumeThread
+// accept — draws no start/resume distinction for it. `codex exec resume --help`
+// does not list --cd as a resume-specific option at all; it is a top-level
+// `codex exec` flag governing where the whole invocation runs, not a server-side
+// session parameter. That is structurally unlike `model`, which the SDK ALSO
+// forwards unconditionally and which therefore must be omitted on resume (see
+// resumeThreadOpts). Re-verify both on an SDK bump. Analysis from #7.
 function baseThreadOpts(config: ReviewBridgeConfig, workingDirectory: string) {
   return {
     sandboxMode: 'read-only' as const,

@@ -20,6 +20,8 @@ import type { RecordReviewOutcomeInput } from '../storage/review-outcome.js';
 import { recordReviewOutcomeWithRetry } from '../storage/review-outcome.js';
 import type { SessionRegistry } from '../storage/session-registry.js';
 import type { StorageDurability } from '../storage/db.js';
+import { getOrCreateSession, markSessionFailed } from '../storage/sessions.js';
+import { escapeTerminalControls } from '../utils/terminal.js';
 import { err, ErrorCode, ok } from '../utils/errors.js';
 import type { Result } from '../utils/errors.js';
 
@@ -209,6 +211,7 @@ export function createReviewLifecycle(options: ReviewLifecycleOptions): ReviewLi
     );
     if (!freshResult.ok) {
       registry.fail(input.session_id);
+      persistFailure(prepared.servingProvider, input.session_id);
       return err(freshResult.error);
     }
 
@@ -283,8 +286,41 @@ export function createReviewLifecycle(options: ReviewLifecycleOptions): ReviewLi
     for (const sessionId of prepared.discardAfterRelease) registry.discard(sessionId);
   }
 
-  function unexpectedFailure<R extends ReviewResult>(sessionId?: string): Result<R> {
+  // Memory state is authoritative for the live process, but a failure must ALSO
+  // reach the database: a resumed review that fails on a session SQLite still
+  // records as `completed` would report success from review_status after a
+  // restart or registry eviction. Best-effort — a write failure here must not
+  // mask the review failure being reported.
+  function persistFailure(
+    provider: ReviewProvider,
+    ...sessionIds: Array<string | undefined>
+  ): void {
+    if (!storage || storage.durability === 'memory_only') return;
+    for (const id of sessionIds) {
+      if (!id) continue;
+      try {
+        storage.db.transaction(() => {
+          const created = getOrCreateSession(storage.db, id, provider);
+          if (!created.ok) throw new Error(created.error);
+          const failed = markSessionFailed(storage.db, id);
+          if (!failed.ok) throw new Error(failed.error);
+        })();
+      } catch (e: unknown) {
+        console.error(
+          `[codex-bridge] could not persist review failure: ${escapeTerminalControls(
+            e instanceof Error ? e.message : String(e),
+          )}`,
+        );
+      }
+    }
+  }
+
+  function unexpectedFailure<R extends ReviewResult>(
+    provider: ReviewProvider,
+    sessionId?: string,
+  ): Result<R> {
     registry.fail(sessionId);
+    persistFailure(provider, sessionId);
     console.error('[codex-bridge] review failed unexpectedly');
     return err<R>(UNEXPECTED_REVIEW_ERROR);
   }
@@ -301,7 +337,7 @@ export function createReviewLifecycle(options: ReviewLifecycleOptions): ReviewLi
         const synthetic = await invoke();
         return synthetic.ok ? ok(notRecorded(synthetic.data)) : synthetic;
       } catch {
-        return unexpectedFailure<R>();
+        return unexpectedFailure<R>(backend.provider);
       }
     }
 
@@ -313,6 +349,7 @@ export function createReviewLifecycle(options: ReviewLifecycleOptions): ReviewLi
       const providerResult = await invoke();
       if (!providerResult.ok) {
         registry.fail(input.session_id, providerResult.session_id);
+        persistFailure(prepared.servingProvider, input.session_id, providerResult.session_id);
         return providerResult;
       }
 
@@ -327,7 +364,7 @@ export function createReviewLifecycle(options: ReviewLifecycleOptions): ReviewLi
       if (!provenance.ok) return err<R>(provenance.error);
       return ok({ ...normalized.data.result, provenance: provenance.data });
     } catch {
-      return unexpectedFailure<R>(input.session_id);
+      return unexpectedFailure<R>(prepared.servingProvider, input.session_id);
     } finally {
       releaseOrDiscardRoutingState(prepared);
     }

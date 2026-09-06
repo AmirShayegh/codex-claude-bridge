@@ -649,3 +649,96 @@ describe('review lifecycle coordinator', () => {
     expect(registry.activeCount()).toBe(0);
   });
 });
+
+// Failure must reach SQLite, not only the in-memory registry. A resumed review
+// that fails on a session the database still records as `completed` would
+// otherwise report success from review_status after a restart or eviction.
+describe('failure persistence', () => {
+  async function completedSessionDb(): Promise<Database.Database> {
+    const { default: Sqlite } = await import('better-sqlite3');
+    const { initSessionsDb, getOrCreateSession, markSessionCompleted } =
+      await import('../storage/sessions.js');
+    const db = new Sqlite(':memory:');
+    initSessionsDb(db);
+    getOrCreateSession(db, 'old-owner', 'codex');
+    markSessionCompleted(db, 'old-owner');
+    return db;
+  }
+
+  async function statusOf(db: Database.Database, id: string): Promise<string | undefined> {
+    const { getSession } = await import('../storage/sessions.js');
+    const row = getSession(db, id);
+    return row.ok && row.data ? row.data.status : undefined;
+  }
+
+  it('marks a completed session failed in SQLite when its resumed review fails', async () => {
+    const db = await completedSessionDb();
+    const registry = createSessionRegistry();
+    const lifecycle = createReviewLifecycle({
+      backend: backend({
+        reviewPlan: vi.fn().mockResolvedValue(err('MODEL_ERROR: boom', 'old-owner')),
+      }),
+      registry,
+      lookupSessionProvider: () => ({ status: 'found', value: 'codex' }),
+      storage: { db, durability: 'durable', warning: null },
+      recordOutcome: vi.fn(),
+    });
+
+    const result = await lifecycle.reviewPlan({ plan: 'plan', session_id: 'old-owner' });
+
+    expect(result.ok).toBe(false);
+    expect(await statusOf(db, 'old-owner')).toBe('failed');
+  });
+
+  it('also persists the failure when the provider throws', async () => {
+    const db = await completedSessionDb();
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const lifecycle = createReviewLifecycle({
+      backend: backend({ reviewPlan: vi.fn().mockRejectedValue(new Error('crash')) }),
+      registry: createSessionRegistry(),
+      lookupSessionProvider: () => ({ status: 'found', value: 'codex' }),
+      storage: { db, durability: 'durable', warning: null },
+      recordOutcome: vi.fn(),
+    });
+
+    const result = await lifecycle.reviewPlan({ plan: 'plan', session_id: 'old-owner' });
+
+    expect(result.ok).toBe(false);
+    expect(await statusOf(db, 'old-owner')).toBe('failed');
+    consoleSpy.mockRestore();
+  });
+
+  it('records a failed FRESH review under the session id the provider returned', async () => {
+    const db = await completedSessionDb();
+    const lifecycle = createReviewLifecycle({
+      backend: backend({
+        reviewPlan: vi.fn().mockResolvedValue(err('MODEL_ERROR: boom', 'fresh-partial')),
+      }),
+      registry: createSessionRegistry(),
+      lookupSessionProvider: () => ({ status: 'absent' }),
+      storage: { db, durability: 'durable', warning: null },
+      recordOutcome: vi.fn(),
+    });
+
+    await lifecycle.reviewPlan({ plan: 'plan' });
+
+    expect(await statusOf(db, 'fresh-partial')).toBe('failed');
+  });
+
+  it('writes nothing when storage is memory-only', async () => {
+    const db = await completedSessionDb();
+    const lifecycle = createReviewLifecycle({
+      backend: backend({
+        reviewPlan: vi.fn().mockResolvedValue(err('MODEL_ERROR: boom', 'old-owner')),
+      }),
+      registry: createSessionRegistry(),
+      lookupSessionProvider: () => ({ status: 'found', value: 'codex' }),
+      storage: { db, durability: 'memory_only', warning: null },
+      recordOutcome: vi.fn(),
+    });
+
+    await lifecycle.reviewPlan({ plan: 'plan', session_id: 'old-owner' });
+
+    expect(await statusOf(db, 'old-owner')).toBe('completed');
+  });
+});

@@ -1,0 +1,29 @@
+{
+  "components": [
+    "storage"
+  ],
+  "createdBy": "repo-owner (relayed via a peer session working in an unrelated repository)",
+  "dedupeKey": "owner-2026-09-05:reviews-db-out-of-project-folders",
+  "discoveredDate": "2026-09-06",
+  "id": "ISS-035",
+  "impact": "`src/storage/db.ts:34` resolves the database as `process.env.REVIEW_BRIDGE_DB ?? 'reviews.db'` — a RELATIVE path, so the file is created in whatever directory the process happened to start in. For an MCP server that is the client's launch directory; for the CLI it is the user's shell cwd. In practice this drops an untracked `reviews.db` into the middle of unrelated product repositories, where it shows up in `git status`, risks being committed, and gives no hint about which tool created it. Reported by the repo owner after seeing it in a working tree; a peer session hit the same thing independently.\n\nDesired behavior:\n- Default to `<reviewed repository root>/.story/reviews.db`, anchored on the repository discovered for the request (ISS-027 already resolves `ResolvedWorkspace.repositoryRoot`), not on `process.cwd()`.\n- The bridge ensures `.story/.gitignore` carries a `reviews.db` entry, creating or appending idempotently, so the file never reaches `git status`.\n- `REVIEW_BRIDGE_DB` remains the explicit override and keeps precedence over the default.\n- When the resolved directory is not inside a git work tree, fall back to the launch directory's `.story/` and DISCLOSE the choice (a `db_path` field on results) rather than picking silently — the same self-diagnosing principle as ISS-028's `captured_from`.\n\nDesign tension to settle before implementing: the database is currently opened ONCE at server startup, while ISS-027 makes the reviewed repository per-request. Either the db stays a single startup-scoped store (in which case the anchor is the launch directory's repository, and the per-request part is only the disclosure), or it becomes per-repository and the session registry, resume routing, provider lookups, and history queries all need to agree on which store a session_id belongs to. The second is a substantially larger change; decide deliberately rather than by implementation drift.\n\nSequencing: the repo owner asked for this AFTER ISS-028 and ISS-027 land. Out of scope for branch feat/request-cwd.",
+  "location": [
+    "src/storage/db.ts:34"
+  ],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": null,
+  "resolvedDate": null,
+  "severity": "medium",
+  "sourceRefs": [
+    {
+      "contentHash": "704862746f716f6f7229abb9e2bfaedf33bba38885ecb45e790ef18dd2e3e192",
+      "endLine": 34,
+      "path": "src/storage/db.ts",
+      "revision": "f5b34540cc39966952ab0d7138e9ac48069c319a",
+      "startLine": 34
+    }
+  ],
+  "status": "open",
+  "title": "Review database lands in whatever directory the server was launched in; default it under the reviewed repo's .story/ and gitignore it"
+}

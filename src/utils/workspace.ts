@@ -16,10 +16,6 @@ export interface ResolvedWorkspace {
   // anchored here, because a caller standing in a subdirectory still means the
   // whole repository.
   repositoryRoot: string | null;
-  // Set only when git discovery FAILED, as opposed to reporting no work tree.
-  // Reviews that need no repository ignore it; auto-capture reports it rather
-  // than claiming the directory simply is not a repository.
-  repositoryError?: string;
 }
 
 // A path is an argument to a subprocess and a key into a cache, so bound it the
@@ -113,14 +109,12 @@ export async function resolveWorkspace(candidate: string): Promise<Result<Resolv
   // Not being in a repository is not an error: review_plan needs no repository,
   // and an explicit diff can be reviewed from anywhere. Only auto-capture
   // requires a work tree, and that is enforced where the capture happens.
-  // A git discovery FAILURE (dubious ownership, an unreadable object store, git
-  // missing) is not an error here either, for the same reason: failing it now
-  // would break every review that never needed git. The message is carried
-  // instead, and surfaced by the one caller that does need a repository.
+  // A git discovery FAILURE (dubious ownership, an unreadable object store) is
+  // different from "not a repository" and IS an error: we cannot know which
+  // repository this directory belongs to, so we cannot know which instruction
+  // files apply — a subdirectory would silently be treated as its own root.
   const root = await getRepositoryRoot(canonical);
-  if (!root.ok) {
-    return ok({ workingDirectory: canonical, repositoryRoot: null, repositoryError: root.error });
-  }
+  if (!root.ok) return err(root.error);
 
   return ok({ workingDirectory: canonical, repositoryRoot: root.data });
 }

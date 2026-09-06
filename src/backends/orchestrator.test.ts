@@ -253,7 +253,7 @@ describe('orchestrator — model resolution wiring', () => {
         turn,
       ),
       runCrossReview(
-        { execution: EXEC, content: SMALL_DIFF, findings: [finding] },
+        { execution: EXEC, subject: 'code', content: SMALL_DIFF, findings: [finding] },
         resolverDeps(true, resolveModel),
         turn,
       ),
@@ -484,10 +484,55 @@ describe('orchestrator — runCrossReview (deliberate-deep)', () => {
     description: 'off-by-one',
   };
 
+  // The adjudicator must see the same rules the primary reviewer saw. Code is
+  // scoped to the diff's files; plan prose has no files, so filtering it by
+  // "files in the diff" would strip every scoped rule the findings rest on.
+  const SCOPED_INSTRUCTIONS = {
+    repoWide: 'REPO-WIDE-RULE',
+    scoped: [
+      { filename: 'ts.instructions.md', applyTo: '**/*.ts', body: 'TS-ONLY-RULE' },
+      { filename: 'go.instructions.md', applyTo: '**/*.go', body: 'GO-ONLY-RULE' },
+    ],
+  };
+
+  it('a PLAN cross-review keeps every scoped instruction, matching the plan review', async () => {
+    const { turn, calls } = makeFakeTurn(CANNED_CROSS);
+    await runCrossReview(
+      {
+        execution: { workingDirectory: '/work/repo-b', copilotInstructions: SCOPED_INSTRUCTIONS },
+        subject: 'plan',
+        content: 'Plan: add a widget service.',
+        findings: [finding],
+      },
+      deps(false),
+      turn,
+    );
+    expect(calls[0].prompt).toContain('REPO-WIDE-RULE');
+    expect(calls[0].prompt).toContain('TS-ONLY-RULE');
+    expect(calls[0].prompt).toContain('GO-ONLY-RULE');
+  });
+
+  it('a CODE cross-review scopes instructions to the files in the diff', async () => {
+    const { turn, calls } = makeFakeTurn(CANNED_CROSS);
+    await runCrossReview(
+      {
+        execution: { workingDirectory: '/work/repo-b', copilotInstructions: SCOPED_INSTRUCTIONS },
+        subject: 'code',
+        content: SMALL_DIFF,
+        findings: [finding],
+      },
+      deps(false),
+      turn,
+    );
+    expect(calls[0].prompt).toContain('REPO-WIDE-RULE');
+    expect(calls[0].prompt).toContain('TS-ONLY-RULE');
+    expect(calls[0].prompt).not.toContain('GO-ONLY-RULE');
+  });
+
   it('runs a single turn and returns adjudications with the session_id stripped', async () => {
     const { turn, calls } = makeFakeTurn(CANNED_CROSS);
     const res = await runCrossReview(
-      { execution: EXEC, content: SMALL_DIFF, findings: [finding] },
+      { execution: EXEC, subject: 'code', content: SMALL_DIFF, findings: [finding] },
       deps(false),
       turn,
     );
@@ -513,7 +558,7 @@ describe('orchestrator — runCrossReview (deliberate-deep)', () => {
   it('forwards an explicit model pin to the turn', async () => {
     const { turn, calls } = makeFakeTurn(CANNED_CROSS);
     await runCrossReview(
-      { execution: EXEC, content: 'x', findings: [finding], model: 'gpt-5.5' },
+      { execution: EXEC, subject: 'code', content: 'x', findings: [finding], model: 'gpt-5.5' },
       deps(false),
       turn,
     );
@@ -522,7 +567,11 @@ describe('orchestrator — runCrossReview (deliberate-deep)', () => {
 
   it('resolves the model quietly — no stderr narration even for an unpinned request', async () => {
     const { turn } = makeFakeTurn(CANNED_CROSS);
-    await runCrossReview({ execution: EXEC, content: 'x', findings: [finding] }, deps(false), turn);
+    await runCrossReview(
+      { execution: EXEC, subject: 'code', content: 'x', findings: [finding] },
+      deps(false),
+      turn,
+    );
     expect(consoleSpy).not.toHaveBeenCalled();
   });
 });

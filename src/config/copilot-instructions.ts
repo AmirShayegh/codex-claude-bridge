@@ -119,8 +119,22 @@ async function readBounded(path: string): Promise<ReadOutcome> {
     if (stats.size > MAX_INSTRUCTION_FILE_BYTES) {
       return { kind: 'oversize', bytes: stats.size };
     }
-    const text = await handle.readFile('utf-8');
-    return { kind: 'ok', text, bytes: stats.size };
+    // Bound the READ itself, not only the size check: a file that grows between
+    // stat and read would otherwise be read in full and accounted at its old
+    // size. Reading one byte past the limit is how "too big" is detected, and
+    // the bytes actually read are what get accounted.
+    const buffer = Buffer.alloc(MAX_INSTRUCTION_FILE_BYTES + 1);
+    let bytesRead = 0;
+    // A single read may come back short, so read until EOF or the bound.
+    while (bytesRead < buffer.length) {
+      const chunk = await handle.read(buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+      if (chunk.bytesRead === 0) break;
+      bytesRead += chunk.bytesRead;
+    }
+    if (bytesRead > MAX_INSTRUCTION_FILE_BYTES) {
+      return { kind: 'oversize', bytes: bytesRead };
+    }
+    return { kind: 'ok', text: buffer.toString('utf-8', 0, bytesRead), bytes: bytesRead };
   } catch (e: unknown) {
     return { kind: 'error', message: messageOf(e) };
   } finally {

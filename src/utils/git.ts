@@ -257,7 +257,10 @@ export async function getRepositoryRoot(cwd: string): Promise<Result<string | nu
   if (toplevel.code !== 0) {
     return gitExitError(toplevel, 'could not determine the repository root');
   }
-  const root = toplevel.stdout.trim();
+  // Strip ONLY git's terminating newline. A directory name may legitimately end
+  // in whitespace, and trimming it would capture from a sibling repository —
+  // `repo ` silently becoming `repo`.
+  const root = toplevel.stdout.replace(/\r?\n$/, '');
   if (!root) return err(`${ErrorCode.GIT_ERROR}: git reported an empty repository root`);
   return ok(root);
 }

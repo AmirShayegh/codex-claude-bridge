@@ -372,6 +372,7 @@ type DeliberationModelOverrides = {
 async function runAdjudicate(
   judge: ReviewBackend,
   execution: ReviewExecutionContext,
+  subjectKind: 'plan' | 'code',
   content: string,
   findings: CrossFinding[],
   model?: string,
@@ -404,6 +405,7 @@ async function runAdjudicate(
       // run in the SAME directory as the review it is adjudicating, and a spread
       // is exactly how `workingDirectory` would get dropped the way `model` is.
       execution,
+      subject: subjectKind,
       content: subject,
       findings: findings.map((f) => ({
         severity: f.severity,
@@ -436,6 +438,7 @@ async function runAdjudicate(
 async function adjudicateDivergent(
   divergent: { provider: ReviewProvider; finding: CrossFinding }[],
   execution: ReviewExecutionContext,
+  subjectKind: 'plan' | 'code',
   content: string,
   primary: ReviewBackend,
   secondary: ReviewBackend,
@@ -452,6 +455,7 @@ async function adjudicateDivergent(
     runAdjudicate(
       secondary,
       execution,
+      subjectKind,
       content,
       byPrimary.map((d) => d.finding),
       modelOverrides.secondary,
@@ -460,6 +464,7 @@ async function adjudicateDivergent(
     runAdjudicate(
       primary,
       execution,
+      subjectKind,
       content,
       bySecondary.map((d) => d.finding),
       modelOverrides.primary,
@@ -501,6 +506,7 @@ async function maybeAdjudicateCode(
   const { adjudications, failures, models } = await adjudicateDivergent(
     dl.divergent,
     execution,
+    'code',
     subject,
     primary,
     secondary,
@@ -535,6 +541,7 @@ async function maybeAdjudicatePlan(
   const { adjudications, failures, models } = await adjudicateDivergent(
     dl.divergent,
     execution,
+    'plan',
     subject,
     primary,
     secondary,

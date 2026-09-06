@@ -172,30 +172,6 @@ describe('captureDiff', () => {
       },
     );
 
-    // Discovery FAILING and discovery reporting "no work tree" are different
-    // answers. Flattening a dubious-ownership failure into "not a repository"
-    // would send the reader after entirely the wrong fix.
-    it.each([['staged'], ['working']] as const)(
-      'reports a %s capture discovery failure as GIT_ERROR, not INVALID_INPUT',
-      async (target) => {
-        const failed: ResolvedWorkspace = {
-          workingDirectory: '/work/hostile',
-          repositoryRoot: null,
-          repositoryError: 'GIT_ERROR: fatal: detected dubious ownership in repository',
-        };
-
-        const result = await captureDiff({ kind: 'capture', target }, failed);
-
-        expect(result.ok).toBe(false);
-        if (!result.ok) {
-          expect(result.error).toMatch(/^GIT_ERROR:/);
-          expect(result.error).toContain('dubious ownership');
-          expect(result.error).not.toContain('not inside a git work tree');
-        }
-        expect(mockGetStagedDiff).not.toHaveBeenCalled();
-        expect(mockGetWorkingDiff).not.toHaveBeenCalled();
-      },
-    );
   });
 
   describe('empty captures name where they looked', () => {

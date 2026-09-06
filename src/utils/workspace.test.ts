@@ -205,33 +205,17 @@ describe('resolveWorkspace', () => {
     if (result.ok) expect(result.data.repositoryRoot).toBeNull();
   });
 
-  // A git failure must not fail a review that never needed git — review_plan and
-  // explicit diffs work in any readable directory. The message is carried so the
-  // capture path, the only caller that needs a repository, can report it.
-  it('carries a real git discovery failure instead of failing the whole request', async () => {
+  // "Not a repository" and "git failed" are different answers. A failure means
+  // we cannot know which repository this directory belongs to — and so cannot
+  // know which instruction files apply — so it must not be flattened to null.
+  it('propagates a real git discovery failure instead of pretending there is no repo', async () => {
     const dir = await tempDir();
     mockGetRepositoryRoot.mockResolvedValue(err('GIT_ERROR: fatal: detected dubious ownership'));
 
     const result = await resolveWorkspace(dir);
 
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.data.repositoryRoot).toBeNull();
-      expect(result.data.repositoryError).toContain('dubious ownership');
-    }
-  });
-
-  it('leaves repositoryError unset when discovery merely finds no work tree', async () => {
-    const dir = await tempDir();
-    mockGetRepositoryRoot.mockResolvedValue(ok(null));
-
-    const result = await resolveWorkspace(dir);
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.data.repositoryRoot).toBeNull();
-      expect(result.data.repositoryError).toBeUndefined();
-    }
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/^GIT_ERROR:.*dubious ownership/);
   });
 });
 

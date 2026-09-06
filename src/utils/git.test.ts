@@ -444,6 +444,19 @@ describe('getRepositoryRoot', () => {
     expect(argvOf(1)).toEqual([...GIT_LEVEL, 'rev-parse', '--show-toplevel']);
   });
 
+  // A directory name may end in whitespace. Trimming it would capture from a
+  // SIBLING repository — `repo ` silently becoming `repo` — and report "no
+  // staged changes" for changes that are right there.
+  it('strips only the terminating newline from the root, never path whitespace', async () => {
+    program({ exit: 0, stdout: 'true\n' }, { exit: 0, stdout: '/work/repo \n' });
+    expect(await getRepositoryRoot('/work/repo ')).toEqual({ ok: true, data: '/work/repo ' });
+  });
+
+  it('also strips a CRLF terminator', async () => {
+    program({ exit: 0, stdout: 'true\r\n' }, { exit: 0, stdout: '/work/repo-b\r\n' });
+    expect(await getRepositoryRoot(CWD)).toEqual({ ok: true, data: '/work/repo-b' });
+  });
+
   it('returns null for a bare repository, which answers false with exit 0', async () => {
     program({ exit: 0, stdout: 'false\n' });
     expect(await getRepositoryRoot(CWD)).toEqual({ ok: true, data: null });

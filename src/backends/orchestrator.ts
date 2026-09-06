@@ -712,8 +712,12 @@ export async function runCrossReview(
   const prepared = preparedResult.data;
   const result = await turn<{ adjudications: CrossReviewResult['adjudications'] }>({
     prompt: buildCrossReviewPrompt(input, {
+      // Match what the primary review of the same subject saw: code is scoped
+      // to the diff's files, a plan gets everything (it has no files to scope by).
       copilot_instructions: formatForPrompt(
-        filterByFiles(input.execution.copilotInstructions, extractFilesFromDiff(input.content)),
+        input.subject === 'code'
+          ? filterByFiles(input.execution.copilotInstructions, extractFilesFromDiff(input.content))
+          : input.execution.copilotInstructions,
       ),
     }),
     responseSchema: CrossReviewResponseSchema,

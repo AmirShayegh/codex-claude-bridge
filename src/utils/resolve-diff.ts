@@ -75,10 +75,6 @@ export async function captureDiff(
   if (source.kind === 'explicit') return ok(source.diff);
 
   if (workspace.repositoryRoot === null) {
-    // Discovery FAILING and discovery reporting "no work tree" are different
-    // answers and get different errors: one is git's problem to report, the
-    // other is a directory the caller pointed at by mistake.
-    if (workspace.repositoryError !== undefined) return err(workspace.repositoryError);
     return err(
       `${ErrorCode.INVALID_INPUT}: cannot auto-capture a diff — ` +
         `"${escapeTerminalControls(workspace.workingDirectory)}" is not inside a git work tree. ` +

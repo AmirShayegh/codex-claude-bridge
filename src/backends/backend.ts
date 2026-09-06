@@ -68,6 +68,12 @@ export interface CrossReviewFinding {
 
 export interface CrossReviewInput {
   execution: ReviewExecutionContext;
+  // What `content` IS. Instruction scoping depends on it: a diff is filtered to
+  // the files it touches, while plan prose has no files and gets every
+  // instruction — exactly as the primary plan review did. Filtering a plan by
+  // "files in the diff" would strip the rules the findings under adjudication
+  // were made with.
+  subject: 'plan' | 'code';
   // The diff (code) or plan text under review.
   content: string;
   // Findings to adjudicate, in order — the response references them by index.

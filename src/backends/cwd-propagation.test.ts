@@ -132,6 +132,7 @@ describe('every orchestrated turn carries the requested directory', () => {
     await runCrossReview(
       {
         execution: REQUESTED,
+        subject: 'code',
         content: SMALL_DIFF,
         findings: [{ severity: 'major', category: 'bug', file: 'f.ts', line: 1, description: 'x' }],
       },

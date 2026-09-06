@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { ErrorCode } from '../utils/errors.js';
+import { subprocessEnv, isStrippedGitVariable } from '../utils/subprocess-env.js';
 
 // --- node:child_process mock: a controllable fake child process ---
 // We mock only the external boundary (the agy subprocess). Each test drives the
@@ -38,6 +39,10 @@ let lastArgs: string[];
 let lastCwd: string | undefined;
 let spawnThrows: Error | undefined;
 let spawnCount = 0;
+// Captured so the env/PWD contract is actually asserted: agy keys its
+// conversation cache by workspace path, so a wrong PWD silently files the new
+// conversation id under the server's directory and the later lookup misses.
+let lastEnv: NodeJS.ProcessEnv | undefined;
 // onEmit fires just before a scripted child emits — lets a test mutate the
 // id-cache per run, simulating how real agy updates last_conversations.json. Used
 // to prove runSerialized makes capture atomic under concurrency.
@@ -45,10 +50,15 @@ type Scripted = { stdout?: string; stderr?: string; code?: number; onEmit?: () =
 let scriptedResponses: Scripted[] = [];
 
 vi.mock('node:child_process', () => ({
-  spawn: (_cmd: string, args: string[], options: { cwd?: string; signal?: AbortSignal }) => {
+  spawn: (
+    _cmd: string,
+    args: string[],
+    options: { cwd?: string; signal?: AbortSignal; env?: NodeJS.ProcessEnv },
+  ) => {
     if (spawnThrows) throw spawnThrows;
     lastArgs = args;
     lastCwd = options.cwd;
+    lastEnv = options.env;
     spawnCount += 1;
     const child = new FakeChild(options.signal);
     lastChild = child;
@@ -99,6 +109,10 @@ import {
 } from './gemini.js';
 import { DEFAULT_CONFIG } from '../config/types.js';
 
+// Every backend call now carries WHERE it runs (ISS-027). Tests that don't care
+// about the directory share this one fixture; tests that do build their own.
+const EXEC = { workingDirectory: '/work/repo-b' };
+
 // Exact `agy models` output captured from agy 1.0.13.
 const REAL_AGY_MODELS = [
   'Gemini 3.5 Flash (Medium)',
@@ -118,6 +132,7 @@ beforeEach(() => {
   fakeFiles = {};
   scriptedResponses = [];
   spawnCount = 0;
+  lastEnv = undefined;
   clearGeminiModelCatalogCache();
   // The flow narrates the resolved model on stderr for unpinned reviews; these
   // tests don't assert on it, so keep their output clean.
@@ -497,7 +512,11 @@ describe('runSerialized', () => {
   });
 });
 
-const CWD = process.cwd();
+// The directory the REQUEST names — deliberately NOT process.cwd(). agy keys its
+// conversation cache by workspace path, so every capture below only works if the
+// backend runs in, and looks up under, the requested directory (ISS-027).
+const CWD = EXEC.workingDirectory;
+
 const SMALL_DIFF = 'diff --git a/f b/f\n@@ -1 +1 @@\n-a\n+b';
 const PLAN_OK = { verdict: 'approve', summary: 's', findings: [] };
 const CODE_OK = { verdict: 'approve', summary: 's', findings: [] };
@@ -547,7 +566,10 @@ describe('createGeminiBackend', () => {
     // First spawn: `agy models`. Second spawn: the review itself.
     script({ stdout: REAL_AGY_MODELS, code: 0 }, { stdout: JSON.stringify(PLAN_OK) });
 
-    const res = await createGeminiBackend(DEFAULT_CONFIG).reviewPlan({ plan: 'do a thing' });
+    const res = await createGeminiBackend(DEFAULT_CONFIG).reviewPlan({
+      execution: EXEC,
+      plan: 'do a thing',
+    });
 
     expect(res.ok).toBe(true);
     if (res.ok) {
@@ -560,6 +582,7 @@ describe('createGeminiBackend', () => {
     expect(lastArgs[lastArgs.indexOf('--model') + 1]).toBe('Gemini 3.5 Flash (Medium)');
     expect(lastArgs).not.toContain('--conversation');
     expect(lastCwd).toBe(CWD);
+    expect(lastCwd).not.toBe(process.cwd());
   });
 
   it('reviewCode: resuming a session passes --conversation and reuses that id (no capture needed)', async () => {
@@ -567,6 +590,7 @@ describe('createGeminiBackend', () => {
     script({ stdout: JSON.stringify(CODE_OK) });
 
     const res = await createGeminiBackend(PINNED_CONFIG).reviewCode({
+      execution: EXEC,
       diff: SMALL_DIFF,
       session_id: 'conv-prev',
     });
@@ -583,6 +607,7 @@ describe('createGeminiBackend', () => {
     ['more than 256 characters', 'x'.repeat(257)],
   ])('rejects a resumed session id with %s before calling agy', async (_case, sessionId) => {
     const result = await createGeminiBackend(PINNED_CONFIG).reviewPlan({
+      execution: EXEC,
       plan: 'x',
       session_id: sessionId,
     });
@@ -605,7 +630,10 @@ describe('createGeminiBackend', () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: conversationId });
     script({ stdout: JSON.stringify(PLAN_OK) });
 
-    const result = await createGeminiBackend(PINNED_CONFIG).reviewPlan({ plan: 'x' });
+    const result = await createGeminiBackend(PINNED_CONFIG).reviewPlan({
+      execution: EXEC,
+      plan: 'x',
+    });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -619,7 +647,7 @@ describe('createGeminiBackend', () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-retry' });
     script({ stdout: 'not json at all' }, { stdout: JSON.stringify(PLAN_OK) });
 
-    const res = await createGeminiBackend(PINNED_CONFIG).reviewPlan({ plan: 'x' });
+    const res = await createGeminiBackend(PINNED_CONFIG).reviewPlan({ execution: EXEC, plan: 'x' });
 
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.data.session_id).toBe('conv-retry');
@@ -636,6 +664,7 @@ describe('createGeminiBackend', () => {
     script({ stdout: 'not json', code: 0 }); // attempt 1 malformed; attempt 2 left to time out
 
     const p = createGeminiBackend({ ...PINNED_CONFIG, timeout_seconds: 10 }).reviewPlan({
+      execution: EXEC,
       plan: 'x',
     });
     await vi.advanceTimersByTimeAsync(10_000 + 50); // blow past the total budget → attempt 2 aborts
@@ -659,7 +688,7 @@ describe('createGeminiBackend', () => {
       { stderr: 'Error: you are not authenticated', code: 1 },
     );
 
-    const res = await createGeminiBackend(PINNED_CONFIG).reviewPlan({ plan: 'x' });
+    const res = await createGeminiBackend(PINNED_CONFIG).reviewPlan({ execution: EXEC, plan: 'x' });
 
     expect(res.ok).toBe(false);
     if (!res.ok) {
@@ -677,6 +706,7 @@ describe('createGeminiBackend', () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-x' });
 
     const p = createGeminiBackend({ ...PINNED_CONFIG, timeout_seconds: 10 }).reviewPlan({
+      execution: EXEC,
       plan: 'x',
     });
     // Let attempt 1 spawn, consume 6s, then return malformed (exit 0).
@@ -696,14 +726,14 @@ describe('createGeminiBackend', () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-fence' });
     script({ stdout: '```json\n' + JSON.stringify(PLAN_OK) + '\n```' });
 
-    const res = await createGeminiBackend(PINNED_CONFIG).reviewPlan({ plan: 'x' });
+    const res = await createGeminiBackend(PINNED_CONFIG).reviewPlan({ execution: EXEC, plan: 'x' });
     expect(res.ok).toBe(true);
   });
 
   it('returns a classified error when agy fails (auth), never throws', async () => {
     script({ stderr: 'Error: you are not authenticated', code: 1 });
 
-    const res = await createGeminiBackend(PINNED_CONFIG).reviewPlan({ plan: 'x' });
+    const res = await createGeminiBackend(PINNED_CONFIG).reviewPlan({ execution: EXEC, plan: 'x' });
 
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toContain(ErrorCode.AUTH_ERROR);
@@ -713,7 +743,7 @@ describe('createGeminiBackend', () => {
     // cache has no entry for CWD → the review parsed fine but the id can't be read.
     script({ stdout: JSON.stringify(PLAN_OK) });
 
-    const res = await createGeminiBackend(PINNED_CONFIG).reviewPlan({ plan: 'x' });
+    const res = await createGeminiBackend(PINNED_CONFIG).reviewPlan({ execution: EXEC, plan: 'x' });
 
     expect(res.ok).toBe(false);
     if (!res.ok) {
@@ -727,6 +757,7 @@ describe('createGeminiBackend', () => {
     script({ stdout: JSON.stringify(CODE_OK) });
 
     const res = await createGeminiBackend(DEFAULT_CONFIG).reviewCode({
+      execution: EXEC,
       diff: SMALL_DIFF,
       session_id: 'conv-x',
       model: 'Gemini 3.1 Pro (High)',
@@ -745,6 +776,7 @@ describe('createGeminiBackend', () => {
     );
 
     const res = await createGeminiBackend(DEFAULT_CONFIG).reviewCode({
+      execution: EXEC,
       diff: SMALL_DIFF,
       model: 'latest',
     });
@@ -759,6 +791,7 @@ describe('createGeminiBackend', () => {
     script({ stdout: JSON.stringify(CODE_OK) });
 
     const res = await createGeminiBackend(DEFAULT_CONFIG).reviewCode({
+      execution: EXEC,
       diff: SMALL_DIFF,
       model: 'max',
     });
@@ -772,7 +805,10 @@ describe('createGeminiBackend', () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-fallback' });
     script({ stderr: 'boom', code: 1 }, { stdout: JSON.stringify(PLAN_OK) });
 
-    const res = await createGeminiBackend(DEFAULT_CONFIG).reviewPlan({ plan: 'do a thing' });
+    const res = await createGeminiBackend(DEFAULT_CONFIG).reviewPlan({
+      execution: EXEC,
+      plan: 'do a thing',
+    });
 
     expect(res.ok).toBe(true);
     expect(spawnCount).toBe(2);
@@ -783,7 +819,7 @@ describe('createGeminiBackend', () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-stdin' });
     script({ stdout: JSON.stringify(CODE_OK) });
 
-    await createGeminiBackend(PINNED_CONFIG).reviewCode({ diff: SMALL_DIFF });
+    await createGeminiBackend(PINNED_CONFIG).reviewCode({ execution: EXEC, diff: SMALL_DIFF });
 
     const piped = lastChild.stdinChunks.join('');
     expect(piped).toContain(SMALL_DIFF); // the diff itself reaches agy
@@ -795,7 +831,7 @@ describe('createGeminiBackend', () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-empty' });
     script({ stdout: '', code: 0 }, { stdout: JSON.stringify(PLAN_OK) });
 
-    const res = await createGeminiBackend(PINNED_CONFIG).reviewPlan({ plan: 'x' });
+    const res = await createGeminiBackend(PINNED_CONFIG).reviewPlan({ execution: EXEC, plan: 'x' });
 
     expect(res.ok).toBe(true);
     expect(spawnCount).toBe(2);
@@ -807,6 +843,7 @@ describe('createGeminiBackend', () => {
     script(...Array.from({ length: 10 }, () => ({ stdout: JSON.stringify(CODE_OK) })));
 
     const res = await createGeminiBackend({ ...PINNED_CONFIG, max_chunk_tokens: 2500 }).reviewCode({
+      execution: EXEC,
       diff: BIG_DIFF,
     });
 
@@ -829,9 +866,7 @@ describe('createGeminiBackend', () => {
     const res = await createGeminiBackend({
       ...DEFAULT_CONFIG,
       model: 'FakeModel-9000',
-    }).reviewCode({
-      diff: SMALL_DIFF,
-    });
+    }).reviewCode({ execution: EXEC, diff: SMALL_DIFF });
 
     expect(res.ok).toBe(true);
     expect(spawnCount).toBe(2);
@@ -848,9 +883,7 @@ describe('createGeminiBackend', () => {
     const res = await createGeminiBackend({
       ...DEFAULT_CONFIG,
       model: 'Gemini 3.5 Flash (Low)',
-    }).reviewCode({
-      diff: SMALL_DIFF,
-    });
+    }).reviewCode({ execution: EXEC, diff: SMALL_DIFF });
 
     expect(res.ok).toBe(true);
     expect(spawnCount).toBe(2);
@@ -865,9 +898,7 @@ describe('createGeminiBackend', () => {
     const res = await createGeminiBackend({
       ...DEFAULT_CONFIG,
       model: 'Gemini 3.1 Pro (High)',
-    }).reviewCode({
-      diff: SMALL_DIFF,
-    });
+    }).reviewCode({ execution: EXEC, diff: SMALL_DIFF });
 
     expect(res.ok).toBe(true);
     expect(spawnCount).toBe(1); // known-good model → no extra validation spawn
@@ -879,6 +910,7 @@ describe('createGeminiBackend', () => {
     script({ stdout: JSON.stringify(CODE_OK) }, { stderr: 'you are not authenticated', code: 1 });
 
     const res = await createGeminiBackend({ ...PINNED_CONFIG, max_chunk_tokens: 2500 }).reviewCode({
+      execution: EXEC,
       diff: BIG_DIFF,
     });
 
@@ -911,8 +943,8 @@ describe('createGeminiBackend', () => {
     const backend = createGeminiBackend(PINNED_CONFIG);
 
     const [a, b] = await Promise.all([
-      backend.reviewPlan({ plan: 'A' }),
-      backend.reviewPlan({ plan: 'B' }),
+      backend.reviewPlan({ execution: EXEC, plan: 'A' }),
+      backend.reviewPlan({ execution: EXEC, plan: 'B' }),
     ]);
 
     expect(a.ok && b.ok).toBe(true);
@@ -921,5 +953,36 @@ describe('createGeminiBackend', () => {
       expect(b.data.session_id).toBe('race-id-B');
       expect(a.data.session_id).not.toBe(b.data.session_id);
     }
+  });
+});
+
+// The env handed to agy is as load-bearing as the cwd: agy keys its conversation
+// cache by WORKSPACE PATH, so a PWD naming the server's directory files the new
+// conversation id under the wrong key and the later lookup misses — turning a
+// successful review into STORAGE_ERROR. An inherited GIT_DIR would likewise
+// redirect the reviewer's own view of the repository. Without these assertions
+// the spawn mock discards `options.env` and deleting it entirely stays green.
+describe('agy subprocess environment', () => {
+  it('spawns the reviewer with a sanitized environment whose PWD is the request directory', async () => {
+    fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-env' });
+    script({ stdout: JSON.stringify(CODE_OK) });
+
+    const res = await createGeminiBackend(PINNED_CONFIG).reviewCode({ diff: 'x', execution: EXEC });
+
+    expect(res.ok).toBe(true);
+    expect(lastEnv).toBeDefined();
+    expect(lastEnv?.PWD).toBe(CWD);
+    expect(lastEnv?.PWD).not.toBe(process.cwd());
+    expect(Object.keys(lastEnv ?? {}).filter(isStrippedGitVariable)).toEqual([]);
+    expect(lastEnv?.PATH).toBe(subprocessEnv().PATH);
+  });
+
+  it('gives the model-catalog probe a sanitized environment too', async () => {
+    script({ stdout: REAL_AGY_MODELS });
+
+    await runAgyModels();
+
+    expect(lastEnv).toBeDefined();
+    expect(Object.keys(lastEnv ?? {}).filter(isStrippedGitVariable)).toEqual([]);
   });
 });

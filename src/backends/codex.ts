@@ -17,7 +17,6 @@ import {
   type ReviewBridgeConfig,
 } from '../config/types.js';
 import { estimateTokens } from '../utils/chunking.js';
-import type { CopilotInstructions } from '../config/copilot-instructions.js';
 import type { ReviewBackend } from './backend.js';
 import {
   runPlanReview,
@@ -29,6 +28,7 @@ import {
 } from './orchestrator.js';
 import { createCodexSessionObserver } from './codex-session-observer.js';
 import { escapeTerminalControls } from '../utils/terminal.js';
+import { subprocessEnv } from '../utils/subprocess-env.js';
 import { SessionIdSchema } from '../utils/input-validation.js';
 
 export interface CodexBackendDependencies {
@@ -181,23 +181,29 @@ const CODEX_DEFAULT_MODEL = RECOMMENDED_MODELS.codex[0];
 // explicit model override and may fail auth on ChatGPT-tier Codex. The bridge
 // retains the prior resolved identity separately and reports any different
 // runtime-observed label instead of hiding the mismatch.
-function baseThreadOpts(config: ReviewBridgeConfig) {
+//
+// `workingDirectory` becomes `--cd <dir>` for the codex process and applies to a
+// RESUME as well as a start, so both wrappers take it from one place: a resume
+// that kept the server's directory would read a different repository than the
+// start did, on the same thread.
+function baseThreadOpts(config: ReviewBridgeConfig, workingDirectory: string) {
   return {
     sandboxMode: 'read-only' as const,
     skipGitRepoCheck: true,
     modelReasoningEffort: config.reasoning_effort,
+    workingDirectory,
   };
 }
 
 // A fresh thread always starts on a resolved model (the orchestrator resolves
 // one — an explicit pin, config.model, or CODEX_DEFAULT_MODEL — before every
 // start), so it's a required argument here rather than a defaulted fallback.
-function startThreadOpts(config: ReviewBridgeConfig, model: string) {
-  return { model, ...baseThreadOpts(config) };
+function startThreadOpts(config: ReviewBridgeConfig, model: string, workingDirectory: string) {
+  return { model, ...baseThreadOpts(config, workingDirectory) };
 }
 
-function resumeThreadOpts(config: ReviewBridgeConfig) {
-  return baseThreadOpts(config);
+function resumeThreadOpts(config: ReviewBridgeConfig, workingDirectory: string) {
+  return baseThreadOpts(config, workingDirectory);
 }
 
 // Codex implementation of the orchestrator's TurnRunner: create or resume a
@@ -213,6 +219,7 @@ async function runReview<T extends Record<string, unknown>>(
     sessionId: rawSessionId,
     model,
     resolvedModel,
+    workingDirectory,
   } = params;
   let sessionId: string | undefined;
   if (rawSessionId !== undefined) {
@@ -230,10 +237,10 @@ async function runReview<T extends Record<string, unknown>>(
   let thread;
   try {
     if (sessionId) {
-      thread = codex.resumeThread(sessionId, resumeThreadOpts(config));
+      thread = codex.resumeThread(sessionId, resumeThreadOpts(config, workingDirectory));
     } else {
       if (!startModel) return err(`${ErrorCode.MODEL_ERROR}: no model was resolved`);
-      thread = codex.startThread(startThreadOpts(config, startModel));
+      thread = codex.startThread(startThreadOpts(config, startModel, workingDirectory));
     }
   } catch (e: unknown) {
     if (sessionId) {
@@ -307,16 +314,22 @@ async function runReview<T extends Record<string, unknown>>(
 
 export function createCodexBackend(
   config: ReviewBridgeConfig,
-  copilotInstructions?: CopilotInstructions,
   runtime: CodexBackendDependencies = {},
 ): ReviewBackend {
   // Point the SDK at an explicit codex binary when configured (config.codex_path,
   // then the CODEX_PATH env). Escape hatch for a missing/unusable bundled binary
   // — e.g. macOS XProtect quarantining it. Undefined → the SDK's bundled binary.
   const codexPathOverride = config.codex_path ?? process.env.CODEX_PATH;
+  // The codex process must not inherit the repository-selecting GIT_* variables
+  // that may be set in the server's own environment: with a caller-chosen
+  // directory in play, a stray GIT_DIR would silently point the reviewer at a
+  // different repository than the one it was asked about. The SDK REPLACES the
+  // environment when `env` is given rather than merging, so this snapshot is the
+  // whole environment the child sees — PATH and credentials included.
+  const env = subprocessEnv();
   let codex: Codex;
   try {
-    codex = new Codex({ codexPathOverride });
+    codex = new Codex({ codexPathOverride, env });
   } catch (e: unknown) {
     const classified = classifyError(e);
     const errorMsg = `${classified.code}: SDK initialization failed: ${classified.message}`;
@@ -348,7 +361,9 @@ export function createCodexBackend(
       try {
         const found = await discoverCodexBinary();
         if (!found) return 'not-found';
-        codex = new Codex({ codexPathOverride: found });
+        // A FRESH snapshot: the SDK mutates the env object it is handed, so
+        // reusing the failed client's object would carry its mutations over.
+        codex = new Codex({ codexPathOverride: found, env: subprocessEnv() });
         console.error(
           `[codex-bridge] bundled codex binary is unusable (macOS XProtect may have quarantined it); ` +
             `using discovered ${escapeTerminalControls(found)}. Pin it explicitly with "codex_path" in .reviewbridge.json to silence this.`,
@@ -381,7 +396,6 @@ export function createCodexBackend(
   const deps = {
     config,
     provider: 'codex' as const,
-    copilotInstructions,
     allowsModelOverrideOnResume: false,
     // 'latest' (and unset) → the latest model the SDK-PINNED binary supports. We
     // deliberately do NOT chase the newest announced model — that bundled-binary

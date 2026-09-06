@@ -5,15 +5,23 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import type { ReviewBackend } from '../backends/backend.js';
 import { sessionModelConflictMessage } from '../backends/orchestrator.js';
-import { resolveCodeDiff, withCapturedFrom, NO_WORKING_CHANGES } from '../utils/resolve-diff.js';
+import { normalizeCodeDiffSource, withCapturedFrom } from '../utils/resolve-diff.js';
 import { escapeTerminalControls } from '../utils/terminal.js';
 import { createSessionTracker } from '../storage/session-tracker.js';
 import type { ReviewLifecycle } from '../review/lifecycle.js';
-import { ModelSelectorSchema, SessionIdSchema } from '../utils/input-validation.js';
+import {
+  CWD_DESCRIPTION,
+  ModelSelectorSchema,
+  SessionIdSchema,
+  WorkingDirectorySchema,
+} from '../utils/input-validation.js';
+import { prepareDiffReview } from '../review/request-prep.js';
+import type { RequestPreparationDeps } from '../review/request-prep.js';
 
 export function registerReviewCodeTool(
   server: McpServer,
   client: ReviewBackend,
+  prep: RequestPreparationDeps,
   db?: Database.Database,
   lifecycle?: ReviewLifecycle,
 ): void {
@@ -43,6 +51,7 @@ export function registerReviewCodeTool(
           .optional()
           .default(true)
           .describe('Auto-capture working tree changes (staged + unstaged) via git diff HEAD'),
+        cwd: WorkingDirectorySchema.optional().describe(CWD_DESCRIPTION),
         context: z.string().optional().describe('Intent of the changes'),
         session_id: SessionIdSchema.optional().describe('Continue from previous review'),
         criteria: z.array(z.string()).optional().describe('Review criteria to focus on'),
@@ -75,44 +84,55 @@ export function registerReviewCodeTool(
           isError: true,
         };
       }
+      // Decide the diff SOURCE from the arguments alone, before any filesystem
+      // work: an explicit diff never touches git, whatever cwd was requested.
+      const source = normalizeCodeDiffSource({
+        diff: args.diff,
+        auto_diff: args.auto_diff ?? true,
+      });
+      if (!source.ok) {
+        return { content: [{ type: 'text' as const, text: source.error }], isError: true };
+      }
+
       const tracker = createSessionTracker(db, client.providers, client.provider);
       try {
-        // Resolve diff (auto-capture or explicit)
-        const diffResult = await resolveCodeDiff({
-          diff: args.diff,
-          auto_diff: args.auto_diff ?? true,
-        });
+        const prepared = await prepareDiffReview(prep, { cwd: args.cwd, source: source.data });
+        if (!prepared.ok) {
+          return { content: [{ type: 'text' as const, text: prepared.error }], isError: true };
+        }
+        if (prepared.data.kind === 'empty-capture') {
+          // An empty capture is a real (approving) answer, so it must still say
+          // WHERE it looked — otherwise it is indistinguishable from a capture
+          // that ran in the wrong repository.
+          const emptyCapture = withCapturedFrom(
+            {
+              verdict: 'approve',
+              summary: `No changes found to review in ${escapeTerminalControls(prepared.data.capturedFrom)}.`,
+              findings: [],
+              session_id: args.session_id ?? randomUUID(),
+              models: [],
+              provenance: { persistence: 'not_recorded', warning: null },
+            },
+            prepared.data.capturedFrom,
+          );
+          return { content: [{ type: 'text' as const, text: JSON.stringify(emptyCapture) }] };
+        }
         // Set only when git actually ran. Every capture-derived field below comes
         // from this one value, never from a fresh cwd read (ISS-028).
-        const capturedFrom = diffResult.capturedFrom;
-        if (!diffResult.ok) {
-          if (diffResult.error.startsWith(NO_WORKING_CHANGES)) {
-            // An empty capture is a real (approving) answer, so it must still say
-            // WHERE it looked — otherwise it is indistinguishable from a capture
-            // that ran in the wrong repository.
-            const emptyCapture = withCapturedFrom(
-              {
-                verdict: 'approve',
-                summary: capturedFrom
-                  ? `No changes found to review in ${escapeTerminalControls(capturedFrom)}.`
-                  : 'No changes found to review.',
-                findings: [],
-                session_id: args.session_id ?? randomUUID(),
-                models: [],
-                provenance: { persistence: 'not_recorded', warning: null },
-              },
-              capturedFrom,
-            );
-            return {
-              content: [{ type: 'text' as const, text: JSON.stringify(emptyCapture) }],
-            };
-          }
-          return { content: [{ type: 'text' as const, text: diffResult.error }], isError: true };
-        }
-        const diff = diffResult.data;
+        const { diff, capturedFrom, execution } = prepared.data;
+        // Built explicitly, never spread from `args`.
+        const input = {
+          diff,
+          execution,
+          context: args.context,
+          criteria: args.criteria,
+          session_id: args.session_id,
+          model: args.model,
+          deliberate: args.deliberate,
+        };
 
         if (lifecycle) {
-          const result = await lifecycle.reviewCode({ ...args, diff });
+          const result = await lifecycle.reviewCode(input);
           if (!result.ok) {
             return { content: [{ type: 'text' as const, text: result.error }], isError: true };
           }
@@ -133,7 +153,7 @@ export function registerReviewCodeTool(
           return { content: [{ type: 'text' as const, text: preflight.error }], isError: true };
         }
 
-        const result = await client.reviewCode({ ...args, diff });
+        const result = await client.reviewCode(input);
         if (!result.ok) {
           tracker.recordFailure(result.session_id);
           return { content: [{ type: 'text' as const, text: result.error }], isError: true };

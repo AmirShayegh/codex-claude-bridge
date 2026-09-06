@@ -7,12 +7,32 @@ import type { ModelIdentity, PrecommitResult } from '../review/types.js';
 import { err, ok } from '../utils/errors.js';
 import { registerReviewPrecommitTool } from './review-precommit.js';
 
-vi.mock('../utils/resolve-diff.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../utils/resolve-diff.js')>();
-  return { ...actual, resolvePrecommitDiff: vi.fn() };
+// The tool's seam is now request preparation, which owns workspace resolution,
+// diff capture, and the instruction read as one bounded phase (ISS-027).
+vi.mock('../review/request-prep.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../review/request-prep.js')>();
+  return { ...actual, prepareDiffReview: vi.fn() };
 });
 
-import { resolvePrecommitDiff } from '../utils/resolve-diff.js';
+import { prepareDiffReview } from '../review/request-prep.js';
+import type { PreparedDiffReview, RequestPreparationDeps } from '../review/request-prep.js';
+import { createPreparationLimiter } from '../review/preparation.js';
+
+const EXEC = { workingDirectory: '/work/repo-b' };
+
+const PREP: RequestPreparationDeps = {
+  limiter: createPreparationLimiter(),
+  defaultWorkingDirectory: '/work/repo-b',
+  loadInstructions: false,
+};
+
+function ready(diff: string, capturedFrom?: string) {
+  return ok<PreparedDiffReview>({ kind: 'ready', execution: EXEC, diff, capturedFrom });
+}
+
+function emptyCapture(capturedFrom: string) {
+  return ok<PreparedDiffReview>({ kind: 'empty-capture', capturedFrom });
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type HandlerFn = (args: Record<string, unknown>, extra: unknown) => Promise<any>;
@@ -56,8 +76,8 @@ beforeEach(() => {
     reviewPrecommit: vi.fn().mockResolvedValue(ok(RESULT)),
   };
   server = { registerTool: vi.fn() };
-  vi.mocked(resolvePrecommitDiff).mockImplementation(async ({ diff }) =>
-    ok(diff ?? 'captured staged diff'),
+  vi.mocked(prepareDiffReview).mockImplementation(async (_deps, { source }) =>
+    source.kind === 'explicit' ? ready(source.diff) : ready('captured staged diff', '/work/repo-b'),
   );
 });
 
@@ -65,6 +85,7 @@ function setup(autoDiff = true, useLifecycle = true): HandlerFn {
   registerReviewPrecommitTool(
     server as unknown as McpServer,
     client,
+    PREP,
     undefined,
     {
       ...DEFAULT_CONFIG,
@@ -91,27 +112,45 @@ describe('registerReviewPrecommitTool', () => {
   });
 
   it('uses project auto_diff default and forwards the resolved diff', async () => {
-    const response = await setup(false)({}, {});
+    const response = await setup(true)({}, {});
 
-    expect(resolvePrecommitDiff).toHaveBeenCalledWith({ diff: undefined, auto_diff: false });
+    expect(prepareDiffReview).toHaveBeenCalledWith(PREP, {
+      cwd: undefined,
+      source: { kind: 'capture', target: 'staged' },
+    });
     expect(lifecycle.reviewPrecommit).toHaveBeenCalledWith({
       diff: 'captured staged diff',
+      execution: EXEC,
       checklist: undefined,
       session_id: undefined,
       model: undefined,
     });
-    expect(JSON.parse(response.content[0].text)).toEqual(RESULT);
+    expect(JSON.parse(response.content[0].text)).toEqual({
+      ...RESULT,
+      captured_from: '/work/repo-b',
+    });
+  });
+
+  it('honors a project auto_diff:false default by refusing to invent a diff', async () => {
+    // Config says "never auto-capture" and the caller passed no diff: there is
+    // nothing to check, and preparation must not run at all.
+    const response = await setup(false)({}, {});
+
+    expect(response.isError).toBe(true);
+    expect(response.content[0].text).toContain('auto_diff disabled');
+    expect(prepareDiffReview).not.toHaveBeenCalled();
   });
 
   it('lets an explicit auto_diff value override config', async () => {
     await setup(false)({ auto_diff: true }, {});
-    expect(resolvePrecommitDiff).toHaveBeenCalledWith({ diff: undefined, auto_diff: true });
+    expect(prepareDiffReview).toHaveBeenCalledWith(PREP, {
+      cwd: undefined,
+      source: { kind: 'capture', target: 'staged' },
+    });
   });
 
   it('returns no-staged synthetic metadata before lifecycle admission', async () => {
-    vi.mocked(resolvePrecommitDiff).mockResolvedValue(
-      err('NO_STAGED_CHANGES: No staged changes found.'),
-    );
+    vi.mocked(prepareDiffReview).mockResolvedValue(emptyCapture('/work/repo-b'));
     const response = await setup()({ session_id: 'existing' }, {});
     expect(JSON.parse(response.content[0].text)).toMatchObject({
       ready_to_commit: false,
@@ -123,11 +162,13 @@ describe('registerReviewPrecommitTool', () => {
   });
 
   it('returns diff and lifecycle failures as MCP errors', async () => {
-    vi.mocked(resolvePrecommitDiff).mockResolvedValueOnce(err('GIT_ERROR: failed'));
+    vi.mocked(prepareDiffReview).mockResolvedValueOnce(
+      err<PreparedDiffReview>('GIT_ERROR: failed'),
+    );
     expect((await setup()({}, {})).isError).toBe(true);
 
     server = { registerTool: vi.fn() };
-    vi.mocked(resolvePrecommitDiff).mockResolvedValueOnce(ok('diff'));
+    vi.mocked(prepareDiffReview).mockResolvedValueOnce(ready('diff'));
     vi.mocked(lifecycle.reviewPrecommit).mockResolvedValueOnce(err('REVIEW_BUSY: active'));
     const response = await setup()({}, {});
     expect(response.isError).toBe(true);
@@ -140,7 +181,7 @@ describe('registerReviewPrecommitTool', () => {
     );
     const response = await setup()({ session_id: 'session-1', model: 'gpt-5.5' }, {});
     expect(response.isError).toBe(true);
-    expect(resolvePrecommitDiff).toHaveBeenCalled();
+    expect(prepareDiffReview).toHaveBeenCalled();
     expect(lifecycle.reviewPrecommit).toHaveBeenCalledWith(
       expect.objectContaining({ session_id: 'session-1', model: 'gpt-5.5' }),
     );
@@ -157,7 +198,10 @@ describe('registerReviewPrecommitTool', () => {
   it('retains the no-lifecycle compatibility path', async () => {
     vi.mocked(client.reviewPrecommit).mockResolvedValue(ok(RESULT));
     const response = await setup(true, false)({}, {});
-    expect(JSON.parse(response.content[0].text)).toEqual(RESULT);
+    expect(JSON.parse(response.content[0].text)).toEqual({
+      ...RESULT,
+      captured_from: '/work/repo-b',
+    });
   });
 });
 
@@ -165,11 +209,7 @@ describe('registerReviewPrecommitTool', () => {
 // motivated this — it used to read as a clean index no matter where it ran.
 describe('capture location reporting (ISS-028)', () => {
   it('stamps the resolver capture location onto a lifecycle result', async () => {
-    vi.mocked(resolvePrecommitDiff).mockResolvedValue({
-      ok: true,
-      data: 'captured staged diff',
-      capturedFrom: '/work/repo-b',
-    });
+    vi.mocked(prepareDiffReview).mockResolvedValue(ready('captured staged diff', '/work/repo-b'));
 
     const response = await setup()({}, {});
 
@@ -180,11 +220,7 @@ describe('capture location reporting (ISS-028)', () => {
   });
 
   it('keeps the capture location out of the persisted review input', async () => {
-    vi.mocked(resolvePrecommitDiff).mockResolvedValue({
-      ok: true,
-      data: 'captured staged diff',
-      capturedFrom: '/work/repo-b',
-    });
+    vi.mocked(prepareDiffReview).mockResolvedValue(ready('captured staged diff', '/work/repo-b'));
 
     await setup()({}, {});
 
@@ -194,11 +230,7 @@ describe('capture location reporting (ISS-028)', () => {
   });
 
   it('stamps the capture location on the no-lifecycle compatibility path', async () => {
-    vi.mocked(resolvePrecommitDiff).mockResolvedValue({
-      ok: true,
-      data: 'captured staged diff',
-      capturedFrom: '/work/repo-b',
-    });
+    vi.mocked(prepareDiffReview).mockResolvedValue(ready('captured staged diff', '/work/repo-b'));
     vi.mocked(client.reviewPrecommit).mockResolvedValue(ok(RESULT));
 
     const response = await setup(true, false)({}, {});
@@ -212,7 +244,7 @@ describe('capture location reporting (ISS-028)', () => {
   });
 
   it('discards a capture location the backend supplied', async () => {
-    vi.mocked(resolvePrecommitDiff).mockResolvedValue(ok('explicit diff'));
+    vi.mocked(prepareDiffReview).mockResolvedValue(ready('explicit diff'));
     vi.mocked(lifecycle.reviewPrecommit).mockResolvedValueOnce(
       ok({ ...RESULT, captured_from: '/forged/by/provider' }),
     );
@@ -223,11 +255,7 @@ describe('capture location reporting (ISS-028)', () => {
   });
 
   it('names the capture directory when nothing is staged', async () => {
-    vi.mocked(resolvePrecommitDiff).mockResolvedValue({
-      ok: false,
-      error: 'NO_STAGED_CHANGES: No staged changes found in /work/repo-b.',
-      capturedFrom: '/work/repo-b',
-    });
+    vi.mocked(prepareDiffReview).mockResolvedValue(emptyCapture('/work/repo-b'));
 
     const parsed = JSON.parse((await setup()({}, {})).content[0].text);
 

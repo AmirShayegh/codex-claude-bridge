@@ -1,36 +1,55 @@
 import { ok, err, ErrorCode } from './errors.js';
 import type { Result } from './errors.js';
 import { getStagedDiff, getWorkingDiff } from './git.js';
+import type { ResolvedWorkspace } from './workspace.js';
 import { escapeTerminalControls } from './terminal.js';
 
 export const NO_STAGED_CHANGES = 'NO_STAGED_CHANGES';
 export const NO_WORKING_CHANGES = 'NO_WORKING_CHANGES';
 
-// A resolver-specific widening of Result<string>: an auto-capture branch also
-// reports the absolute directory git actually ran in, so an empty or failed
-// capture names where it looked instead of being silent (ISS-028). The global
-// Result<T> is deliberately unchanged — only this module's two entry points
-// carry the extra field, and only when git was actually run.
+// Where a review's diff comes from, decided from the transport arguments alone.
+// Normalizing this BEFORE any filesystem work means the explicit-diff paths
+// never touch the disk, and a capture path knows exactly what it will ask git
+// for before it asks anything.
+export type DiffSource =
+  | { kind: 'explicit'; diff: string }
+  | { kind: 'capture'; target: 'working' | 'staged' };
+
+// A resolver-specific widening of Result<string>: a capture also reports the
+// absolute directory git actually ran in, so an empty or failed capture names
+// where it looked instead of being silent (ISS-028). The global Result<T> is
+// deliberately unchanged — only a capture carries the extra field.
 export type DiffResolution =
   | { ok: true; data: string; capturedFrom?: string }
   | { ok: false; error: string; capturedFrom?: string };
 
-// THE INVARIANT: `capturedFrom` is the exact directory handed to git for this
-// capture. Everything downstream derives its capture metadata from this value —
-// nothing re-reads the cwd while formatting a response, because by then the
-// process may have been asked to work somewhere else.
-function snapshotCaptureDir(): Result<string> {
-  try {
-    return ok(process.cwd());
-  } catch (e: unknown) {
-    // An unlinked or unreadable cwd makes process.cwd() throw. There is no
-    // directory to capture from and none may be fabricated, so fail before
-    // running git rather than reporting a location we never used.
-    const msg = e instanceof Error ? e.message : String(e);
-    return err(
-      `${ErrorCode.GIT_ERROR}: could not determine the current working directory to capture from: ${msg}`,
-    );
+const AUTO_DIFF_DISABLED = 'auto_diff disabled and no diff provided';
+
+// Code review: a defined, NON-BLANK diff is explicit. A missing or
+// whitespace-only diff falls through to auto-capture — callers routinely pass
+// an empty string meaning "you fetch it".
+export function normalizeCodeDiffSource(args: {
+  diff?: string;
+  auto_diff?: boolean;
+}): Result<DiffSource> {
+  if (args.diff !== undefined && args.diff.trim() !== '') {
+    return ok({ kind: 'explicit', diff: args.diff });
   }
+  // auto_diff defaults to true (undefined !== false)
+  if (args.auto_diff !== false) return ok({ kind: 'capture', target: 'working' });
+  return err(AUTO_DIFF_DISABLED);
+}
+
+// Precommit: ANY defined diff is explicit, including an empty string. Here an
+// empty diff is a deliberate "there is nothing to check", not a request to go
+// and find something — the two commands differ on this and always have.
+export function normalizePrecommitDiffSource(args: {
+  diff?: string;
+  auto_diff?: boolean;
+}): Result<DiffSource> {
+  if (args.diff !== undefined) return ok({ kind: 'explicit', diff: args.diff });
+  if (args.auto_diff !== false) return ok({ kind: 'capture', target: 'staged' });
+  return err(AUTO_DIFF_DISABLED);
 }
 
 // The path is data, but an error string is display: escape controls so a
@@ -39,71 +58,52 @@ function withCaptureLocation(error: string, capturedFrom: string): string {
   return `${error} (capture attempted from "${escapeTerminalControls(capturedFrom)}")`;
 }
 
-export async function resolvePrecommitDiff(args: {
-  diff?: string;
-  auto_diff?: boolean;
-}): Promise<DiffResolution> {
-  // Explicit diff takes precedence (including empty string). No git runs, so
-  // there is no capture location to report.
-  if (args.diff !== undefined) {
-    return ok(args.diff);
+// Resolve a normalized source into the diff to review.
+//
+// THE INVARIANT: `capturedFrom` is the exact directory handed to git. Everything
+// downstream derives its capture metadata from this value — nothing recomputes a
+// directory while formatting a response, because a recomputed value could name a
+// directory the diff did not come from, which is worse than saying nothing.
+//
+// Capture is anchored at the REPOSITORY ROOT, not the caller's own directory: a
+// caller standing in a subdirectory still means the whole repository, which is
+// what `git diff` from a subdirectory already reports.
+export async function captureDiff(
+  source: DiffSource,
+  workspace: ResolvedWorkspace,
+): Promise<DiffResolution> {
+  if (source.kind === 'explicit') return ok(source.diff);
+
+  if (workspace.repositoryRoot === null) {
+    // Discovery FAILING and discovery reporting "no work tree" are different
+    // answers and get different errors: one is git's problem to report, the
+    // other is a directory the caller pointed at by mistake.
+    if (workspace.repositoryError !== undefined) return err(workspace.repositoryError);
+    return err(
+      `${ErrorCode.INVALID_INPUT}: cannot auto-capture a diff — ` +
+        `"${escapeTerminalControls(workspace.workingDirectory)}" is not inside a git work tree. ` +
+        `Pass the diff explicitly, or point cwd at a repository.`,
+    );
   }
+  const capturedFrom = workspace.repositoryRoot;
 
-  // auto_diff defaults to true (undefined !== false)
-  if (args.auto_diff !== false) {
-    const captureDir = snapshotCaptureDir();
-    if (!captureDir.ok) return err(captureDir.error);
-    const capturedFrom = captureDir.data;
+  const gitResult =
+    source.target === 'staged'
+      ? await getStagedDiff(capturedFrom)
+      : await getWorkingDiff(capturedFrom);
 
-    const gitResult = await getStagedDiff(capturedFrom);
-    if (!gitResult.ok) {
-      return { ok: false, error: withCaptureLocation(gitResult.error, capturedFrom), capturedFrom };
-    }
-    if (!gitResult.data) {
-      return {
-        ok: false,
-        error:
-          `${NO_STAGED_CHANGES}: No staged changes found in ${escapeTerminalControls(capturedFrom)}. ` +
-          `Stage files with git add first.`,
-        capturedFrom,
-      };
-    }
-    return { ok: true, data: gitResult.data, capturedFrom };
+  if (!gitResult.ok) {
+    return { ok: false, error: withCaptureLocation(gitResult.error, capturedFrom), capturedFrom };
   }
-
-  return err('auto_diff disabled and no diff provided');
-}
-
-export async function resolveCodeDiff(args: {
-  diff?: string;
-  auto_diff?: boolean;
-}): Promise<DiffResolution> {
-  // Explicit non-empty diff takes precedence
-  if (args.diff !== undefined && args.diff.trim() !== '') {
-    return ok(args.diff);
+  if (!gitResult.data) {
+    const sentinel = source.target === 'staged' ? NO_STAGED_CHANGES : NO_WORKING_CHANGES;
+    const detail =
+      source.target === 'staged'
+        ? `No staged changes found in ${escapeTerminalControls(capturedFrom)}. Stage files with git add first.`
+        : `No changes found vs HEAD in ${escapeTerminalControls(capturedFrom)}.`;
+    return { ok: false, error: `${sentinel}: ${detail}`, capturedFrom };
   }
-
-  // auto_diff defaults to true (undefined !== false)
-  if (args.auto_diff !== false) {
-    const captureDir = snapshotCaptureDir();
-    if (!captureDir.ok) return err(captureDir.error);
-    const capturedFrom = captureDir.data;
-
-    const gitResult = await getWorkingDiff(capturedFrom);
-    if (!gitResult.ok) {
-      return { ok: false, error: withCaptureLocation(gitResult.error, capturedFrom), capturedFrom };
-    }
-    if (!gitResult.data) {
-      return {
-        ok: false,
-        error: `${NO_WORKING_CHANGES}: No changes found vs HEAD in ${escapeTerminalControls(capturedFrom)}.`,
-        capturedFrom,
-      };
-    }
-    return { ok: true, data: gitResult.data, capturedFrom };
-  }
-
-  return err('auto_diff disabled and no diff provided');
+  return { ok: true, data: gitResult.data, capturedFrom };
 }
 
 // Stamp a response with the resolver's capture location. The resolver is the

@@ -14,6 +14,7 @@ import type {
   PlanReviewInput,
   CodeReviewInput,
   PrecommitReviewInput,
+  ReviewExecutionContext,
 } from './backend.js';
 import { canOverrideModelOnResume } from './backend.js';
 
@@ -370,6 +371,7 @@ type DeliberationModelOverrides = {
 // not a failure (it simply can't adjudicate).
 async function runAdjudicate(
   judge: ReviewBackend,
+  execution: ReviewExecutionContext,
   content: string,
   findings: CrossFinding[],
   model?: string,
@@ -398,6 +400,10 @@ async function runAdjudicate(
   }
   const res = await resultFromProviderCall(() =>
     crossReview({
+      // Built explicitly rather than spread from the review input: the judge must
+      // run in the SAME directory as the review it is adjudicating, and a spread
+      // is exactly how `workingDirectory` would get dropped the way `model` is.
+      execution,
       content: subject,
       findings: findings.map((f) => ({
         severity: f.severity,
@@ -429,6 +435,7 @@ async function runAdjudicate(
 // any per-judge failures (both judges can fail independently).
 async function adjudicateDivergent(
   divergent: { provider: ReviewProvider; finding: CrossFinding }[],
+  execution: ReviewExecutionContext,
   content: string,
   primary: ReviewBackend,
   secondary: ReviewBackend,
@@ -444,6 +451,7 @@ async function adjudicateDivergent(
   const [secAdj, priAdj] = await Promise.all([
     runAdjudicate(
       secondary,
+      execution,
       content,
       byPrimary.map((d) => d.finding),
       modelOverrides.secondary,
@@ -451,6 +459,7 @@ async function adjudicateDivergent(
     ),
     runAdjudicate(
       primary,
+      execution,
       content,
       bySecondary.map((d) => d.finding),
       modelOverrides.primary,
@@ -479,6 +488,7 @@ async function adjudicateDivergent(
 // Returns the combined data unchanged when cross-review is off or nothing diverged.
 async function maybeAdjudicateCode(
   combined: CodeReviewResult,
+  execution: ReviewExecutionContext,
   subject: string,
   primary: ReviewBackend,
   secondary: ReviewBackend,
@@ -490,6 +500,7 @@ async function maybeAdjudicateCode(
   if (!crossReview || !dl || dl.divergent.length === 0) return combined;
   const { adjudications, failures, models } = await adjudicateDivergent(
     dl.divergent,
+    execution,
     subject,
     primary,
     secondary,
@@ -511,6 +522,7 @@ async function maybeAdjudicateCode(
 
 async function maybeAdjudicatePlan(
   combined: PlanReviewResult,
+  execution: ReviewExecutionContext,
   subject: string,
   primary: ReviewBackend,
   secondary: ReviewBackend,
@@ -522,6 +534,7 @@ async function maybeAdjudicatePlan(
   if (!crossReview || !dl || dl.divergent.length === 0) return combined;
   const { adjudications, failures, models } = await adjudicateDivergent(
     dl.divergent,
+    execution,
     subject,
     primary,
     secondary,
@@ -604,6 +617,7 @@ export async function deliberatePlan(
       return ok(
         await maybeAdjudicatePlan(
           combined,
+          input.execution,
           input.plan,
           primary,
           secondary,
@@ -637,6 +651,7 @@ export async function deliberatePlan(
     return ok(
       await maybeAdjudicatePlan(
         combined,
+        input.execution,
         input.plan,
         primary,
         secondary,
@@ -694,6 +709,7 @@ export async function deliberateCode(
       return ok(
         await maybeAdjudicateCode(
           combined,
+          input.execution,
           input.diff,
           primary,
           secondary,
@@ -727,6 +743,7 @@ export async function deliberateCode(
     return ok(
       await maybeAdjudicateCode(
         combined,
+        input.execution,
         input.diff,
         primary,
         secondary,

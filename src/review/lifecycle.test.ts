@@ -7,6 +7,10 @@ import { createSessionRegistry } from '../storage/session-registry.js';
 import { createSessionRouting } from '../storage/session-routing.js';
 import { err, ErrorCode, ok } from '../utils/errors.js';
 
+// Every backend call now carries WHERE it runs (ISS-027). Tests that don't care
+// about the directory share this one fixture; tests that do build their own.
+const EXEC = { workingDirectory: '/work/repo-b' };
+
 const MODEL: ModelIdentity = {
   provider: 'codex',
   role: 'review',
@@ -84,7 +88,7 @@ describe('review lifecycle coordinator', () => {
       recordOutcome,
     });
 
-    const result = await lifecycle.reviewPlan({ plan: 'plan' });
+    const result = await lifecycle.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -117,7 +121,7 @@ describe('review lifecycle coordinator', () => {
       onOutcomePersistenceFailure,
     });
 
-    const result = await lifecycle.reviewPlan({ plan: 'plan' });
+    const result = await lifecycle.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -141,7 +145,7 @@ describe('review lifecycle coordinator', () => {
       recordOutcome: vi.fn().mockRejectedValue(new Error('/secret/path failed')),
     });
 
-    const result = await lifecycle.reviewPlan({ plan: 'plan' });
+    const result = await lifecycle.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -182,7 +186,7 @@ describe('review lifecycle coordinator', () => {
       recordOutcome,
     });
 
-    const result = await lifecycle.reviewPlan({ plan: 'plan' });
+    const result = await lifecycle.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toMatch(/^SESSION_ROUTING_UNAVAILABLE:/);
@@ -206,7 +210,7 @@ describe('review lifecycle coordinator', () => {
       recordOutcome,
     });
 
-    const result = await lifecycle.reviewPlan({ plan: 'plan' });
+    const result = await lifecycle.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toMatch(/^SESSION_ROUTING_UNAVAILABLE:/);
@@ -224,7 +228,7 @@ describe('review lifecycle coordinator', () => {
       recordOutcome,
     });
 
-    const result = await lifecycle.reviewPlan({ plan: 'plan' });
+    const result = await lifecycle.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(true);
     expect(recordOutcome).toHaveBeenCalledOnce();
@@ -241,7 +245,11 @@ describe('review lifecycle coordinator', () => {
       recordOutcome,
     });
 
-    const result = await lifecycle.reviewPlan({ plan: 'plan', session_id: 'old-owner' });
+    const result = await lifecycle.reviewPlan({
+      execution: EXEC,
+      plan: 'plan',
+      session_id: 'old-owner',
+    });
 
     expect(result.ok).toBe(true);
     expect(recordOutcome).toHaveBeenCalledWith(
@@ -275,7 +283,11 @@ describe('review lifecycle coordinator', () => {
       onOutcomePersistenceFailure,
     });
 
-    const result = await lifecycle.reviewPlan({ plan: 'plan', session_id: 'old-owner' });
+    const result = await lifecycle.reviewPlan({
+      execution: EXEC,
+      plan: 'plan',
+      session_id: 'old-owner',
+    });
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toMatch(/^SESSION_ROUTING_UNAVAILABLE:/);
@@ -319,13 +331,13 @@ describe('review lifecycle coordinator', () => {
       onOutcomePersisted: routing.markOutcomePersisted,
     });
 
-    const first = await lifecycle.reviewPlan({ plan: 'first' });
+    const first = await lifecycle.reviewPlan({ execution: EXEC, plan: 'first' });
     expect(first.ok && first.data.provenance?.persistence).toBe('memory_only');
 
     now = 11;
     expect(routing.lookupProvider('volatile-survivor')).toEqual({ status: 'unavailable' });
 
-    const second = await lifecycle.reviewPlan({ plan: 'second' });
+    const second = await lifecycle.reviewPlan({ execution: EXEC, plan: 'second' });
     expect(second.ok && second.data.provenance?.persistence).toBe('durable');
     expect(routing.lookupProvider('recovered-result')).toEqual({
       status: 'found',
@@ -358,7 +370,11 @@ describe('review lifecycle coordinator', () => {
       onOutcomePersisted: routing.markOutcomePersisted,
     });
 
-    const result = await lifecycle.reviewPlan({ plan: 'transition', session_id: 'old-owner' });
+    const result = await lifecycle.reviewPlan({
+      execution: EXEC,
+      plan: 'transition',
+      session_id: 'old-owner',
+    });
     expect(result.ok).toBe(true);
 
     now = 11;
@@ -390,7 +406,11 @@ describe('review lifecycle coordinator', () => {
         ),
     });
 
-    const result = await lifecycle.reviewPlan({ plan: 'resume', session_id: 'shared' });
+    const result = await lifecycle.reviewPlan({
+      execution: EXEC,
+      plan: 'resume',
+      session_id: 'shared',
+    });
 
     expect(result.ok).toBe(false);
     expect(registry.getStatus('shared')).toBeNull();
@@ -428,15 +448,15 @@ describe('review lifecycle coordinator', () => {
       onOutcomePersisted: routing.markOutcomePersisted,
     });
 
-    const first = await lifecycle.reviewPlan({ plan: 'first' });
+    const first = await lifecycle.reviewPlan({ execution: EXEC, plan: 'first' });
     expect(first.ok && first.data.provenance?.persistence).toBe('memory_only');
     now = 11;
 
-    const reused = await lifecycle.reviewPlan({ plan: 'reuse' });
+    const reused = await lifecycle.reviewPlan({ execution: EXEC, plan: 'reuse' });
     expect(reused.ok).toBe(false);
     if (!reused.ok) expect(reused.error).toMatch(/^SESSION_ROUTING_UNAVAILABLE:/);
 
-    const unrelated = await lifecycle.reviewPlan({ plan: 'unrelated' });
+    const unrelated = await lifecycle.reviewPlan({ execution: EXEC, plan: 'unrelated' });
     expect(unrelated.ok && unrelated.data.provenance?.persistence).toBe('durable');
     expect(recordOutcome).toHaveBeenCalledTimes(2);
   });
@@ -454,7 +474,7 @@ describe('review lifecycle coordinator', () => {
       recordOutcome: vi.fn().mockResolvedValue(ok(undefined)),
     });
 
-    const result = await lifecycle.reviewPlan({ plan: 'plan' });
+    const result = await lifecycle.reviewPlan({ execution: EXEC, plan: 'plan' });
     expect(result.ok && result.data.provenance).toEqual({
       persistence: 'memory_only',
       warning: 'Durable review history is unavailable; session state is being kept in memory only.',
@@ -483,7 +503,11 @@ describe('review lifecycle coordinator', () => {
       recordOutcome,
     });
 
-    const result = await lifecycle.reviewCode({ diff: '', session_id: 'unroutable' });
+    const result = await lifecycle.reviewCode({
+      execution: EXEC,
+      diff: '',
+      session_id: 'unroutable',
+    });
 
     expect(result.ok && result.data.models).toEqual([]);
     expect(result.ok && result.data.provenance).toEqual({
@@ -504,8 +528,12 @@ describe('review lifecycle coordinator', () => {
       lookupSessionProvider: () => ({ status: 'absent' }),
     });
 
-    const first = lifecycle.reviewPlan({ plan: 'plan', session_id: 'shared' });
-    const overlap = await lifecycle.reviewCode({ diff: 'short', session_id: 'shared' });
+    const first = lifecycle.reviewPlan({ execution: EXEC, plan: 'plan', session_id: 'shared' });
+    const overlap = await lifecycle.reviewCode({
+      execution: EXEC,
+      diff: 'short',
+      session_id: 'shared',
+    });
 
     expect(overlap.ok).toBe(false);
     if (!overlap.ok) expect(overlap.error).toMatch(/^REVIEW_BUSY:/);
@@ -528,10 +556,10 @@ describe('review lifecycle coordinator', () => {
       lookupSessionProvider: () => ({ status: 'absent' }),
     });
     const running = ['a', 'b', 'c', 'd'].map((session_id) =>
-      lifecycle.reviewPlan({ plan: 'plan', session_id }),
+      lifecycle.reviewPlan({ execution: EXEC, plan: 'plan', session_id }),
     );
 
-    const fifth = await lifecycle.reviewPlan({ plan: 'plan', session_id: 'e' });
+    const fifth = await lifecycle.reviewPlan({ execution: EXEC, plan: 'plan', session_id: 'e' });
     expect(fifth.ok).toBe(false);
     if (!fifth.ok) expect(fifth.error).toMatch(/^REVIEW_BUSY:/);
 
@@ -540,7 +568,9 @@ describe('review lifecycle coordinator', () => {
     );
     await Promise.all(running);
     expect(registry.activeCount()).toBe(0);
-    expect((await lifecycle.reviewPlan({ plan: 'next', session_id: 'e' })).ok).toBe(true);
+    expect(
+      (await lifecycle.reviewPlan({ execution: EXEC, plan: 'next', session_id: 'e' })).ok,
+    ).toBe(true);
   });
 
   it('returns a sanitized error and releases admission when a provider throws', async () => {
@@ -556,7 +586,7 @@ describe('review lifecycle coordinator', () => {
       lookupSessionProvider: () => ({ status: 'absent' }),
     });
 
-    const result = await lifecycle.reviewPlan({ plan: 'plan', session_id: 's1' });
+    const result = await lifecycle.reviewPlan({ execution: EXEC, plan: 'plan', session_id: 's1' });
 
     expect(result).toEqual({
       ok: false,
@@ -579,7 +609,7 @@ describe('review lifecycle coordinator', () => {
       lookupSessionProvider: () => ({ status: 'unavailable' }),
     });
 
-    const result = await lifecycle.reviewPlan({ plan: 'plan', session_id: 's1' });
+    const result = await lifecycle.reviewPlan({ execution: EXEC, plan: 'plan', session_id: 's1' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toMatch(/^SESSION_ROUTING_UNAVAILABLE:/);
@@ -609,6 +639,7 @@ describe('review lifecycle coordinator', () => {
     });
 
     const result = await lifecycle.reviewPlan({
+      execution: EXEC,
       plan: 'plan',
       session_id: 'failed-over',
       model: 'Gemini 3.1 Pro (High)',
@@ -637,6 +668,7 @@ describe('review lifecycle coordinator', () => {
     });
 
     const result = await lifecycle.reviewPlan({
+      execution: EXEC,
       plan: 'plan',
       session_id: 'codex-owned',
       model: 'gpt-5.5',

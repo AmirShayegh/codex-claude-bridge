@@ -1,5 +1,4 @@
 import type { ReviewBridgeConfig, ReviewProvider } from '../config/types.js';
-import type { CopilotInstructions } from '../config/copilot-instructions.js';
 import type { ReviewBackend } from './backend.js';
 import { createCodexBackend } from './codex.js';
 import { createGeminiBackend } from './gemini.js';
@@ -16,24 +15,23 @@ export type { ReviewBackend } from './backend.js';
 // (which keeps the sync server.ts and CLI call sites unchanged).
 function createLeafBackend(
   config: ReviewBridgeConfig,
-  copilotInstructions?: CopilotInstructions,
   lookupSessionModel?: (sessionId: string) => ModelIdentity | null,
 ): ReviewBackend {
   switch (config.provider) {
     case 'codex':
       return lookupSessionModel
-        ? createCodexBackend(config, copilotInstructions, { lookupSessionModel })
-        : createCodexBackend(config, copilotInstructions);
+        ? createCodexBackend(config, { lookupSessionModel })
+        : createCodexBackend(config);
     case 'gemini':
-      return createGeminiBackend(config, copilotInstructions);
+      return createGeminiBackend(config);
   }
   // provider is a closed enum, so the switch is exhaustive. This line fails to
   // compile if a provider is added without a case; it then falls back to codex
   // rather than throwing.
   config.provider satisfies never;
   return lookupSessionModel
-    ? createCodexBackend(config, copilotInstructions, { lookupSessionModel })
-    : createCodexBackend(config, copilotInstructions);
+    ? createCodexBackend(config, { lookupSessionModel })
+    : createCodexBackend(config);
 }
 
 // Build the review backend the config selects. `mode` picks the base composition:
@@ -47,12 +45,11 @@ function createLeafBackend(
 // and rejects a per-call deliberate request.
 export function createBackend(
   config: ReviewBridgeConfig,
-  copilotInstructions?: CopilotInstructions,
   lookupSessionProvider?: SessionProviderLookup,
   lookupSessionModel?: (sessionId: string) => ModelIdentity | null,
 ): ReviewBackend {
   const mode = config.mode ?? (config.fallback ? 'failover' : 'single');
-  const primary = createLeafBackend(config, copilotInstructions, lookupSessionModel);
+  const primary = createLeafBackend(config, lookupSessionModel);
   if (mode === 'single') return withSingleMode(primary);
 
   const secondaryProvider: ReviewProvider = config.provider === 'codex' ? 'gemini' : 'codex';
@@ -61,7 +58,6 @@ export function createBackend(
   // (e.g. a Codex model) isn't forced onto the secondary, which resolves its own.
   const secondary = createLeafBackend(
     { ...config, provider: secondaryProvider, model: undefined },
-    copilotInstructions,
     lookupSessionModel,
   );
   return createCompositeBackend(primary, secondary, config, lookupSessionProvider);

@@ -141,6 +141,17 @@ npx codex-claude-bridge@latest review-plan --plan plan.md
 git diff main | npx codex-claude-bridge@latest review-code --diff -
 ```
 
+**Review another checkout or worktree:**
+
+```bash
+npx codex-claude-bridge@latest review-precommit --cwd ../app/.worktrees/feature-x
+```
+
+`--cwd` picks the repository being reviewed: it decides where git captures from, which repository
+instruction files apply, and where the reviewer runs. Relative paths resolve against your current
+directory. It does **not** change how `--plan`, `--diff`, or `--config` are resolved — those stay
+relative to where you ran the command.
+
 Add `--json` to any command for raw JSON output. Use `--help` to see all options.
 
 ## Tools Reference
@@ -149,13 +160,14 @@ Add `--json` to any command for raw JSON output. Use `--help` to see all options
 
 Send an implementation plan for architectural/feasibility review.
 
-| Parameter    | Type                      | Required | Description                                                                                                                                                                                                                                                                 |
-| ------------ | ------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `plan`       | string                    | yes      | The implementation plan to review                                                                                                                                                                                                                                           |
-| `context`    | string                    | no       | Project context and constraints                                                                                                                                                                                                                                             |
-| `focus`      | string[]                  | no       | Review focus areas (e.g. `["architecture", "security"]`)                                                                                                                                                                                                                    |
-| `depth`      | `"quick"` \| `"thorough"` | no       | Review depth                                                                                                                                                                                                                                                                |
-| `session_id` | string                    | no       | Continue from a previous review session                                                                                                                                                                                                                                     |
+| Parameter    | Type                      | Required | Description                                                                                                                                                                                                                                                                     |
+| ------------ | ------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `plan`       | string                    | yes      | The implementation plan to review                                                                                                                                                                                                                                               |
+| `cwd`        | string                    | no       | Absolute path to the directory this review runs in — the repository or git worktree being reviewed. Omit to use the directory the server was started in. Not expanded for `~`; applies to this call only.                                                                       |
+| `context`    | string                    | no       | Project context and constraints                                                                                                                                                                                                                                                 |
+| `focus`      | string[]                  | no       | Review focus areas (e.g. `["architecture", "security"]`)                                                                                                                                                                                                                        |
+| `depth`      | `"quick"` \| `"thorough"` | no       | Review depth                                                                                                                                                                                                                                                                    |
+| `session_id` | string                    | no       | Continue from a previous review session                                                                                                                                                                                                                                         |
 | `model`      | string                    | no       | Override the model for this call (e.g. `"gpt-5.6-sol"` or `"latest"`). With Codex this can't be combined with `session_id`; the bridge retains the prior resolved identity and reports any different runtime-observed label. Gemini allows changing model on a resumed session. |
 
 Returns: `{ verdict, summary, findings[], session_id, models[], provenance }`
@@ -164,14 +176,15 @@ Returns: `{ verdict, summary, findings[], session_id, models[], provenance }`
 
 Send a code diff for code review.
 
-| Parameter    | Type     | Required | Description                                                                                                                                                                                                                                    |
-| ------------ | -------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `diff`       | string   | no       | Git diff to review. Omit to auto-capture `git diff HEAD`.                                                                                                                                                                                      |
-| `auto_diff`  | boolean  | no       | Auto-capture working-tree changes via `git diff HEAD` when `diff` is omitted or blank (default: `true`)                                                                                                                                        |
-| `context`    | string   | no       | Intent of the changes                                                                                                                                                                                                                          |
-| `session_id` | string   | no       | Continue from previous review (e.g. plan review session)                                                                                                                                                                                       |
-| `criteria`   | string[] | no       | Review criteria (e.g. `["bugs", "security", "performance"]`)                                                                                                                                                                                   |
-| `model`      | string   | no       | Override the model for this call (e.g. `"gpt-5.6-sol"` or `"latest"`). With Codex this can't be combined with `session_id`; compare `resolved` and `observed` to see what the runtime recorded. Gemini allows changing model on a resumed session. |
+| Parameter    | Type     | Required | Description                                                                                                                                                                                                                                                   |
+| ------------ | -------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `diff`       | string   | no       | Git diff to review. Omit to auto-capture `git diff HEAD`.                                                                                                                                                                                                     |
+| `cwd`        | string   | no       | Absolute path to the directory this review runs in — the repository or git worktree being reviewed. Auto-capture, repository instruction files, and the reviewer subprocess all use it. Omit to use the server's launch directory. Applies to this call only. |
+| `auto_diff`  | boolean  | no       | Auto-capture working-tree changes via `git diff HEAD` when `diff` is omitted or blank (default: `true`)                                                                                                                                                       |
+| `context`    | string   | no       | Intent of the changes                                                                                                                                                                                                                                         |
+| `session_id` | string   | no       | Continue from previous review (e.g. plan review session)                                                                                                                                                                                                      |
+| `criteria`   | string[] | no       | Review criteria (e.g. `["bugs", "security", "performance"]`)                                                                                                                                                                                                  |
+| `model`      | string   | no       | Override the model for this call (e.g. `"gpt-5.6-sol"` or `"latest"`). With Codex this can't be combined with `session_id`; compare `resolved` and `observed` to see what the runtime recorded. Gemini allows changing model on a resumed session.            |
 
 Returns: `{ verdict, summary, findings[], session_id, models[], provenance }`, plus `captured_from`
 when the diff was auto-captured.
@@ -182,34 +195,73 @@ Findings include `file` and `line` references when available.
 
 Quick pre-commit sanity check. Auto-captures staged git changes by default.
 
-| Parameter    | Type     | Required | Description                                                                                                                                                                                                                                    |
-| ------------ | -------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `auto_diff`  | boolean  | no       | Auto-capture `git diff --staged` (default: `true`)                                                                                                                                                                                             |
-| `diff`       | string   | no       | Explicit diff instead of auto-capture                                                                                                                                                                                                          |
-| `session_id` | string   | no       | Continue from previous review                                                                                                                                                                                                                  |
-| `checklist`  | string[] | no       | Custom pre-commit checks                                                                                                                                                                                                                       |
-| `model`      | string   | no       | Override the model for this call (e.g. `"gpt-5.6-sol"` or `"latest"`). With Codex this can't be combined with `session_id`; compare `resolved` and `observed` to see what the runtime recorded. Gemini allows changing model on a resumed session. |
+| Parameter    | Type     | Required | Description                                                                                                                                                                                                                                                   |
+| ------------ | -------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `auto_diff`  | boolean  | no       | Auto-capture `git diff --staged` (default: `true`)                                                                                                                                                                                                            |
+| `diff`       | string   | no       | Explicit diff instead of auto-capture                                                                                                                                                                                                                         |
+| `cwd`        | string   | no       | Absolute path to the directory this review runs in — the repository or git worktree being reviewed. Auto-capture, repository instruction files, and the reviewer subprocess all use it. Omit to use the server's launch directory. Applies to this call only. |
+| `session_id` | string   | no       | Continue from previous review                                                                                                                                                                                                                                 |
+| `checklist`  | string[] | no       | Custom pre-commit checks                                                                                                                                                                                                                                      |
+| `model`      | string   | no       | Override the model for this call (e.g. `"gpt-5.6-sol"` or `"latest"`). With Codex this can't be combined with `session_id`; compare `resolved` and `observed` to see what the runtime recorded. Gemini allows changing model on a resumed session.            |
 
 Returns: `{ ready_to_commit, blockers[], warnings[], session_id, models[], provenance }`, plus
 `captured_from` when the diff was auto-captured.
 
+#### Choosing the directory to review (`cwd`)
+
+One server can review several repositories. Pass `cwd` — an absolute path — and that directory
+decides everything about where the review happens:
+
+- which repository `auto_diff` / `review_precommit` capture from,
+- which `.github/copilot-instructions.md` and `.github/instructions/*.instructions.md` apply,
+- which directory the reviewer subprocess itself runs in.
+
+Omit `cwd` and the bridge uses the directory the MCP client launched the server in. That default is
+frequently _not_ where you are working — a git worktree, a second checkout, or an agent driving work
+in another repository all end up somewhere else — which is exactly what `cwd` is for.
+
+```jsonc
+// review the worktree, not wherever the server happens to have been started
+{ "cwd": "/Users/me/code/app/.worktrees/feature-x" }
+```
+
+Rules:
+
+- **Absolute only.** A relative path would resolve against the _server's_ directory, which is the
+  confusion this parameter removes. `~` is not expanded.
+- **Per call.** `cwd` is not stored on the session. Pass it again on every call, including resumes.
+- **Symlinks are fine** — the path is canonicalized with `realpath`, so worktrees reached through a
+  symlink work.
+- A missing path, a broken symlink, a file, or a directory that cannot be read returns
+  `INVALID_INPUT` before any reviewer is contacted.
+- `review_plan` and explicit-diff reviews work in any readable directory. **Auto-capture needs a git
+  work tree**: pointing it at a plain directory returns `INVALID_INPUT` rather than silently
+  reviewing nothing.
+- Capture is anchored at the **repository root**, so a subdirectory still reviews the whole
+  repository — the same thing `git diff` does from a subdirectory.
+
+The CLI takes the same option as `--cwd <path>`, where relative paths resolve against your shell's
+current directory. It does **not** rebase `--plan`, `--diff`, or `--config`, which stay relative to
+where you ran the command.
+
 #### Where the diff came from
 
 Auto-captured results (`review_code` without a `diff`, `review_precommit` without a `diff`) carry
-`captured_from`: the absolute directory the bridge ran git in. The server captures in **its own**
-working directory, which is wherever the MCP client launched it — not necessarily where you are
-working. A session that later moves into a git worktree still captures the original checkout, and an
-empty result there means "nothing staged **there**", not "nothing staged".
+`captured_from`: the absolute directory the bridge ran git in — the repository root of the resolved
+`cwd`, or of the server's launch directory when you passed none. It is the answer to "which
+repository is this review actually about", and it is worth checking whenever a result surprises you:
+an empty result means "nothing staged **there**", not "nothing staged".
 
 Empty auto-captures say so explicitly — `No staged changes found in /path/to/repo` — and git failures
-append `capture attempted from "/path/to/repo"`. When `captured_from` is not the repository you are
-working in, pass the diff explicitly:
+append `capture attempted from "/path/to/repo"`. If `captured_from` is not the repository you meant,
+pass `cwd`, or supply the diff yourself:
 
 ```bash
 git diff --staged | <your client's review_precommit with an explicit diff>
 ```
 
-Explicit diffs never carry `captured_from`, and the field is never persisted to review history.
+Explicit diffs never carry `captured_from` — even when the bridge resolved a repository for them —
+and the field is never persisted to review history or shown to the reviewer.
 
 ### `review_status`
 
@@ -295,21 +347,21 @@ The CLI's `--config <dir>` flag is an explicit override: it looks only at `<dir>
 
 **Tiers** let a caller pick by difficulty or urgency instead of tracking model ids. Each provider maps a tier to its own model, and the tier carries across provider failover:
 
-| Tier       | Pick it for                                                                   | Codex         | Gemini                      |
-| ---------- | ----------------------------------------------------------------------------- | ------------- | --------------------------- |
-| `max`      | Hardest problems: architecture, concurrency, security, subtle bugs            | `gpt-6-astra` | `Gemini 3.1 Pro (High)`     |
-| `balanced` | Everyday code and plan review                                                 | `gpt-5.6-sol` | `Gemini 3.5 Flash (High)`   |
-| `fast`     | Small diffs, precommit sanity checks, style passes, quick iteration loops     | `gpt-5.6-luna`| `Gemini 3.5 Flash (Medium)` |
+| Tier       | Pick it for                                                               | Codex          | Gemini                      |
+| ---------- | ------------------------------------------------------------------------- | -------------- | --------------------------- |
+| `max`      | Hardest problems: architecture, concurrency, security, subtle bugs        | `gpt-6-astra`  | `Gemini 3.1 Pro (High)`     |
+| `balanced` | Everyday code and plan review                                             | `gpt-5.6-sol`  | `Gemini 3.5 Flash (High)`   |
+| `fast`     | Small diffs, precommit sanity checks, style passes, quick iteration loops | `gpt-5.6-luna` | `Gemini 3.5 Flash (Medium)` |
 
 Rule of thumb for an agent: `fast` for a precommit check or a diff under a few hundred lines with no cross-file logic, `max` when the plan or diff touches concurrency, auth, data integrity, or a design you are unsure about, `balanced` otherwise. The tier name is reported back as `requested` in `models`, with the concrete id in `resolved`.
 
 **Codex** — default `gpt-6-astra`. If Astra has not reached your account yet, pin `gpt-5.6-sol`:
 
-| Model         | Description                                                              |
-| ------------- | ------------------------------------------------------------------------ |
-| `gpt-6-astra` | Latest flagship agentic coding model (default)                           |
-| `gpt-5.6-sol` | Previous flagship. Use while Astra is still rolling out to your account. |
-| `gpt-5.6-luna`| Cheap and fast line (the `fast` tier).                                   |
+| Model          | Description                                                              |
+| -------------- | ------------------------------------------------------------------------ |
+| `gpt-6-astra`  | Latest flagship agentic coding model (default)                           |
+| `gpt-5.6-sol`  | Previous flagship. Use while Astra is still rolling out to your account. |
+| `gpt-5.6-luna` | Cheap and fast line (the `fast` tier).                                   |
 
 **Gemini** — default resolves to the latest Flash via `agy models`. Effort is part of the model name:
 

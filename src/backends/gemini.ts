@@ -5,13 +5,9 @@ import { join } from 'node:path';
 import { ok, err, ErrorCode } from '../utils/errors.js';
 import type { Result } from '../utils/errors.js';
 import type { ReviewBridgeConfig } from '../config/types.js';
-import {
-  RECOMMENDED_MODELS,
-  TIER_MODELS,
-  isReviewTier,
-} from '../config/types.js';
-import type { CopilotInstructions } from '../config/copilot-instructions.js';
+import { RECOMMENDED_MODELS, TIER_MODELS, isReviewTier } from '../config/types.js';
 import { escapeTerminalControls } from '../utils/terminal.js';
+import { subprocessEnv } from '../utils/subprocess-env.js';
 import { SessionIdSchema } from '../utils/input-validation.js';
 import type { ReviewBackend } from './backend.js';
 import {
@@ -153,7 +149,16 @@ export function runAgyPrint(opts: AgyPrintOptions): Promise<Result<string>> {
 
     let child;
     try {
-      child = spawn('agy', args, { cwd: opts.cwd, signal: controller.signal });
+      child = spawn('agy', args, {
+        cwd: opts.cwd,
+        // A fresh environment per spawn, with the repository-selecting GIT_*
+        // variables stripped. PWD is set to match `cwd` because agy keys its
+        // conversation cache by workspace path: an inherited PWD naming the
+        // SERVER's directory would file this review's id under the wrong key,
+        // and the capture below would then miss it.
+        env: { ...subprocessEnv(), PWD: opts.cwd },
+        signal: controller.signal,
+      });
     } catch (e: unknown) {
       const raw = e instanceof Error ? e.message : String(e);
       const classified = classifyAgyError(raw);
@@ -342,7 +347,7 @@ export function runAgyModels(timeoutMs: number = MODEL_QUERY_TIMEOUT_MS): Promis
 
     let child;
     try {
-      child = spawn('agy', ['models'], { signal: controller.signal });
+      child = spawn('agy', ['models'], { env: subprocessEnv(), signal: controller.signal });
     } catch {
       finish(null);
       return;
@@ -516,7 +521,8 @@ async function runAgyReview<T extends Record<string, unknown>>(
         // STORAGE_ERROR is accurate and actionable; RESPONSE_PARSE_ERROR would
         // wrongly imply a malformed model response the caller should retry.
         return err<T & { session_id: string }>(
-          `${ErrorCode.STORAGE_ERROR}: agy review succeeded but no conversation id was captured for ${cwd}. ` +
+          `${ErrorCode.STORAGE_ERROR}: agy review succeeded but no conversation id was captured for ` +
+            `"${escapeTerminalControls(cwd)}". ` +
             `Check that ~/.gemini/antigravity-cli is readable.`,
         );
       }
@@ -534,10 +540,7 @@ async function runAgyReview<T extends Record<string, unknown>>(
   });
 }
 
-export function createGeminiBackend(
-  config: ReviewBridgeConfig,
-  copilotInstructions?: CopilotInstructions,
-): ReviewBackend {
+export function createGeminiBackend(config: ReviewBridgeConfig): ReviewBackend {
   // agy carries reasoning effort in the model name (e.g. "... (High)"), so the
   // config's reasoning_effort has no effect here — codex applies it, gemini
   // can't. Surface a one-time startup notice when it's set to a non-default
@@ -550,12 +553,15 @@ export function createGeminiBackend(
     );
   }
 
+  // The run directory comes from the REQUEST, never from the server's own
+  // process. agy keys its conversation cache by workspace path, so using
+  // process.cwd() here would both review the wrong tree and look the resulting
+  // conversation id up under the wrong key.
   const turn: TurnRunner = <T extends Record<string, unknown>>(params: TurnParams) =>
-    runAgyReview<T>({ ...params, config, cwd: process.cwd() });
+    runAgyReview<T>({ ...params, config, cwd: params.workingDirectory });
   const deps = {
     config,
     provider: 'gemini' as const,
-    copilotInstructions,
     // agy accepts a model on resume (nothing reasserts it), and persists each
     // conversation natively — so chunks review independently (resumesAcrossChunks
     // false) to avoid resending a growing transcript per chunk.

@@ -28,3 +28,19 @@ export const SessionIdSchema = ControlFreeStringSchema.min(1, 'must not be empty
   .refine((value) => value === value.trim(), {
     message: 'must not have surrounding whitespace',
   });
+
+// The per-call working directory (ISS-027). The MCP surface accepts an absolute
+// path only — a relative one would resolve against the SERVER's directory, which
+// is the confusion this parameter exists to remove. Full validation (existence,
+// type, readability, canonicalization) happens in resolveWorkspace; this is the
+// cheap syntactic gate that a malformed value never gets past.
+export const CWD_DESCRIPTION =
+  'Absolute path to the directory this review runs in — the repository or git worktree ' +
+  'whose code is being reviewed. Auto-capture, repository instruction files, and the ' +
+  'reviewer subprocess all use it. Omit to use the directory the server was started in. ' +
+  'Must be absolute; "~" is not expanded. Applies to this call only — pass it again on resume.';
+
+export const WorkingDirectorySchema = ControlFreeStringSchema.min(1, 'must not be empty').max(
+  4096,
+  'must be at most 4096 characters',
+);

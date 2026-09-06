@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll, afterEach, afterAll } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { promises as fs } from 'node:fs';
@@ -23,8 +23,11 @@ type ThreadFactory = (...args: unknown[]) => ReturnType<typeof makeMockThread>;
 let mockStartThread: ReturnType<typeof vi.fn<ThreadFactory>>;
 let mockResumeThread: ReturnType<typeof vi.fn<ThreadFactory>>;
 
+let lastCodexOptions: Record<string, unknown> | undefined;
+
 vi.mock('@openai/codex-sdk', () => {
-  function MockCodex() {
+  function MockCodex(options?: Record<string, unknown>) {
+    lastCodexOptions = options;
     if (mockConstructorThrow) throw mockConstructorThrow;
     return {
       startThread: (...args: unknown[]) => mockStartThread(...args),
@@ -35,15 +38,46 @@ vi.mock('@openai/codex-sdk', () => {
 });
 
 // --- Git mock ---
+// Git is an external boundary, so it is faked wholesale; everything above it
+// (workspace resolution, capture, chunking, the response boundary) is the real
+// product code under test.
 vi.mock('./utils/git.js', () => ({
   getStagedDiff: vi.fn(),
   getWorkingDiff: vi.fn(),
   getUnstagedDiff: vi.fn(),
   getDiffBetween: vi.fn(),
+  getRepositoryRoot: vi.fn(),
+  classifyHead: vi.fn(),
   isGitRepo: vi.fn(),
 }));
 
-import { getStagedDiff, getWorkingDiff } from './utils/git.js';
+import { getStagedDiff, getWorkingDiff, getRepositoryRoot } from './utils/git.js';
+import { realpathSync } from 'node:fs';
+import {
+  mkdtemp,
+  mkdir as mkdirp,
+  realpath,
+  rm,
+  writeFile as writeFileAsync,
+} from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { subprocessEnv, isStrippedGitVariable } from './utils/subprocess-env.js';
+
+// What the server resolves its own launch directory to. Canonicalized, because
+// that is what reaches git and comes back as captured_from.
+const SERVER_DIR = realpathSync(process.cwd());
+
+// Repository discovery answers about the directory it was given — exactly what
+// `git rev-parse --show-toplevel` does. Tests that assert a caller-named
+// directory was used MUST use this rather than a constant: a constant root makes
+// "the caller's cwd was dropped" and "the caller's cwd was honored" produce the
+// same capture, so the assertion cannot fail.
+function rootsByDirectory(other: string): void {
+  vi.mocked(getRepositoryRoot).mockImplementation((cwd: string) =>
+    Promise.resolve({ ok: true, data: cwd.startsWith(other) ? other : SERVER_DIR }),
+  );
+}
 
 // --- Valid Codex responses (without session_id — injected by client) ---
 const validPlanResponse = {
@@ -120,6 +154,9 @@ beforeEach(() => {
   mockStartThread = vi.fn(() => makeMockThread());
   mockResumeThread = vi.fn(() => makeMockThread());
   mockConstructorThrow = null;
+  // The server's own directory is a real, ordinary repository as far as these
+  // tests are concerned; individual cases override this to test other shapes.
+  vi.mocked(getRepositoryRoot).mockResolvedValue({ ok: true, data: SERVER_DIR });
   // Force in-memory DB for integration tests
   savedEnv.REVIEW_BRIDGE_DB = process.env.REVIEW_BRIDGE_DB;
   process.env.REVIEW_BRIDGE_DB = ':memory:';
@@ -229,11 +266,11 @@ describe('MCP integration — review_precommit', () => {
     const result = await client.callTool({ name: 'review_precommit', arguments: {} });
 
     // The directory reported back must be the one git was actually handed.
-    expect(getStagedDiff).toHaveBeenCalledWith(process.cwd());
+    expect(getStagedDiff).toHaveBeenCalledWith(SERVER_DIR);
     const parsed = parseToolResult(result) as Record<string, unknown>;
     expect(parsed.ready_to_commit).toBe(true);
     expect(parsed.session_id).toBe('thread_integ_001');
-    expect(parsed.captured_from).toBe(process.cwd());
+    expect(parsed.captured_from).toBe(SERVER_DIR);
     expect(parsed.models).toHaveLength(1);
     expect(parsed.provenance).toEqual({ persistence: 'memory_only', warning: null });
   });
@@ -261,10 +298,282 @@ describe('MCP integration — review_precommit', () => {
     const parsed = parseToolResult(result) as Record<string, unknown>;
     // ISS-028: an empty capture names where it looked, so a capture that ran in
     // the wrong repository is visible instead of reading as a clean index.
-    expect(parsed.warnings as string[]).toContain(`No staged changes found in ${process.cwd()}`);
-    expect(parsed.captured_from).toBe(process.cwd());
+    expect(parsed.warnings as string[]).toContain(`No staged changes found in ${SERVER_DIR}`);
+    expect(parsed.captured_from).toBe(SERVER_DIR);
     expect(parsed.models).toEqual([]);
     expect(parsed.provenance).toEqual({ persistence: 'not_recorded', warning: null });
+  });
+});
+
+describe('MCP integration — request-bound working directory (ISS-027)', () => {
+  // The whole point: one server, several repositories. The caller names the
+  // directory per call; the server's own directory is only a default.
+  //
+  // These are REAL directories: the server proves a caller-named path exists and
+  // is readable before it will run anything there, so a made-up path would be
+  // rejected long before reaching the behavior under test. Git itself stays
+  // mocked — it is the external boundary.
+  let OTHER: string;
+  const temps: string[] = [];
+
+  beforeAll(async () => {
+    OTHER = await realpath(await mkdtemp(join(tmpdir(), 'rb-mcp-b-')));
+    temps.push(OTHER);
+  });
+
+  afterAll(async () => {
+    for (const dir of temps) await rm(dir, { recursive: true, force: true });
+  });
+
+  async function plainDir(): Promise<string> {
+    const dir = await realpath(await mkdtemp(join(tmpdir(), 'rb-mcp-plain-')));
+    temps.push(dir);
+    return dir;
+  }
+
+  it('captures a code review from the directory the CALLER named', async () => {
+    // Answer about the directory git was RUN in, the way rev-parse does. A
+    // constant OTHER here would make a dropped `cwd` invisible: the capture
+    // would still land in B even when the server's own directory was used.
+    rootsByDirectory(OTHER);
+    vi.mocked(getWorkingDiff).mockResolvedValue({
+      ok: true,
+      data: 'diff --git a/a b/a\n@@ -1 +1 @@\n-a\n+b',
+    });
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validCodeResponse) });
+    client = await startServer();
+
+    const result = await client.callTool({ name: 'review_code', arguments: { cwd: OTHER } });
+
+    expect(getWorkingDiff).toHaveBeenCalledWith(OTHER);
+    expect(getWorkingDiff).not.toHaveBeenCalledWith(SERVER_DIR);
+    expect((parseToolResult(result) as Record<string, unknown>).captured_from).toBe(OTHER);
+  });
+
+  it('captures a precommit check from the directory the CALLER named', async () => {
+    rootsByDirectory(OTHER);
+    vi.mocked(getStagedDiff).mockResolvedValue({ ok: true, data: 'staged in B' });
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPrecommitResponse) });
+    client = await startServer();
+
+    const result = await client.callTool({ name: 'review_precommit', arguments: { cwd: OTHER } });
+
+    expect(getStagedDiff).toHaveBeenCalledWith(OTHER);
+    expect(getStagedDiff).not.toHaveBeenCalledWith(SERVER_DIR);
+    expect((parseToolResult(result) as Record<string, unknown>).captured_from).toBe(OTHER);
+  });
+
+  it('runs the reviewer subprocess in the named directory, including on resume', async () => {
+    // Codex reasserts thread options on resume, so a resume that kept the
+    // server's directory would move an in-flight review to another repository.
+    vi.mocked(getRepositoryRoot).mockResolvedValue({ ok: true, data: OTHER });
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
+    client = await startServer();
+
+    const plan = await client.callTool({
+      name: 'review_plan',
+      arguments: { plan: 'a plan', cwd: OTHER },
+    });
+    expect(mockStartThread).toHaveBeenCalledWith(
+      expect.objectContaining({ workingDirectory: OTHER }),
+    );
+
+    const sessionId = (parseToolResult(plan) as Record<string, unknown>).session_id as string;
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validCodeResponse) });
+    await client.callTool({
+      name: 'review_code',
+      arguments: {
+        diff: 'diff --git a/a b/a\n@@ -1 +1 @@\n-a\n+b',
+        session_id: sessionId,
+        cwd: OTHER,
+      },
+    });
+
+    expect(mockResumeThread).toHaveBeenCalledWith(
+      sessionId,
+      expect.objectContaining({ workingDirectory: OTHER }),
+    );
+  });
+
+  it('rejects an unusable cwd with INVALID_INPUT and never calls the provider', async () => {
+    client = await startServer();
+
+    for (const cwd of ['relative/dir', '~/projects/app', join(OTHER, 'definitely-not-here')]) {
+      const result = await client.callTool({ name: 'review_plan', arguments: { plan: 'p', cwd } });
+      expect(getErrorText(result)).toContain('INVALID_INPUT');
+    }
+    expect(mockRun).not.toHaveBeenCalled();
+    expect(mockStartThread).not.toHaveBeenCalled();
+  });
+
+  it('refuses to auto-capture from a directory that is not a work tree', async () => {
+    // Silently reviewing nothing here would read as "your changes are fine".
+    vi.mocked(getRepositoryRoot).mockResolvedValue({ ok: true, data: null });
+    const plain = await plainDir();
+    client = await startServer();
+
+    const result = await client.callTool({ name: 'review_code', arguments: { cwd: plain } });
+
+    const text = getErrorText(result);
+    expect(text).toContain('INVALID_INPUT');
+    expect(text).toContain('not inside a git work tree');
+    expect(getWorkingDiff).not.toHaveBeenCalled();
+    expect(mockRun).not.toHaveBeenCalled();
+  });
+
+  it('still reviews an EXPLICIT diff from a directory that is not a work tree', async () => {
+    vi.mocked(getRepositoryRoot).mockResolvedValue({ ok: true, data: null });
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validCodeResponse) });
+    const plain = await plainDir();
+    client = await startServer();
+
+    const result = await client.callTool({
+      name: 'review_code',
+      arguments: { diff: 'diff --git a/a b/a\n@@ -1 +1 @@\n-a\n+b', cwd: plain },
+    });
+
+    const parsed = parseToolResult(result) as Record<string, unknown>;
+    expect(parsed.verdict).toBeDefined();
+    expect(parsed).not.toHaveProperty('captured_from');
+  });
+
+  it('surfaces a real git discovery failure as GIT_ERROR, not "no repository"', async () => {
+    vi.mocked(getRepositoryRoot).mockResolvedValue({
+      ok: false,
+      error: 'GIT_ERROR: detected dubious ownership in repository',
+    });
+    client = await startServer();
+
+    const result = await client.callTool({
+      name: 'review_code',
+      arguments: { cwd: await plainDir() },
+    });
+    expect(getErrorText(result)).toContain('dubious ownership');
+  });
+
+  it('advertises cwd on all three review tools', async () => {
+    client = await startServer();
+    const { tools } = await client.listTools();
+    for (const name of ['review_plan', 'review_code', 'review_precommit']) {
+      const tool = tools.find((t) => t.name === name);
+      expect(tool?.inputSchema.properties).toHaveProperty('cwd');
+    }
+  });
+});
+
+describe('MCP integration — concurrent reviews in different repositories', () => {
+  // Two repositories reviewed at the same time by one server, with a parse retry
+  // in the middle of one of them. Request state is per-call, so nothing here may
+  // bleed: not the diff, not the repository instructions, not the directory the
+  // reviewer runs in, and not the session the result reports.
+  let repoA: string;
+  let repoB: string;
+  const temps: string[] = [];
+
+  async function repoWithInstructions(marker: string): Promise<string> {
+    const dir = await realpath(await mkdtemp(join(tmpdir(), `rb-conc-${marker}-`)));
+    temps.push(dir);
+    await mkdirp(join(dir, '.github'));
+    await writeFileAsync(join(dir, '.github', 'copilot-instructions.md'), `RULES-${marker}`);
+    return dir;
+  }
+
+  beforeAll(async () => {
+    repoA = await repoWithInstructions('A');
+    repoB = await repoWithInstructions('B');
+  });
+
+  afterAll(async () => {
+    for (const dir of temps) await rm(dir, { recursive: true, force: true });
+  });
+
+  it('keeps each request’s diff, instructions, directory and session separate across a retry', async () => {
+    // Identity discovery: each caller directory is its own repository root.
+    vi.mocked(getRepositoryRoot).mockImplementation(async (cwd: string) => ({
+      ok: true,
+      data: cwd,
+    }));
+    // A capture that is unmistakably from one repository or the other.
+    vi.mocked(getWorkingDiff).mockImplementation(async (cwd: string) => ({
+      ok: true,
+      data: `diff --git a/x b/x\n@@ -1 +1 @@\n-old\n+MARKER-${cwd === repoA ? 'A' : 'B'}`,
+    }));
+
+    const runs: Array<{ dir: string; prompt: string }> = [];
+    let injectedFailure = false;
+    mockStartThread.mockImplementation((...args: unknown[]) => {
+      const dir = (args[0] as { workingDirectory: string }).workingDirectory;
+      return {
+        get id() {
+          return `thread-${dir === repoA ? 'A' : 'B'}`;
+        },
+        run: vi.fn(async (prompt: string) => {
+          runs.push({ dir, prompt });
+          // Exactly one malformed response, on the A-side review, so its retry
+          // overlaps the B-side review still in flight.
+          if (dir === repoA && !injectedFailure) {
+            injectedFailure = true;
+            return { finalResponse: 'not json at all' };
+          }
+          return { finalResponse: JSON.stringify(validCodeResponse) };
+        }),
+      };
+    });
+
+    client = await startServer();
+
+    const [resultA, resultB] = await Promise.all([
+      client.callTool({ name: 'review_code', arguments: { cwd: repoA } }),
+      client.callTool({ name: 'review_code', arguments: { cwd: repoB } }),
+    ]);
+
+    const parsedA = parseToolResult(resultA) as Record<string, unknown>;
+    const parsedB = parseToolResult(resultB) as Record<string, unknown>;
+
+    // Each answer names its own repository and its own session.
+    expect(parsedA.captured_from).toBe(repoA);
+    expect(parsedB.captured_from).toBe(repoB);
+    expect(parsedA.session_id).toBe('thread-A');
+    expect(parsedB.session_id).toBe('thread-B');
+
+    // The retry actually happened, and it stayed on the A side.
+    expect(injectedFailure).toBe(true);
+    const runsA = runs.filter((r) => r.dir === repoA);
+    const runsB = runs.filter((r) => r.dir === repoB);
+    expect(runsA).toHaveLength(2);
+    expect(runsB).toHaveLength(1);
+
+    // No prompt ever carried the other repository's diff or guidelines —
+    // including the retry, which is the turn most likely to be rebuilt wrongly.
+    for (const { prompt } of runsA) {
+      expect(prompt).toContain('MARKER-A');
+      expect(prompt).not.toContain('MARKER-B');
+      expect(prompt).toContain('RULES-A');
+      expect(prompt).not.toContain('RULES-B');
+    }
+    for (const { prompt } of runsB) {
+      expect(prompt).toContain('MARKER-B');
+      expect(prompt).not.toContain('MARKER-A');
+      expect(prompt).toContain('RULES-B');
+      expect(prompt).not.toContain('RULES-A');
+    }
+
+    // Git was asked about each repository by name, never about the server's own.
+    expect(getWorkingDiff).toHaveBeenCalledWith(repoA);
+    expect(getWorkingDiff).toHaveBeenCalledWith(repoB);
+    expect(getWorkingDiff).not.toHaveBeenCalledWith(SERVER_DIR);
+  });
+
+  it('gives the reviewer subprocess a sanitized environment', async () => {
+    // The SDK REPLACES the child environment when `env` is supplied, so an
+    // inherited GIT_DIR here would silently redirect every review.
+    client = await startServer();
+    await client.callTool({ name: 'review_plan', arguments: { plan: 'p' } });
+
+    const env = lastCodexOptions?.env as Record<string, string> | undefined;
+    expect(env).toBeDefined();
+    expect(env).toEqual(subprocessEnv());
+    expect(Object.keys(env ?? {}).some((k) => isStrippedGitVariable(k))).toBe(false);
   });
 });
 
@@ -279,9 +588,9 @@ describe('MCP integration — review_code auto-capture (ISS-028)', () => {
 
     const result = await client.callTool({ name: 'review_code', arguments: {} });
 
-    expect(getWorkingDiff).toHaveBeenCalledWith(process.cwd());
+    expect(getWorkingDiff).toHaveBeenCalledWith(SERVER_DIR);
     const parsed = parseToolResult(result) as Record<string, unknown>;
-    expect(parsed.captured_from).toBe(process.cwd());
+    expect(parsed.captured_from).toBe(SERVER_DIR);
   });
 
   it('names the capture directory when there is nothing to review', async () => {
@@ -292,8 +601,8 @@ describe('MCP integration — review_code auto-capture (ISS-028)', () => {
 
     const parsed = parseToolResult(result) as Record<string, unknown>;
     expect(parsed.verdict).toBe('approve');
-    expect(parsed.summary).toBe(`No changes found to review in ${process.cwd()}.`);
-    expect(parsed.captured_from).toBe(process.cwd());
+    expect(parsed.summary).toBe(`No changes found to review in ${SERVER_DIR}.`);
+    expect(parsed.captured_from).toBe(SERVER_DIR);
     // A provider-free synthetic answer never reaches the model.
     expect(mockRun).not.toHaveBeenCalled();
   });

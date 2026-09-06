@@ -27,7 +27,6 @@ import {
 import type { ReviewBridgeConfig } from '../config/types.js';
 import { chunkDiff, estimateTokens } from '../utils/chunking.js';
 import { filterByFiles, formatForPrompt } from '../config/copilot-instructions.js';
-import type { CopilotInstructions } from '../config/copilot-instructions.js';
 import { extractFilesFromDiff } from '../utils/diff-files.js';
 import { ModelSelectorSchema } from '../utils/input-validation.js';
 import type { ReviewProvider } from '../config/types.js';
@@ -204,6 +203,10 @@ export function sessionModelConflictMessage(): string {
 export interface TurnParams {
   prompt: string;
   responseSchema: z.ZodType;
+  // The directory this turn's provider call runs in. REQUIRED: a turn that
+  // silently defaulted to the server's own directory would review the wrong
+  // repository, which is the failure ISS-027 exists to make impossible.
+  workingDirectory: string;
   sessionId?: string;
   // Applied only when starting a fresh session; omitted on resume.
   model?: string;
@@ -220,7 +223,6 @@ export type TurnRunner = <T extends Record<string, unknown>>(
 export interface ReviewFlowDeps {
   config: ReviewBridgeConfig;
   provider: ReviewProvider;
-  copilotInstructions?: CopilotInstructions;
   // When false (e.g. Codex, whose SDK reasserts --model on resume) the flow
   // rejects session_id + model and omits the model on resumed chunks. When true
   // (e.g. Gemini) the caller may change model on a resumed session.
@@ -367,7 +369,8 @@ export async function runPlanReview(
   deps: ReviewFlowDeps,
   turn: TurnRunner,
 ): Promise<Result<PlanReviewResult>> {
-  const { config, copilotInstructions, allowsModelOverrideOnResume } = deps;
+  const { config, allowsModelOverrideOnResume } = deps;
+  const { workingDirectory, copilotInstructions } = input.execution;
   if (!allowsModelOverrideOnResume && input.session_id && input.model) {
     return err<PlanReviewResult>(sessionModelConflictMessage());
   }
@@ -383,6 +386,7 @@ export async function runPlanReview(
   const result = await turn<Omit<PlanReviewResult, 'session_id'>>({
     prompt,
     responseSchema: PlanReviewResponseSchema,
+    workingDirectory,
     sessionId: input.session_id,
     model: perTurnModel(prepared.turnResolved, input.session_id, allowsModelOverrideOnResume),
     resolvedModel: prepared.turnResolved,
@@ -455,7 +459,8 @@ export async function runCodeReview(
   deps: ReviewFlowDeps,
   turn: TurnRunner,
 ): Promise<Result<CodeReviewResult>> {
-  const { config, copilotInstructions, allowsModelOverrideOnResume, resumesAcrossChunks } = deps;
+  const { config, allowsModelOverrideOnResume, resumesAcrossChunks } = deps;
+  const { workingDirectory, copilotInstructions } = input.execution;
   if (!allowsModelOverrideOnResume && input.session_id && input.model) {
     return err<CodeReviewResult>(sessionModelConflictMessage());
   }
@@ -514,6 +519,7 @@ export async function runCodeReview(
     const result = await turn<Omit<CodeReviewResult, 'session_id' | 'chunks_reviewed'>>({
       prompt,
       responseSchema: CodeReviewResponseSchema,
+      workingDirectory,
       sessionId: input.session_id,
       model: perTurnModel(prepared.turnResolved, input.session_id, allowsModelOverrideOnResume),
       resolvedModel: prepared.turnResolved,
@@ -542,6 +548,7 @@ export async function runCodeReview(
     const result = await turn<Omit<CodeReviewResult, 'session_id' | 'chunks_reviewed'>>({
       prompt,
       responseSchema: CodeReviewResponseSchema,
+      workingDirectory,
       sessionId: chunkSession,
       model: perTurnModel(prepared.turnResolved, chunkSession, allowsModelOverrideOnResume),
       resolvedModel: prepared.turnResolved,
@@ -578,7 +585,8 @@ export async function runPrecommitReview(
   deps: ReviewFlowDeps,
   turn: TurnRunner,
 ): Promise<Result<PrecommitResult>> {
-  const { config, copilotInstructions, allowsModelOverrideOnResume, resumesAcrossChunks } = deps;
+  const { config, allowsModelOverrideOnResume, resumesAcrossChunks } = deps;
+  const { workingDirectory, copilotInstructions } = input.execution;
   if (!allowsModelOverrideOnResume && input.session_id && input.model) {
     return err<PrecommitResult>(sessionModelConflictMessage());
   }
@@ -631,6 +639,7 @@ export async function runPrecommitReview(
     const result = await turn<Omit<PrecommitResult, 'session_id' | 'chunks_reviewed'>>({
       prompt,
       responseSchema: PrecommitResponseSchema,
+      workingDirectory,
       sessionId: input.session_id,
       model: perTurnModel(prepared.turnResolved, input.session_id, allowsModelOverrideOnResume),
       resolvedModel: prepared.turnResolved,
@@ -658,6 +667,7 @@ export async function runPrecommitReview(
     const result = await turn<Omit<PrecommitResult, 'session_id' | 'chunks_reviewed'>>({
       prompt,
       responseSchema: PrecommitResponseSchema,
+      workingDirectory,
       sessionId: chunkSession,
       model: perTurnModel(prepared.turnResolved, chunkSession, allowsModelOverrideOnResume),
       resolvedModel: prepared.turnResolved,
@@ -701,8 +711,13 @@ export async function runCrossReview(
   if (!preparedResult.ok) return preparedResult;
   const prepared = preparedResult.data;
   const result = await turn<{ adjudications: CrossReviewResult['adjudications'] }>({
-    prompt: buildCrossReviewPrompt(input),
+    prompt: buildCrossReviewPrompt(input, {
+      copilot_instructions: formatForPrompt(
+        filterByFiles(input.execution.copilotInstructions, extractFilesFromDiff(input.content)),
+      ),
+    }),
     responseSchema: CrossReviewResponseSchema,
+    workingDirectory: input.execution.workingDirectory,
     model: perTurnModel(prepared.turnResolved, undefined, deps.allowsModelOverrideOnResume),
     resolvedModel: prepared.turnResolved,
   });

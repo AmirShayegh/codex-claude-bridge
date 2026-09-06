@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { Command, Option } from 'commander';
 import type Database from 'better-sqlite3';
 import { loadConfig, formatConfigSource } from '../config/loader.js';
@@ -10,10 +10,12 @@ import type { ReviewBackend } from '../backends/backend.js';
 import type { ReviewBridgeConfig } from '../config/types.js';
 import { makeSessionModelLookup, makeSessionProviderLookup, openReviewDb } from '../storage/db.js';
 import { checkSessionProvider } from '../storage/session-tracker.js';
-import { loadCopilotInstructions } from '../config/copilot-instructions.js';
-import type { CopilotInstructions } from '../config/copilot-instructions.js';
+import { canonicalizeStartupDirectory } from '../utils/workspace.js';
+import { createPreparationLimiter } from '../review/preparation.js';
+import { preparePlanReview, prepareDiffReview } from '../review/request-prep.js';
+import type { RequestPreparationDeps } from '../review/request-prep.js';
 import { readInput, resetStdinGuard } from './stdin.js';
-import { NO_STAGED_CHANGES, resolvePrecommitDiff, stampCapture } from '../utils/resolve-diff.js';
+import { normalizePrecommitDiffSource, stampCapture } from '../utils/resolve-diff.js';
 import { createHandler } from './handlers.js';
 import type { HandlerIO } from './handlers.js';
 import {
@@ -24,7 +26,11 @@ import {
 } from './formatter.js';
 import type { PlanReviewResult, CodeReviewResult, PrecommitResult } from '../review/types.js';
 import { escapeTerminalControls } from '../utils/terminal.js';
-import { ModelSelectorSchema, SessionIdSchema } from '../utils/input-validation.js';
+import {
+  ModelSelectorSchema,
+  SessionIdSchema,
+  WorkingDirectorySchema,
+} from '../utils/input-validation.js';
 import { err, ErrorCode, ok } from '../utils/errors.js';
 import type { Result } from '../utils/errors.js';
 
@@ -61,6 +67,55 @@ interface CliClient {
   db: Database.Database | undefined;
   // The resolved config — commands read defaults (e.g. precommit auto_diff) from it.
   config: ReviewBridgeConfig;
+  // Where reviews run and how instruction files are read for this invocation.
+  prep: RequestPreparationDeps;
+}
+
+// The directory this CLI process was invoked in, captured and canonicalized ONCE.
+// A relative --cwd resolves against THIS value rather than a live process.cwd()
+// read, so every command in one invocation agrees on what "." meant.
+//
+// process.cwd() THROWS when the directory has been deleted out from under the
+// shell, and this runs at module scope — an unguarded read would kill the CLI
+// with a stack trace before Commander could print anything, including --help.
+// An absolute --cwd is still perfectly serviceable in that state, so the failure
+// is carried and only reported by the paths that actually need the directory.
+const invocation: { directory: string; error?: string } = (() => {
+  try {
+    return { directory: canonicalizeStartupDirectory(process.cwd()) };
+  } catch (e: unknown) {
+    return {
+      directory: '',
+      error:
+        `${ErrorCode.INVALID_INPUT}: the current working directory is unavailable ` +
+        `(${escapeTerminalControls(e instanceof Error ? e.message : String(e))}). ` +
+        `Run from an existing directory, or pass an absolute --cwd.`,
+    };
+  }
+})();
+const invocationDirectory = invocation.directory;
+
+const CWD_HELP =
+  'Directory to review in — the repository or git worktree whose code is being reviewed ' +
+  '(default: the current directory). Relative paths resolve against the current directory. ' +
+  'Does NOT affect --plan, --diff, or --config, which stay relative to the current directory.';
+
+// Resolve --cwd to an absolute path. Relative input is allowed here (unlike the
+// MCP surface) because a CLI caller has a shell working directory to resolve
+// against; existence and readability are checked later by resolveWorkspace.
+function resolveCwdOption(raw: string | undefined): Result<string | undefined> {
+  if (raw === undefined) return ok(undefined);
+  const parsed = WorkingDirectorySchema.safeParse(raw);
+  if (!parsed.success) {
+    return err(
+      `${ErrorCode.INVALID_INPUT}: --cwd must be 1–4096 characters and free of control characters`,
+    );
+  }
+  // An absolute path needs no base, so it still works when the invocation
+  // directory is gone. A relative one cannot be resolved without a base.
+  if (isAbsolute(parsed.data)) return ok(parsed.data);
+  if (invocation.error !== undefined) return err(invocation.error);
+  return ok(resolve(invocationDirectory, parsed.data));
 }
 
 interface ValidatedSelectors {
@@ -104,21 +159,13 @@ function initClient(configDir: string | undefined, deps: CliDeps): CliClient | n
     `[codex-bridge] config source: ${escapeTerminalControls(formatConfigSource(source))}\n`,
   );
 
-  let copilotInstr: CopilotInstructions | undefined;
-  if (config.copilot_instructions) {
-    // When walk-up discovered a project config, anchor copilot-instructions
-    // at that project root rather than process.cwd(). For env/user/default,
-    // copilot stays tied to the caller-passed dir or process.cwd().
-    const instrCwd = source.kind === 'project' ? dirname(source.path) : configDir;
-    const instrResult = loadCopilotInstructions(instrCwd);
-    if (instrResult.ok) {
-      copilotInstr = instrResult.data;
-    } else {
-      deps.stderr.write(
-        `Copilot instructions load failed, skipping: ${escapeTerminalControls(instrResult.error)}\n`,
-      );
-    }
-  }
+  // Instruction files are now read per review, anchored at the REVIEWED
+  // repository's root — so `--cwd` picks them up without a config reload.
+  const prep: RequestPreparationDeps = {
+    limiter: createPreparationLimiter(),
+    defaultWorkingDirectory: invocationDirectory,
+    loadInstructions: config.copilot_instructions,
+  };
 
   // Read-only so the CLI never creates or writes the review db (no recording).
   // Undefined when no shared db is reachable (no reviews.db, or the CLI runs
@@ -131,7 +178,6 @@ function initClient(configDir: string | undefined, deps: CliDeps): CliClient | n
     const storedModels = makeSessionModelLookup(db);
     const client = createBackend(
       config,
-      copilotInstr,
       db ? makeSessionProviderLookup(db) : undefined,
       (sessionId) => {
         const found = storedModels(sessionId);
@@ -140,7 +186,7 @@ function initClient(configDir: string | undefined, deps: CliDeps): CliClient | n
           : null;
       },
     );
-    return { client, db, config };
+    return { client, db, config, prep };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     deps.stderr.write(
@@ -209,6 +255,7 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
     .option('--focus <items>', 'Comma-separated focus areas')
     .addOption(new Option('--depth <level>', 'Review depth').choices(['quick', 'thorough']))
     .option('--session <id>', 'Resume session')
+    .option('--cwd <path>', CWD_HELP)
     .option(
       '--model <name>',
       'Override the configured default model (e.g., gpt-5.6-sol, or a tier: max | balanced | fast)',
@@ -228,14 +275,30 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
         return;
       }
 
+      const requestedCwd = resolveCwdOption(opts.cwd);
+      if (!requestedCwd.ok) {
+        io.stderr.write(`Error: ${escapeTerminalControls(requestedCwd.error)}\n`);
+        deps.exit(1);
+        return;
+      }
+
       const init = initClient(opts.config, deps);
       if (!init) return;
       const { client } = init;
       if (!guardSession(init, selectors.data.session, io, deps)) return;
 
+      // --plan is read relative to the CURRENT directory, never rebased onto
+      // --cwd: the file the user typed is the file they meant.
       const inputResult = await readInput(opts.plan);
       if (!inputResult.ok) {
         io.stderr.write(`Error: ${escapeTerminalControls(inputResult.error)}\n`);
+        deps.exit(1);
+        return;
+      }
+
+      const prepared = await preparePlanReview(init.prep, { cwd: requestedCwd.data });
+      if (!prepared.ok) {
+        io.stderr.write(`Error: ${escapeTerminalControls(prepared.error)}\n`);
         deps.exit(1);
         return;
       }
@@ -244,6 +307,7 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
         execute: () =>
           client.reviewPlan({
             plan: inputResult.data,
+            execution: prepared.data,
             focus: opts.focus
               ? opts.focus
                   .split(',')
@@ -268,6 +332,7 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
     .requiredOption('--diff <path>', 'File path or "-" for stdin')
     .option('--focus <items>', 'Comma-separated review criteria')
     .option('--session <id>', 'Resume session')
+    .option('--cwd <path>', CWD_HELP)
     .option(
       '--model <name>',
       'Override the configured default model (e.g., gpt-5.6-sol, or a tier: max | balanced | fast)',
@@ -287,32 +352,71 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
         return;
       }
 
+      const requestedCwd = resolveCwdOption(opts.cwd);
+      if (!requestedCwd.ok) {
+        io.stderr.write(`Error: ${escapeTerminalControls(requestedCwd.error)}\n`);
+        deps.exit(1);
+        return;
+      }
+
       const init = initClient(opts.config, deps);
       if (!init) return;
       const { client } = init;
 
+      // --diff is read relative to the CURRENT directory, never rebased onto --cwd.
       const inputResult = await readInput(opts.diff);
       if (!inputResult.ok) {
         io.stderr.write(`Error: ${escapeTerminalControls(inputResult.error)}\n`);
         deps.exit(1);
         return;
       }
-      const synthetic = inputResult.data.trim().length === 0;
-      if (!synthetic && !guardSession(init, selectors.data.session, io, deps)) return;
+      // An empty diff is answered without a reviewer, so it needs no workspace at
+      // all — and returning here keeps the reviewed path from having to carry an
+      // "execution might be missing" branch that could answer "no changes" for
+      // the wrong reason.
+      if (inputResult.data.trim().length === 0) {
+        const syntheticHandler = createHandler<CodeReviewResult>({
+          execute: () =>
+            Promise.resolve(
+              ok<CodeReviewResult>({
+                verdict: 'approve',
+                summary: 'No changes to review.',
+                findings: [],
+                session_id: selectors.data.session ?? randomUUID(),
+                models: [],
+              }),
+            ),
+          format: formatCodeResult,
+          exitCode: () => 0,
+        });
+        await syntheticHandler(io);
+        return;
+      }
+      if (!guardSession(init, selectors.data.session, io, deps)) return;
+
+      const prepared = await prepareDiffReview(init.prep, {
+        cwd: requestedCwd.data,
+        source: { kind: 'explicit', diff: inputResult.data },
+      });
+      if (!prepared.ok) {
+        io.stderr.write(`Error: ${escapeTerminalControls(prepared.error)}\n`);
+        deps.exit(1);
+        return;
+      }
+      if (prepared.data.kind !== 'ready') {
+        // Unreachable: an explicit diff never auto-captures, so there is no empty
+        // capture to report. Fail loudly rather than answering "no changes".
+        io.stderr.write(`Error: ${ErrorCode.UNKNOWN_ERROR}: explicit diff resolved to a capture\n`);
+        deps.exit(1);
+        return;
+      }
+      const { execution } = prepared.data;
 
       const handler = createHandler<CodeReviewResult>({
         execute: async () => {
-          if (synthetic) {
-            return ok<CodeReviewResult>({
-              verdict: 'approve',
-              summary: 'No changes to review.',
-              findings: [],
-              session_id: selectors.data.session ?? randomUUID(),
-              models: [],
-            });
-          }
           const result = await client.reviewCode({
             diff: inputResult.data,
+            execution,
             criteria: opts.focus
               ? opts.focus
                   .split(',')
@@ -340,6 +444,7 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
     .description('Quick pre-commit sanity check on staged changes')
     .option('--diff <path>', 'Override auto-capture (path or "-" for stdin)')
     .option('--session <id>', 'Resume session')
+    .option('--cwd <path>', CWD_HELP)
     .option(
       '--model <name>',
       'Override the configured default model (e.g., gpt-5.6-sol, or a tier: max | balanced | fast)',
@@ -359,11 +464,18 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
         return;
       }
 
+      const requestedCwd = resolveCwdOption(opts.cwd);
+      if (!requestedCwd.ok) {
+        io.stderr.write(`Error: ${escapeTerminalControls(requestedCwd.error)}\n`);
+        deps.exit(1);
+        return;
+      }
+
       const init = initClient(opts.config, deps);
       if (!init) return;
       const { client, config } = init;
 
-      // Read explicit diff if provided via file/stdin
+      // --diff is read relative to the CURRENT directory, never rebased onto --cwd.
       let explicitDiff: string | undefined;
       if (opts.diff) {
         const inputResult = await readInput(opts.diff);
@@ -382,18 +494,24 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
         ? false
         : (opts.autoDiff ?? config.review_standards.precommit.auto_diff);
 
-      const diffResult = await resolvePrecommitDiff({
-        diff: explicitDiff,
-        auto_diff: autoDiff,
+      const source = normalizePrecommitDiffSource({ diff: explicitDiff, auto_diff: autoDiff });
+      if (!source.ok) {
+        io.stderr.write(`Error: ${escapeTerminalControls(source.error)}\n`);
+        deps.exit(1);
+        return;
+      }
+
+      const prepared = await prepareDiffReview(init.prep, {
+        cwd: requestedCwd.data,
+        source: source.data,
       });
-      // Set only when git actually ran (omitted for an explicit --diff).
-      const capturedFrom = diffResult.capturedFrom;
-      if (!diffResult.ok) {
-        if (!diffResult.error.startsWith(NO_STAGED_CHANGES)) {
-          io.stderr.write(`Error: ${escapeTerminalControls(diffResult.error)}\n`);
-          deps.exit(1);
-          return;
-        }
+      if (!prepared.ok) {
+        io.stderr.write(`Error: ${escapeTerminalControls(prepared.error)}\n`);
+        deps.exit(1);
+        return;
+      }
+      if (prepared.data.kind === 'empty-capture') {
+        const emptyFrom = prepared.data.capturedFrom;
         const syntheticHandler = createHandler<PrecommitResult>({
           execute: () =>
             Promise.resolve(
@@ -401,15 +519,11 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
                 ok<PrecommitResult>({
                   ready_to_commit: false,
                   blockers: [],
-                  warnings: [
-                    capturedFrom
-                      ? `No staged changes found in ${escapeTerminalControls(capturedFrom)}`
-                      : 'No staged changes found',
-                  ],
+                  warnings: [`No staged changes found in ${escapeTerminalControls(emptyFrom)}`],
                   session_id: selectors.data.session ?? randomUUID(),
                   models: [],
                 }),
-                capturedFrom,
+                emptyFrom,
               ),
             ),
           format: formatPrecommitResult,
@@ -418,13 +532,16 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
         await syntheticHandler(io);
         return;
       }
+      // Set only when git actually ran (omitted for an explicit --diff).
+      const { diff, capturedFrom, execution } = prepared.data;
       if (!guardSession(init, selectors.data.session, io, deps)) return;
 
       const handler = createHandler<PrecommitResult>({
         execute: async () =>
           stampCapture(
             await client.reviewPrecommit({
-              diff: diffResult.data,
+              diff,
+              execution,
               session_id: selectors.data.session,
               model: selectors.data.model,
             }),

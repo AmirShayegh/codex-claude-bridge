@@ -80,6 +80,10 @@ export interface PrecommitConfig {
   block_on: string[];
 }
 
+export interface CrossReviewConfig {
+  copilot_instructions?: string;
+}
+
 // --- Prompt builders ---
 
 export function buildPlanReviewPrompt(
@@ -100,7 +104,9 @@ export function buildPlanReviewPrompt(
   }
 
   if (config?.copilot_instructions) {
-    sections.push(`Project review guidelines (from repository instruction files):\n${config.copilot_instructions}`);
+    sections.push(
+      `Project review guidelines (from repository instruction files):\n${config.copilot_instructions}`,
+    );
   }
 
   if (input.context) {
@@ -175,7 +181,9 @@ export function buildCodeReviewPrompt(
   }
 
   if (config?.copilot_instructions) {
-    sections.push(`Project review guidelines (from repository instruction files):\n${config.copilot_instructions}`);
+    sections.push(
+      `Project review guidelines (from repository instruction files):\n${config.copilot_instructions}`,
+    );
   }
 
   if (input.context) {
@@ -238,15 +246,33 @@ export function buildCodeReviewPrompt(
 
 // Cross-review (deliberate-deep): ask a provider to adjudicate another reviewer's
 // findings against the same change — confirm real issues, dispute false positives.
-export function buildCrossReviewPrompt(input: {
-  content: string;
-  findings: { severity: string; category: string; file: string | null; line: number | null; description: string }[];
-}): string {
+export function buildCrossReviewPrompt(
+  input: {
+    content: string;
+    findings: {
+      severity: string;
+      category: string;
+      file: string | null;
+      line: number | null;
+      description: string;
+    }[];
+  },
+  config?: CrossReviewConfig,
+): string {
   const sections: string[] = [
     'You are a senior software engineer giving an independent second opinion. Another reviewer flagged ' +
       'the findings below on this change. For EACH finding, judge whether it is a genuine issue in the ' +
       'change shown — do not defer to the other reviewer.',
   ];
+
+  // The judge should apply the same repository guidelines the original reviewer
+  // did; without them it can dispute a finding that only the project's own rules
+  // make valid.
+  if (config?.copilot_instructions) {
+    sections.push(
+      `Project review guidelines (from repository instruction files):\n${config.copilot_instructions}`,
+    );
+  }
 
   sections.push(UNTRUSTED_INPUT_DIRECTIVE);
   const d = makeDelimiter('SUBJECT', input.content);
@@ -300,7 +326,9 @@ export function buildPrecommitPrompt(
   }
 
   if (config?.copilot_instructions) {
-    sections.push(`Project review guidelines (from repository instruction files):\n${config.copilot_instructions}`);
+    sections.push(
+      `Project review guidelines (from repository instruction files):\n${config.copilot_instructions}`,
+    );
   }
 
   if (input.checklist && input.checklist.length > 0) {

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createCodexBackend } from './codex.js';
+import { subprocessEnv } from '../utils/subprocess-env.js';
 import { looksLikeDiff } from './orchestrator.js';
 import { ErrorCode } from '../utils/errors.js';
 import type { ReviewBridgeConfig } from '../config/types.js';
@@ -55,6 +56,11 @@ vi.mock('@openai/codex-sdk', () => {
 // (set per-test in the auto-discovery describe block).
 vi.mock('./codex-binary.js', () => ({ discoverCodexBinary: vi.fn() }));
 import { discoverCodexBinary } from './codex-binary.js';
+
+// Every backend call now carries WHERE it runs (ISS-027). Tests that don't care
+// about the directory share this one fixture; tests that do build their own.
+const EXEC = { workingDirectory: '/work/repo-b' };
+
 const mockDiscover = vi.mocked(discoverCodexBinary);
 
 beforeEach(() => {
@@ -132,12 +138,12 @@ describe('codex binary auto-discovery (ISS-021)', () => {
       .mockRejectedValueOnce(spawnFailure())
       .mockResolvedValueOnce({ finalResponse: JSON.stringify(validPlanResponse) });
 
-    const result = await createCodexBackend(config).reviewPlan({ plan: 'plan' });
+    const result = await createCodexBackend(config).reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(true);
     expect(mockDiscover).toHaveBeenCalledTimes(1);
     // The SDK client was rebuilt pointing at the discovered binary.
-    expect(mockConstructorOptions).toEqual({ codexPathOverride: '/found/bin/codex' });
+    expect(mockConstructorOptions).toMatchObject({ codexPathOverride: '/found/bin/codex' });
     expect(mockRun).toHaveBeenCalledTimes(2);
   });
 
@@ -145,7 +151,7 @@ describe('codex binary auto-discovery (ISS-021)', () => {
     mockRun.mockRejectedValue(spawnFailure());
     const pinned = { ...config, codex_path: '/pinned/codex' };
 
-    const result = await createCodexBackend(pinned).reviewPlan({ plan: 'plan' });
+    const result = await createCodexBackend(pinned).reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -159,7 +165,7 @@ describe('codex binary auto-discovery (ISS-021)', () => {
     process.env.CODEX_PATH = '/env/codex';
     try {
       mockRun.mockRejectedValue(spawnFailure());
-      const result = await createCodexBackend(config).reviewPlan({ plan: 'plan' });
+      const result = await createCodexBackend(config).reviewPlan({ execution: EXEC, plan: 'plan' });
       expect(result.ok).toBe(false);
       expect(mockDiscover).not.toHaveBeenCalled();
     } finally {
@@ -171,7 +177,7 @@ describe('codex binary auto-discovery (ISS-021)', () => {
     mockDiscover.mockResolvedValue(null);
     mockRun.mockRejectedValue(spawnFailure());
 
-    const result = await createCodexBackend(config).reviewPlan({ plan: 'plan' });
+    const result = await createCodexBackend(config).reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -185,8 +191,8 @@ describe('codex binary auto-discovery (ISS-021)', () => {
     mockRun.mockRejectedValue(spawnFailure());
     const client = createCodexBackend(config);
 
-    await client.reviewPlan({ plan: 'plan' });
-    await client.reviewPlan({ plan: 'plan' });
+    await client.reviewPlan({ execution: EXEC, plan: 'plan' });
+    await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(mockDiscover).toHaveBeenCalledTimes(1);
   });
@@ -194,7 +200,7 @@ describe('codex binary auto-discovery (ISS-021)', () => {
   it('does not trigger discovery for non-PROVIDER_UNAVAILABLE failures', async () => {
     mockRun.mockRejectedValue(new Error('429 rate limit exceeded'));
 
-    const result = await createCodexBackend(config).reviewPlan({ plan: 'plan' });
+    const result = await createCodexBackend(config).reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain('RATE_LIMITED');
@@ -215,8 +221,8 @@ describe('codex binary auto-discovery (ISS-021)', () => {
     const client = createCodexBackend(config);
 
     const [a, b] = await Promise.all([
-      client.reviewPlan({ plan: 'plan a' }),
-      client.reviewPlan({ plan: 'plan b' }),
+      client.reviewPlan({ execution: EXEC, plan: 'plan a' }),
+      client.reviewPlan({ execution: EXEC, plan: 'plan b' }),
     ]);
 
     expect(a.ok).toBe(true);
@@ -228,7 +234,7 @@ describe('codex binary auto-discovery (ISS-021)', () => {
     mockDiscover.mockRejectedValue(new Error('fs exploded'));
     mockRun.mockRejectedValue(spawnFailure());
 
-    const result = await createCodexBackend(config).reviewPlan({ plan: 'plan' });
+    const result = await createCodexBackend(config).reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -241,7 +247,7 @@ describe('codex binary auto-discovery (ISS-021)', () => {
     mockDiscover.mockResolvedValue('/found/bin/codex');
     mockRun.mockRejectedValue(spawnFailure());
 
-    const result = await createCodexBackend(config).reviewPlan({ plan: 'plan' });
+    const result = await createCodexBackend(config).reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain('PROVIDER_UNAVAILABLE');
@@ -256,7 +262,7 @@ describe('codex binary auto-discovery (ISS-021)', () => {
       .mockResolvedValueOnce({ finalResponse: JSON.stringify(validPlanResponse) });
     const errSpy = vi.spyOn(console, 'error');
 
-    await createCodexBackend(config).reviewPlan({ plan: 'plan' });
+    await createCodexBackend(config).reviewPlan({ execution: EXEC, plan: 'plan' });
 
     const narration = errSpy.mock.calls
       .map((c) => String(c[0]))
@@ -395,7 +401,7 @@ describe('reviewPlan', () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'My plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'My plan' });
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -410,19 +416,27 @@ describe('reviewPlan', () => {
 describe('model resolution (codex)', () => {
   it('resolves an unset model to the SDK-pinned default and passes it to startThread', async () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
-    await createCodexBackend(config).reviewPlan({ plan: 'My plan' });
+    await createCodexBackend(config).reviewPlan({ execution: EXEC, plan: 'My plan' });
     expect(mockStartThread.mock.calls[0][0]).toMatchObject({ model: 'gpt-6-astra' });
   });
 
   it("resolves model 'latest' to the SDK-pinned default (never passes the literal 'latest')", async () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
-    await createCodexBackend(config).reviewPlan({ plan: 'My plan', model: 'latest' });
+    await createCodexBackend(config).reviewPlan({
+      execution: EXEC,
+      plan: 'My plan',
+      model: 'latest',
+    });
     expect(mockStartThread.mock.calls[0][0]).toMatchObject({ model: 'gpt-6-astra' });
   });
 
   it('forwards an explicit model pin unchanged to startThread', async () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
-    await createCodexBackend(config).reviewPlan({ plan: 'My plan', model: 'gpt-5.4' });
+    await createCodexBackend(config).reviewPlan({
+      execution: EXEC,
+      plan: 'My plan',
+      model: 'gpt-5.4',
+    });
     expect(mockStartThread.mock.calls[0][0]).toMatchObject({ model: 'gpt-5.4' });
   });
 });
@@ -430,24 +444,50 @@ describe('model resolution (codex)', () => {
 describe('codex binary override (codex_path)', () => {
   it('passes config.codex_path to the SDK as codexPathOverride', () => {
     createCodexBackend({ ...config, codex_path: '/Users/me/.local/bin/codex' });
-    expect(mockConstructorOptions).toEqual({ codexPathOverride: '/Users/me/.local/bin/codex' });
+    expect(mockConstructorOptions).toMatchObject({
+      codexPathOverride: '/Users/me/.local/bin/codex',
+    });
   });
 
   it('falls back to the CODEX_PATH env var when config.codex_path is unset', () => {
     process.env.CODEX_PATH = '/opt/codex/bin/codex';
     createCodexBackend(config);
-    expect(mockConstructorOptions).toEqual({ codexPathOverride: '/opt/codex/bin/codex' });
+    expect(mockConstructorOptions).toMatchObject({ codexPathOverride: '/opt/codex/bin/codex' });
   });
 
   it('prefers config.codex_path over the CODEX_PATH env var', () => {
     process.env.CODEX_PATH = '/env/codex';
     createCodexBackend({ ...config, codex_path: '/config/codex' });
-    expect(mockConstructorOptions).toEqual({ codexPathOverride: '/config/codex' });
+    expect(mockConstructorOptions).toMatchObject({ codexPathOverride: '/config/codex' });
   });
 
   it('passes codexPathOverride: undefined (SDK uses its bundled binary) when neither is set', () => {
     createCodexBackend(config);
-    expect(mockConstructorOptions).toEqual({ codexPathOverride: undefined });
+    expect(mockConstructorOptions).toMatchObject({ codexPathOverride: undefined });
+  });
+});
+
+describe('subprocess environment', () => {
+  // The stripping rules themselves are covered in subprocess-env.test.ts. What
+  // matters here is that codex uses that sanitized snapshot at all: the SDK
+  // REPLACES the child environment when `env` is given, so this object IS the
+  // entire environment codex runs under, and an inherited GIT_DIR would point
+  // the reviewer at a repository the caller never asked about.
+  it('hands the SDK the sanitized environment snapshot', () => {
+    createCodexBackend(config);
+    expect((mockConstructorOptions as { env?: unknown }).env).toEqual(subprocessEnv());
+  });
+
+  it('keeps the sanitized environment on the XProtect recovery client', async () => {
+    // The recovery path builds a SECOND Codex client. It must not quietly fall
+    // back to an inherited environment.
+    mockRun.mockRejectedValueOnce(
+      Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' }),
+    );
+    mockDiscover.mockResolvedValue('/usr/local/bin/codex');
+    await createCodexBackend(config).reviewPlan({ execution: EXEC, plan: 'x' });
+    expect(mockConstructorOptions).toMatchObject({ codexPathOverride: '/usr/local/bin/codex' });
+    expect((mockConstructorOptions as { env?: unknown }).env).toEqual(subprocessEnv());
   });
 });
 
@@ -456,21 +496,21 @@ describe('provider unavailable (binary missing / killed / quarantined)', () => {
     mockConstructorThrow = new Error(
       'Unable to locate Codex CLI binaries. Ensure @openai/codex is installed.',
     );
-    const res = await createCodexBackend(config).reviewPlan({ plan: 'x' });
+    const res = await createCodexBackend(config).reviewPlan({ execution: EXEC, plan: 'x' });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toContain(ErrorCode.PROVIDER_UNAVAILABLE);
   });
 
   it('classifies a spawn ENOENT (binary trashed) as PROVIDER_UNAVAILABLE', async () => {
     mockRun.mockRejectedValue(Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' }));
-    const res = await createCodexBackend(config).reviewPlan({ plan: 'x' });
+    const res = await createCodexBackend(config).reviewPlan({ execution: EXEC, plan: 'x' });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toContain(ErrorCode.PROVIDER_UNAVAILABLE);
   });
 
   it('classifies a SIGKILL as PROVIDER_UNAVAILABLE, not REVIEW_TIMEOUT', async () => {
     mockRun.mockRejectedValue(new Error('codex process was killed with signal SIGKILL'));
-    const res = await createCodexBackend(config).reviewPlan({ plan: 'x' });
+    const res = await createCodexBackend(config).reviewPlan({ execution: EXEC, plan: 'x' });
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expect(res.error).toContain(ErrorCode.PROVIDER_UNAVAILABLE);
@@ -484,7 +524,7 @@ describe('reviewCode', () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validCodeResponse) });
 
     const client = createCodexBackend(config);
-    const result = await client.reviewCode({ diff: 'some diff' });
+    const result = await client.reviewCode({ execution: EXEC, diff: 'some diff' });
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -499,7 +539,7 @@ describe('reviewPrecommit', () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPrecommitResponse) });
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPrecommit({ diff: 'staged diff' });
+    const result = await client.reviewPrecommit({ execution: EXEC, diff: 'staged diff' });
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -517,7 +557,7 @@ describe('retry on parse failure', () => {
       .mockResolvedValueOnce({ finalResponse: JSON.stringify(validPlanResponse) });
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(true);
     expect(mockRun).toHaveBeenCalledTimes(2);
@@ -527,7 +567,7 @@ describe('retry on parse failure', () => {
     mockRun.mockResolvedValue({ finalResponse: 'not json' });
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -541,7 +581,7 @@ describe('retry on parse failure', () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(badShape) });
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -556,7 +596,7 @@ describe('timeout handling', () => {
     mockRun.mockRejectedValue(abortError);
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -569,7 +609,7 @@ describe('timeout handling', () => {
     mockRun.mockRejectedValue(err);
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -582,7 +622,7 @@ describe('timeout handling', () => {
     mockRun.mockRejectedValue(err);
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -600,7 +640,7 @@ describe('timeout handling', () => {
       .mockRejectedValueOnce(new DOMException('signal is aborted', 'AbortError'));
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -616,7 +656,7 @@ describe('session management', () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
 
     const client = createCodexBackend(config);
-    await client.reviewPlan({ plan: 'plan' });
+    await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(mockStartThread).toHaveBeenCalledTimes(1);
     expect(mockResumeThread).not.toHaveBeenCalled();
@@ -626,7 +666,7 @@ describe('session management', () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
 
     const client = createCodexBackend(config);
-    await client.reviewPlan({ plan: 'plan', session_id: 'existing_thread' });
+    await client.reviewPlan({ execution: EXEC, plan: 'plan', session_id: 'existing_thread' });
 
     expect(mockResumeThread).toHaveBeenCalledWith('existing_thread', expect.any(Object));
     expect(mockStartThread).not.toHaveBeenCalled();
@@ -638,7 +678,7 @@ describe('session management', () => {
     });
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'plan', session_id: 'bad_id' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan', session_id: 'bad_id' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -652,7 +692,7 @@ describe('session management', () => {
     });
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -667,7 +707,7 @@ describe('session management', () => {
     });
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -681,7 +721,7 @@ describe('session management', () => {
     });
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -694,7 +734,11 @@ describe('session management', () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'plan', session_id: 'fallback_id' });
+    const result = await client.reviewPlan({
+      execution: EXEC,
+      plan: 'plan',
+      session_id: 'fallback_id',
+    });
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -711,7 +755,7 @@ describe('session management', () => {
     mockThreadId = providerId;
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
 
-    const result = await createCodexBackend(config).reviewPlan({ plan: 'plan' });
+    const result = await createCodexBackend(config).reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -732,6 +776,7 @@ describe('session management', () => {
       mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
 
       const result = await createCodexBackend(config).reviewPlan({
+        execution: EXEC,
         plan: 'plan',
         session_id: sessionId,
       });
@@ -753,7 +798,7 @@ describe('runtime errors', () => {
     mockRun.mockRejectedValue(new Error('Something completely unexpected'));
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -767,7 +812,7 @@ describe('error classification', () => {
     mockRun.mockRejectedValue(new Error('Invalid api_key provided'));
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -780,7 +825,7 @@ describe('error classification', () => {
     mockRun.mockRejectedValue(new Error('Authentication failed'));
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -792,7 +837,7 @@ describe('error classification', () => {
     mockRun.mockRejectedValue(new Error('401 Unauthorized'));
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -804,7 +849,7 @@ describe('error classification', () => {
     mockRun.mockRejectedValue(new Error('The model "o9-turbo" is not supported'));
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -818,7 +863,7 @@ describe('error classification', () => {
     mockRun.mockRejectedValue(new Error('The model is not found'));
 
     const client = createCodexBackend(customConfig);
-    const result = await client.reviewPlan({ plan: 'plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -831,7 +876,7 @@ describe('error classification', () => {
     mockRun.mockRejectedValue(new Error('The model `gpt-9` does not exist'));
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -851,7 +896,7 @@ describe('error classification', () => {
     );
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -864,7 +909,7 @@ describe('error classification', () => {
     mockRun.mockRejectedValue(new Error('The model "o9-turbo" is not supported'));
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -882,7 +927,7 @@ describe('error classification', () => {
     );
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -899,10 +944,12 @@ describe('error classification', () => {
   it('never recommends the failing model in the fallback tip (ISS-009)', async () => {
     const failing = { ...config, model: 'gpt-5.6-sol' };
     mockRun.mockRejectedValue(
-      new Error(`The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.`),
+      new Error(
+        `The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.`,
+      ),
     );
 
-    const result = await createCodexBackend(failing).reviewPlan({ plan: 'plan' });
+    const result = await createCodexBackend(failing).reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -922,7 +969,7 @@ describe('error classification', () => {
     mockRun.mockRejectedValue(new Error('The model "phantom-99" is not supported'));
 
     const client = createCodexBackend(sameModel);
-    const result = await client.reviewPlan({ plan: 'plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -942,7 +989,10 @@ describe('error classification', () => {
     const configured = { ...config, model: 'gpt-5.4' };
     mockRun.mockRejectedValue(new Error('The model "gpt-5.1-codex-mini" is not supported'));
 
-    const result = await createCodexBackend(configured).reviewPlan({ plan: 'plan' });
+    const result = await createCodexBackend(configured).reviewPlan({
+      execution: EXEC,
+      plan: 'plan',
+    });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -962,7 +1012,10 @@ describe('error classification', () => {
     const configured = { ...config, model: 'gpt-5.4' };
     mockRun.mockRejectedValue(new Error('The model "gpt-5.4" is not supported'));
 
-    const result = await createCodexBackend(configured).reviewPlan({ plan: 'plan' });
+    const result = await createCodexBackend(configured).reviewPlan({
+      execution: EXEC,
+      plan: 'plan',
+    });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -979,7 +1032,7 @@ describe('error classification', () => {
     // so this must take the same-model generic path, not the internal-call message.
     mockRun.mockRejectedValue(new Error('The model "GPT-6-ASTRA" is not supported'));
 
-    const result = await createCodexBackend(config).reviewPlan({ plan: 'plan' });
+    const result = await createCodexBackend(config).reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -995,7 +1048,7 @@ describe('error classification', () => {
     );
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -1008,7 +1061,7 @@ describe('error classification', () => {
     mockRun.mockRejectedValue(new Error('rate_limit exceeded'));
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -1026,7 +1079,7 @@ describe('error classification', () => {
       'quota exceeded for this organization',
     ]) {
       mockRun.mockRejectedValue(new Error(raw));
-      const result = await createCodexBackend(config).reviewPlan({ plan: 'plan' });
+      const result = await createCodexBackend(config).reviewPlan({ execution: EXEC, plan: 'plan' });
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error).toContain('RATE_LIMITED');
     }
@@ -1036,7 +1089,7 @@ describe('error classification', () => {
     mockRun.mockRejectedValue(new Error('fetch failed'));
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -1049,7 +1102,7 @@ describe('error classification', () => {
     mockRun.mockRejectedValue(new Error('connect ECONNREFUSED 127.0.0.1:443'));
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -1061,7 +1114,7 @@ describe('error classification', () => {
     mockRun.mockRejectedValue(new Error('getaddrinfo ENOTFOUND api.openai.com'));
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -1073,7 +1126,7 @@ describe('error classification', () => {
     mockRun.mockRejectedValue(new Error('Something totally unknown'));
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -1088,7 +1141,7 @@ describe('per-call model override (T-011)', () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
 
     const client = createCodexBackend(config);
-    await client.reviewPlan({ plan: 'plan', model: 'gpt-5.4' });
+    await client.reviewPlan({ execution: EXEC, plan: 'plan', model: 'gpt-5.4' });
 
     expect(mockStartThread).toHaveBeenCalledOnce();
     expect(mockStartThread).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-5.4' }));
@@ -1099,6 +1152,7 @@ describe('per-call model override (T-011)', () => {
 
     const client = createCodexBackend(config);
     await client.reviewCode({
+      execution: EXEC,
       diff: 'diff --git a/f b/f\n@@ -1 +1 @@\n-old\n+new',
       model: 'gpt-5.4',
     });
@@ -1111,6 +1165,7 @@ describe('per-call model override (T-011)', () => {
 
     const client = createCodexBackend(config);
     await client.reviewPrecommit({
+      execution: EXEC,
       diff: 'diff --git a/f b/f\n@@ -1 +1 @@\n-old\n+new',
       model: 'gpt-5.4',
     });
@@ -1122,7 +1177,7 @@ describe('per-call model override (T-011)', () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
 
     const client = createCodexBackend({ ...config, model: 'gpt-5.4' });
-    await client.reviewPlan({ plan: 'plan' });
+    await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(mockStartThread).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-5.4' }));
   });
@@ -1131,17 +1186,24 @@ describe('per-call model override (T-011)', () => {
     ['max', 'gpt-6-astra'],
     ['balanced', 'gpt-5.6-sol'],
     ['fast', 'gpt-5.6-luna'],
-  ])('resolves tier "%s" to %s and passes the concrete id to startThread', async (tier, expected) => {
-    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
-    await createCodexBackend(config).reviewPlan({ plan: 'My plan', model: tier });
-    expect(mockStartThread.mock.calls[0][0]).toMatchObject({ model: expected });
-  });
+  ])(
+    'resolves tier "%s" to %s and passes the concrete id to startThread',
+    async (tier, expected) => {
+      mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
+      await createCodexBackend(config).reviewPlan({
+        execution: EXEC,
+        plan: 'My plan',
+        model: tier,
+      });
+      expect(mockStartThread.mock.calls[0][0]).toMatchObject({ model: expected });
+    },
+  );
 
   it('falls back to the backend default model when neither override nor config.model is set', async () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
 
     const client = createCodexBackend({ ...config, model: undefined });
-    await client.reviewPlan({ plan: 'plan' });
+    await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     // codex resolves its own default — the schema no longer supplies one.
     expect(mockStartThread).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-6-astra' }));
@@ -1150,6 +1212,7 @@ describe('per-call model override (T-011)', () => {
   it('rejects session_id + model combination with INVALID_INPUT', async () => {
     const client = createCodexBackend(config);
     const result = await client.reviewPlan({
+      execution: EXEC,
       plan: 'plan',
       session_id: 'existing_session',
       model: 'gpt-5.4',
@@ -1174,10 +1237,7 @@ describe('per-call model override (T-011)', () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validCodeResponse) });
 
     const client = createCodexBackend(config);
-    await client.reviewCode({
-      diff: 'large diff',
-      model: 'gpt-5.4',
-    });
+    await client.reviewCode({ execution: EXEC, diff: 'large diff', model: 'gpt-5.4' });
 
     // Chunk 1: startThread with the override
     expect(mockStartThread).toHaveBeenCalledOnce();
@@ -1204,10 +1264,7 @@ describe('per-call model override (T-011)', () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPrecommitResponse) });
 
     const client = createCodexBackend(config);
-    await client.reviewPrecommit({
-      diff: 'large staged diff',
-      model: 'gpt-5.4',
-    });
+    await client.reviewPrecommit({ execution: EXEC, diff: 'large staged diff', model: 'gpt-5.4' });
 
     expect(mockStartThread).toHaveBeenCalledOnce();
     expect(mockStartThread).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-5.4' }));
@@ -1224,7 +1281,7 @@ describe('constructor error classification', () => {
     mockConstructorThrow = new Error('api_key not set');
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -1237,7 +1294,7 @@ describe('constructor error classification', () => {
     mockConstructorThrow = new Error('fetch failed');
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPlan({ plan: 'plan' });
+    const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -1257,7 +1314,7 @@ describe('config passthrough', () => {
       reasoning_effort: 'high',
     };
     const client = createCodexBackend(customConfig);
-    await client.reviewPlan({ plan: 'plan' });
+    await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(mockStartThread).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1295,7 +1352,7 @@ describe('config flows to prompts', () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
 
     const client = createCodexBackend(configWithContext);
-    await client.reviewPlan({ plan: 'My plan' });
+    await client.reviewPlan({ execution: EXEC, plan: 'My plan' });
 
     const prompt = mockRun.mock.calls[0][0] as string;
     expect(prompt).toContain('Fintech app, PCI-DSS required');
@@ -1305,7 +1362,7 @@ describe('config flows to prompts', () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
 
     const client = createCodexBackend(configWithContext);
-    await client.reviewPlan({ plan: 'My plan' });
+    await client.reviewPlan({ execution: EXEC, plan: 'My plan' });
 
     const prompt = mockRun.mock.calls[0][0] as string;
     expect(prompt).toContain('security');
@@ -1316,7 +1373,7 @@ describe('config flows to prompts', () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validCodeResponse) });
 
     const client = createCodexBackend(configWithContext);
-    await client.reviewCode({ diff: 'some diff' });
+    await client.reviewCode({ execution: EXEC, diff: 'some diff' });
 
     const prompt = mockRun.mock.calls[0][0] as string;
     expect(prompt).toContain('Fintech app, PCI-DSS required');
@@ -1326,7 +1383,7 @@ describe('config flows to prompts', () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validCodeResponse) });
 
     const client = createCodexBackend(configWithContext);
-    await client.reviewCode({ diff: 'some diff' });
+    await client.reviewCode({ execution: EXEC, diff: 'some diff' });
 
     const prompt = mockRun.mock.calls[0][0] as string;
     expect(prompt).toContain('Test coverage');
@@ -1336,7 +1393,7 @@ describe('config flows to prompts', () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPrecommitResponse) });
 
     const client = createCodexBackend(configWithContext);
-    await client.reviewPrecommit({ diff: 'staged diff' });
+    await client.reviewPrecommit({ execution: EXEC, diff: 'staged diff' });
 
     const prompt = mockRun.mock.calls[0][0] as string;
     expect(prompt).toContain('Fintech app, PCI-DSS required');
@@ -1346,7 +1403,7 @@ describe('config flows to prompts', () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPrecommitResponse) });
 
     const client = createCodexBackend(configWithContext);
-    await client.reviewPrecommit({ diff: 'staged diff' });
+    await client.reviewPrecommit({ execution: EXEC, diff: 'staged diff' });
 
     const prompt = mockRun.mock.calls[0][0] as string;
     expect(prompt).toContain('critical or major');
@@ -1356,7 +1413,7 @@ describe('config flows to prompts', () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
 
     const client = createCodexBackend(config);
-    await client.reviewPlan({ plan: 'My plan' });
+    await client.reviewPlan({ execution: EXEC, plan: 'My plan' });
 
     const prompt = mockRun.mock.calls[0][0] as string;
     expect(prompt).toContain('Severity definitions');
@@ -1366,7 +1423,7 @@ describe('config flows to prompts', () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validCodeResponse) });
 
     const client = createCodexBackend(config);
-    await client.reviewCode({ diff: 'some diff' });
+    await client.reviewCode({ execution: EXEC, diff: 'some diff' });
 
     const prompt = mockRun.mock.calls[0][0] as string;
     expect(prompt).toContain('Severity definitions');
@@ -1379,15 +1436,15 @@ describe('constructor failure', () => {
 
     const client = createCodexBackend(config);
 
-    const plan = await client.reviewPlan({ plan: 'plan' });
+    const plan = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
     expect(plan.ok).toBe(false);
     if (!plan.ok) expect(plan.error).toContain('UNKNOWN_ERROR');
 
-    const code = await client.reviewCode({ diff: 'diff' });
+    const code = await client.reviewCode({ execution: EXEC, diff: 'diff' });
     expect(code.ok).toBe(false);
     if (!code.ok) expect(code.error).toContain('SDK initialization failed');
 
-    const pre = await client.reviewPrecommit({ diff: 'diff' });
+    const pre = await client.reviewPrecommit({ execution: EXEC, diff: 'diff' });
     expect(pre.ok).toBe(false);
     if (!pre.ok) expect(pre.error).toContain('UNKNOWN_ERROR');
   });
@@ -1421,7 +1478,7 @@ describe('chunking', () => {
     mockRun.mockResolvedValue({ finalResponse: makeCodeResponse('approve') });
 
     const client = createCodexBackend(config);
-    const result = await client.reviewCode({ diff: 'small diff' });
+    const result = await client.reviewCode({ execution: EXEC, diff: 'small diff' });
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -1455,7 +1512,7 @@ describe('chunking', () => {
     mockRun.mockResolvedValue({ finalResponse: makeCodeResponse('approve') });
 
     const client = createCodexBackend(config);
-    const result = await client.reviewCode({ diff: 'big diff' });
+    const result = await client.reviewCode({ execution: EXEC, diff: 'big diff' });
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -1473,7 +1530,7 @@ describe('chunking', () => {
       .mockResolvedValueOnce({ finalResponse: makeCodeResponse('request_changes') });
 
     const client = createCodexBackend(config);
-    const result = await client.reviewCode({ diff: 'big diff' });
+    const result = await client.reviewCode({ execution: EXEC, diff: 'big diff' });
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -1488,7 +1545,7 @@ describe('chunking', () => {
       .mockResolvedValueOnce({ finalResponse: makeCodeResponse('approve') });
 
     const client = createCodexBackend(config);
-    const result = await client.reviewCode({ diff: 'big diff' });
+    const result = await client.reviewCode({ execution: EXEC, diff: 'big diff' });
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -1511,7 +1568,7 @@ describe('chunking', () => {
       });
 
     const client = createCodexBackend(config);
-    const result = await client.reviewCode({ diff: 'big diff' });
+    const result = await client.reviewCode({ execution: EXEC, diff: 'big diff' });
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -1535,7 +1592,7 @@ describe('chunking', () => {
       });
 
     const client = createCodexBackend(config);
-    const result = await client.reviewCode({ diff: 'big diff' });
+    const result = await client.reviewCode({ execution: EXEC, diff: 'big diff' });
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -1558,7 +1615,7 @@ describe('chunking', () => {
       });
 
     const client = createCodexBackend(config);
-    const result = await client.reviewCode({ diff: 'big diff' });
+    const result = await client.reviewCode({ execution: EXEC, diff: 'big diff' });
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -1573,7 +1630,7 @@ describe('chunking', () => {
       .mockRejectedValueOnce(new Error('fetch failed'));
 
     const client = createCodexBackend(config);
-    const result = await client.reviewCode({ diff: 'big diff' });
+    const result = await client.reviewCode({ execution: EXEC, diff: 'big diff' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -1587,7 +1644,7 @@ describe('chunking', () => {
     mockRun.mockResolvedValue({ finalResponse: makeCodeResponse('approve') });
 
     const client = createCodexBackend(config);
-    await client.reviewCode({ diff: 'big diff', session_id: 'existing_thread' });
+    await client.reviewCode({ execution: EXEC, diff: 'big diff', session_id: 'existing_thread' });
 
     expect(mockStartThread).not.toHaveBeenCalled();
     expect(mockResumeThread).toHaveBeenCalledTimes(2);
@@ -1598,7 +1655,7 @@ describe('chunking', () => {
     mockChunkDiff.mockReturnValue([]);
 
     const client = createCodexBackend(config);
-    const result = await client.reviewCode({ diff: '' });
+    const result = await client.reviewCode({ execution: EXEC, diff: '' });
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -1617,7 +1674,7 @@ describe('chunking', () => {
     mockChunkDiff.mockReturnValue([]);
 
     const client = createCodexBackend(config);
-    const result = await client.reviewCode({ diff: '', session_id: 'prev_sess' });
+    const result = await client.reviewCode({ execution: EXEC, diff: '', session_id: 'prev_sess' });
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -1632,7 +1689,7 @@ describe('chunking', () => {
       .mockResolvedValueOnce({ finalResponse: makePrecommitResponse(false, ['blocker1'], []) });
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPrecommit({ diff: 'big staged diff' });
+    const result = await client.reviewPrecommit({ execution: EXEC, diff: 'big staged diff' });
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -1647,7 +1704,7 @@ describe('chunking', () => {
     mockChunkDiff.mockReturnValue([]);
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPrecommit({ diff: '' });
+    const result = await client.reviewPrecommit({ execution: EXEC, diff: '' });
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -1666,8 +1723,8 @@ describe('chunking', () => {
     mockChunkDiff.mockReturnValue([]);
 
     const client = createCodexBackend(config);
-    const result1 = await client.reviewCode({ diff: '' });
-    const result2 = await client.reviewCode({ diff: '' });
+    const result1 = await client.reviewCode({ execution: EXEC, diff: '' });
+    const result2 = await client.reviewCode({ execution: EXEC, diff: '' });
 
     expect(result1.ok).toBe(true);
     expect(result2.ok).toBe(true);
@@ -1683,13 +1740,13 @@ describe('chunking', () => {
     const client = createCodexBackend(config);
 
     // Call with no criteria — should use config criteria for budget
-    await client.reviewCode({ diff: 'some diff' });
+    await client.reviewCode({ execution: EXEC, diff: 'some diff' });
     const budgetWithoutCriteria = mockChunkDiff.mock.calls[0][1];
 
     mockChunkDiff.mockClear();
 
     // Call with empty criteria — should also use config criteria for budget (same as above)
-    await client.reviewCode({ diff: 'some diff', criteria: [] });
+    await client.reviewCode({ execution: EXEC, diff: 'some diff', criteria: [] });
     const budgetWithEmptyCriteria = mockChunkDiff.mock.calls[0][1];
 
     expect(budgetWithEmptyCriteria).toBe(budgetWithoutCriteria);
@@ -1720,7 +1777,7 @@ describe('chunking', () => {
       .mockRejectedValueOnce(new DOMException('aborted', 'AbortError'));
 
     const client = createCodexBackend(config);
-    const result = await client.reviewCode({ diff: 'big diff' });
+    const result = await client.reviewCode({ execution: EXEC, diff: 'big diff' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -1752,6 +1809,7 @@ describe('chunking', () => {
 
     const client = createCodexBackend(config);
     const result = await client.reviewPrecommit({
+      execution: EXEC,
       diff: 'diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new',
     });
 

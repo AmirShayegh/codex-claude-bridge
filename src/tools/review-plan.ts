@@ -6,11 +6,19 @@ import type { ReviewBackend } from '../backends/backend.js';
 import { sessionModelConflictMessage } from '../backends/orchestrator.js';
 import { createSessionTracker } from '../storage/session-tracker.js';
 import type { ReviewLifecycle } from '../review/lifecycle.js';
-import { ModelSelectorSchema, SessionIdSchema } from '../utils/input-validation.js';
+import {
+  CWD_DESCRIPTION,
+  ModelSelectorSchema,
+  SessionIdSchema,
+  WorkingDirectorySchema,
+} from '../utils/input-validation.js';
+import { preparePlanReview } from '../review/request-prep.js';
+import type { RequestPreparationDeps } from '../review/request-prep.js';
 
 export function registerReviewPlanTool(
   server: McpServer,
   client: ReviewBackend,
+  prep: RequestPreparationDeps,
   db?: Database.Database,
   lifecycle?: ReviewLifecycle,
 ): void {
@@ -24,6 +32,7 @@ export function registerReviewPlanTool(
         'Pass the returned session_id to review_code later so the reviewer has full context.',
       inputSchema: {
         plan: z.string().describe('The implementation plan to review'),
+        cwd: WorkingDirectorySchema.optional().describe(CWD_DESCRIPTION),
         context: z.string().optional().describe('Project context and constraints'),
         focus: z.array(z.string()).optional().describe('Review focus areas'),
         depth: z.enum(['quick', 'thorough']).optional().describe('Review depth'),
@@ -57,9 +66,29 @@ export function registerReviewPlanTool(
           isError: true,
         };
       }
+      // Resolve WHERE this review runs. Preparation runs after the cheap
+      // argument checks above, so a request that is already invalid never takes
+      // a preparation permit or touches the filesystem. The permit is released
+      // before the provider call below.
+      const prepared = await preparePlanReview(prep, { cwd: args.cwd });
+      if (!prepared.ok) {
+        return { content: [{ type: 'text' as const, text: prepared.error }], isError: true };
+      }
+      // Built explicitly, never spread from `args`: MCP arguments are caller
+      // input and must not reach a backend as an opaque bag.
+      const input = {
+        plan: args.plan,
+        execution: prepared.data,
+        context: args.context,
+        focus: args.focus,
+        depth: args.depth,
+        session_id: args.session_id,
+        model: args.model,
+        deliberate: args.deliberate,
+      };
       if (lifecycle) {
         try {
-          const result = await lifecycle.reviewPlan(args);
+          const result = await lifecycle.reviewPlan(input);
           if (!result.ok) {
             return { content: [{ type: 'text' as const, text: result.error }], isError: true };
           }
@@ -83,7 +112,7 @@ export function registerReviewPlanTool(
           return { content: [{ type: 'text' as const, text: preflight.error }], isError: true };
         }
 
-        const result = await client.reviewPlan(args);
+        const result = await client.reviewPlan(input);
         if (!result.ok) {
           tracker.recordFailure(result.session_id);
           return { content: [{ type: 'text' as const, text: result.error }], isError: true };

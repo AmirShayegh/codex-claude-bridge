@@ -1,33 +1,65 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-
-vi.mock('node:fs', () => ({
-  readFileSync: vi.fn(),
-  readdirSync: vi.fn(),
-}));
-
-import { readFileSync, readdirSync } from 'node:fs';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { mkdtemp, mkdir, writeFile, readdir, rm, chmod } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { join } from 'node:path';
 import {
   parseFrontmatter,
   loadCopilotInstructions,
   filterByFiles,
   formatForPrompt,
+  MAX_SCOPED_INSTRUCTION_FILES,
+  MAX_INSTRUCTION_FILE_BYTES,
+  MAX_INSTRUCTION_AGGREGATE_BYTES,
 } from './copilot-instructions.js';
 import type { CopilotInstructions } from './copilot-instructions.js';
 
-const mockReadFileSync = vi.mocked(readFileSync);
-const mockReaddirSync = vi.mocked(readdirSync);
-
-function enoent(): Error {
-  const e = new Error('ENOENT: no such file or directory');
-  (e as NodeJS.ErrnoException).code = 'ENOENT';
-  return e;
+// Real directories. This module's entire job is reading a tree the CALLER names,
+// and the size and count bounds only mean anything against real files — a mocked
+// fs would happily "enforce" a limit on numbers the test made up.
+const created: string[] = [];
+async function projectDir(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'rb-instr-'));
+  created.push(dir);
+  return dir;
 }
 
-function eacces(): Error {
-  const e = new Error('EACCES: permission denied');
-  (e as NodeJS.ErrnoException).code = 'EACCES';
-  return e;
+async function writeRepoWide(root: string, body: string): Promise<void> {
+  await mkdir(join(root, '.github'), { recursive: true });
+  await writeFile(join(root, '.github', 'copilot-instructions.md'), body);
 }
+
+async function writeScoped(root: string, filename: string, body: string): Promise<void> {
+  await mkdir(join(root, '.github', 'instructions'), { recursive: true });
+  await writeFile(join(root, '.github', 'instructions', filename), body);
+}
+
+function scopedFile(applyTo: string, body: string): string {
+  return `---\napplyTo: '${applyTo}'\n---\n${body}`;
+}
+
+// chmod-based permission tests are silently vacuous under root.
+const asRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+
+// Some tests chmod a file or directory to 0o000; rm cannot descend past that,
+// so permissions are restored top-down before removal.
+async function restorePermissions(path: string): Promise<void> {
+  await chmod(path, 0o755).catch(() => {});
+  const entries = await readdir(path, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    const child = join(path, entry.name);
+    if (entry.isDirectory()) await restorePermissions(child);
+    else await chmod(child, 0o644).catch(() => {});
+  }
+}
+
+afterAll(async () => {
+  for (const dir of created) {
+    await restorePermissions(dir);
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -113,14 +145,11 @@ More text after horizontal rule`;
 // ---------------------------------------------------------------------------
 
 describe('loadCopilotInstructions', () => {
-  it('loads repo-wide instructions', () => {
-    mockReadFileSync.mockImplementation((path) => {
-      if (String(path).endsWith('copilot-instructions.md')) return '# Global rules';
-      throw enoent();
-    });
-    mockReaddirSync.mockImplementation(() => { throw enoent(); });
+  it('loads repo-wide instructions', async () => {
+    const root = await projectDir();
+    await writeRepoWide(root, '# Global rules');
 
-    const result = loadCopilotInstructions('/project');
+    const result = await loadCopilotInstructions(root);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.data.repoWide).toBe('# Global rules');
@@ -128,22 +157,11 @@ describe('loadCopilotInstructions', () => {
     }
   });
 
-  it('loads scoped instructions', () => {
-    mockReadFileSync.mockImplementation((path) => {
-      const p = String(path);
-      if (p.endsWith('copilot-instructions.md')) throw enoent();
-      if (p.endsWith('ts.instructions.md')) {
-        return `---
-applyTo: '**/*.ts'
----
-Use strict TypeScript.`;
-      }
-      throw enoent();
-    });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    mockReaddirSync.mockReturnValue(['ts.instructions.md'] as any);
+  it('loads scoped instructions', async () => {
+    const root = await projectDir();
+    await writeScoped(root, 'ts.instructions.md', scopedFile('**/*.ts', 'Use strict TypeScript.'));
 
-    const result = loadCopilotInstructions('/project');
+    const result = await loadCopilotInstructions(root);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.data.repoWide).toBeNull();
@@ -153,26 +171,29 @@ Use strict TypeScript.`;
     }
   });
 
-  it('skips files with excludeAgent code-review', () => {
-    mockReadFileSync.mockImplementation((path) => {
-      const p = String(path);
-      if (p.endsWith('copilot-instructions.md')) throw enoent();
-      if (p.endsWith('ci.instructions.md')) {
-        return `---
-applyTo: '**/*.yml'
-excludeAgent: 'code-review'
----
-CI only rules.`;
-      }
-      return `---
-applyTo: '**/*.ts'
----
-TS rules.`;
-    });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    mockReaddirSync.mockReturnValue(['ci.instructions.md', 'ts.instructions.md'] as any);
+  it('reads the tree under the ROOT it is given, not the process directory', async () => {
+    // The whole point of ISS-027: a review of repository B must pick up B's
+    // instructions even though the server was started somewhere else entirely.
+    const a = await projectDir();
+    const b = await projectDir();
+    await writeRepoWide(a, '# Repository A');
+    await writeRepoWide(b, '# Repository B');
 
-    const result = loadCopilotInstructions('/project');
+    const result = await loadCopilotInstructions(b);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.repoWide).toBe('# Repository B');
+  });
+
+  it('skips files with excludeAgent code-review', async () => {
+    const root = await projectDir();
+    await writeScoped(
+      root,
+      'ci.instructions.md',
+      `---\napplyTo: '**/*.yml'\nexcludeAgent: 'code-review'\n---\nCI only rules.`,
+    );
+    await writeScoped(root, 'ts.instructions.md', scopedFile('**/*.ts', 'TS rules.'));
+
+    const result = await loadCopilotInstructions(root);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.data.scoped).toHaveLength(1);
@@ -180,26 +201,16 @@ TS rules.`;
     }
   });
 
-  it('skips files with excludeAgent containing code-review in comma-separated list', () => {
-    mockReadFileSync.mockImplementation((path) => {
-      const p = String(path);
-      if (p.endsWith('copilot-instructions.md')) throw enoent();
-      if (p.endsWith('multi.instructions.md')) {
-        return `---
-applyTo: '**/*.yml'
-excludeAgent: 'coding-agent, code-review'
----
-Multi-excluded.`;
-      }
-      return `---
-applyTo: '**/*.ts'
----
-TS rules.`;
-    });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    mockReaddirSync.mockReturnValue(['multi.instructions.md', 'ts.instructions.md'] as any);
+  it('skips files with excludeAgent containing code-review in comma-separated list', async () => {
+    const root = await projectDir();
+    await writeScoped(
+      root,
+      'multi.instructions.md',
+      `---\napplyTo: '**/*.yml'\nexcludeAgent: 'coding-agent, code-review'\n---\nMulti-excluded.`,
+    );
+    await writeScoped(root, 'ts.instructions.md', scopedFile('**/*.ts', 'TS rules.'));
 
-    const result = loadCopilotInstructions('/project');
+    const result = await loadCopilotInstructions(root);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.data.scoped).toHaveLength(1);
@@ -207,29 +218,32 @@ TS rules.`;
     }
   });
 
-  it('skips files without applyTo', () => {
-    mockReadFileSync.mockImplementation((path) => {
-      if (String(path).endsWith('copilot-instructions.md')) throw enoent();
-      return `---
-description: 'No applyTo field'
----
-Some body.`;
-    });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    mockReaddirSync.mockReturnValue(['no-scope.instructions.md'] as any);
+  it('skips files without applyTo', async () => {
+    const root = await projectDir();
+    await writeScoped(
+      root,
+      'no-scope.instructions.md',
+      `---\ndescription: 'No applyTo field'\n---\nSome body.`,
+    );
 
-    const result = loadCopilotInstructions('/project');
+    const result = await loadCopilotInstructions(root);
     expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.data.scoped).toEqual([]);
-    }
+    if (result.ok) expect(result.data.scoped).toEqual([]);
   });
 
-  it('returns empty instructions when .github does not exist', () => {
-    mockReadFileSync.mockImplementation(() => { throw enoent(); });
-    mockReaddirSync.mockImplementation(() => { throw enoent(); });
+  it('ignores files that are not *.instructions.md', async () => {
+    const root = await projectDir();
+    await writeScoped(root, 'README.md', scopedFile('**/*.ts', 'Not an instruction file.'));
 
-    const result = loadCopilotInstructions('/project');
+    const result = await loadCopilotInstructions(root);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.scoped).toEqual([]);
+  });
+
+  it('returns empty instructions when .github does not exist', async () => {
+    const root = await projectDir();
+
+    const result = await loadCopilotInstructions(root);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.data.repoWide).toBeNull();
@@ -237,42 +251,59 @@ Some body.`;
     }
   });
 
-  it('returns error on permission failure reading copilot-instructions.md', () => {
-    mockReadFileSync.mockImplementation(() => { throw eacces(); });
+  it('treats a non-directory .github/instructions as no instructions', async () => {
+    const root = await projectDir();
+    await mkdir(join(root, '.github'), { recursive: true });
+    await writeFile(join(root, '.github', 'instructions'), 'not a directory');
 
-    const result = loadCopilotInstructions('/project');
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain('CONFIG_ERROR');
-    }
+    const result = await loadCopilotInstructions(root);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.scoped).toEqual([]);
   });
 
-  it('returns error on permission failure reading instructions directory', () => {
-    mockReadFileSync.mockImplementation(() => { throw enoent(); });
-    mockReaddirSync.mockImplementation(() => { throw eacces(); });
+  it('treats a directory named copilot-instructions.md as absent', async () => {
+    const root = await projectDir();
+    await mkdir(join(root, '.github', 'copilot-instructions.md'), { recursive: true });
 
-    const result = loadCopilotInstructions('/project');
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain('CONFIG_ERROR');
-    }
+    const result = await loadCopilotInstructions(root);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.repoWide).toBeNull();
   });
 
-  it('skips individual unreadable instruction files gracefully', () => {
+  it.skipIf(asRoot)(
+    'returns error on permission failure reading copilot-instructions.md',
+    async () => {
+      const root = await projectDir();
+      await writeRepoWide(root, '# Global');
+      await chmod(join(root, '.github', 'copilot-instructions.md'), 0o000);
+
+      const result = await loadCopilotInstructions(root);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toContain('CONFIG_ERROR');
+    },
+  );
+
+  it.skipIf(asRoot)(
+    'returns error on permission failure reading instructions directory',
+    async () => {
+      const root = await projectDir();
+      await writeScoped(root, 'ts.instructions.md', scopedFile('**/*.ts', 'TS rules.'));
+      await chmod(join(root, '.github', 'instructions'), 0o000);
+
+      const result = await loadCopilotInstructions(root);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toContain('CONFIG_ERROR');
+    },
+  );
+
+  it.skipIf(asRoot)('skips individual unreadable instruction files gracefully', async () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    mockReadFileSync.mockImplementation((path) => {
-      const p = String(path);
-      if (p.endsWith('copilot-instructions.md')) throw enoent();
-      if (p.endsWith('bad.instructions.md')) throw eacces();
-      return `---
-applyTo: '**/*.ts'
----
-Good file.`;
-    });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    mockReaddirSync.mockReturnValue(['bad.instructions.md', 'good.instructions.md'] as any);
+    const root = await projectDir();
+    await writeScoped(root, 'bad.instructions.md', scopedFile('**/*.ts', 'Unreadable.'));
+    await writeScoped(root, 'good.instructions.md', scopedFile('**/*.ts', 'Good file.'));
+    await chmod(join(root, '.github', 'instructions', 'bad.instructions.md'), 0o000);
 
-    const result = loadCopilotInstructions('/project');
+    const result = await loadCopilotInstructions(root);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.data.scoped).toHaveLength(1);
@@ -282,27 +313,236 @@ Good file.`;
     consoleSpy.mockRestore();
   });
 
-  it('loads both repo-wide and scoped together', () => {
-    mockReadFileSync.mockImplementation((path) => {
-      const p = String(path);
-      if (p.endsWith('copilot-instructions.md')) return '# Global';
-      if (p.endsWith('ts.instructions.md')) {
-        return `---
-applyTo: '**/*.ts'
----
-TS rules.`;
-      }
-      throw enoent();
-    });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    mockReaddirSync.mockReturnValue(['ts.instructions.md'] as any);
+  it('loads both repo-wide and scoped together', async () => {
+    const root = await projectDir();
+    await writeRepoWide(root, '# Global');
+    await writeScoped(root, 'ts.instructions.md', scopedFile('**/*.ts', 'TS rules.'));
 
-    const result = loadCopilotInstructions('/project');
+    const result = await loadCopilotInstructions(root);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.data.repoWide).toBe('# Global');
       expect(result.data.scoped).toHaveLength(1);
     }
+  });
+
+  it('orders scoped instructions by filename so the prompt is stable', async () => {
+    // Directory order is filesystem-dependent; an unstable prompt would defeat
+    // provider-side caching and make review output non-reproducible.
+    const root = await projectDir();
+    for (const name of ['zulu', 'alpha', 'mike']) {
+      await writeScoped(root, `${name}.instructions.md`, scopedFile('**/*.ts', `${name} rules.`));
+    }
+
+    const result = await loadCopilotInstructions(root);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.scoped.map((s) => s.filename)).toEqual([
+        'alpha.instructions.md',
+        'mike.instructions.md',
+        'zulu.instructions.md',
+      ]);
+    }
+  });
+
+  it('freezes the result so concurrent requests cannot alter each other', async () => {
+    const root = await projectDir();
+    await writeScoped(root, 'ts.instructions.md', scopedFile('**/*.ts', 'TS rules.'));
+
+    const result = await loadCopilotInstructions(root);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(Object.isFrozen(result.data)).toBe(true);
+      expect(Object.isFrozen(result.data.scoped)).toBe(true);
+    }
+  });
+
+  describe('bounds', () => {
+    it('rejects a repo-wide file over the per-file limit', async () => {
+      const root = await projectDir();
+      await writeRepoWide(root, 'x'.repeat(MAX_INSTRUCTION_FILE_BYTES + 1));
+
+      const result = await loadCopilotInstructions(root);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toMatch(/^INVALID_INPUT:/);
+        expect(result.error).toContain('per-file limit');
+      }
+    });
+
+    it('accepts a repo-wide file exactly at the per-file limit', async () => {
+      const root = await projectDir();
+      await writeRepoWide(root, 'x'.repeat(MAX_INSTRUCTION_FILE_BYTES));
+      expect((await loadCopilotInstructions(root)).ok).toBe(true);
+    });
+
+    it('rejects a scoped file over the per-file limit', async () => {
+      const root = await projectDir();
+      await writeScoped(
+        root,
+        'big.instructions.md',
+        scopedFile('**/*.ts', 'x'.repeat(MAX_INSTRUCTION_FILE_BYTES)),
+      );
+
+      const result = await loadCopilotInstructions(root);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toMatch(/^INVALID_INPUT:/);
+    });
+
+    it('rejects more scoped files than the count limit', async () => {
+      const root = await projectDir();
+      for (let i = 0; i <= MAX_SCOPED_INSTRUCTION_FILES; i++) {
+        await writeScoped(root, `f${i}.instructions.md`, scopedFile('**/*.ts', `rule ${i}`));
+      }
+
+      const result = await loadCopilotInstructions(root);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toMatch(/^INVALID_INPUT:/);
+        expect(result.error).toContain('file limit');
+      }
+    });
+
+    it('accepts exactly the count limit', async () => {
+      const root = await projectDir();
+      for (let i = 0; i < MAX_SCOPED_INSTRUCTION_FILES; i++) {
+        await writeScoped(root, `f${i}.instructions.md`, scopedFile('**/*.ts', `rule ${i}`));
+      }
+
+      const result = await loadCopilotInstructions(root);
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.data.scoped).toHaveLength(MAX_SCOPED_INSTRUCTION_FILES);
+    });
+
+    it('rejects files that are each legal but together exceed the aggregate limit', async () => {
+      const root = await projectDir();
+      const size = MAX_INSTRUCTION_FILE_BYTES - 64;
+      const needed = Math.ceil(MAX_INSTRUCTION_AGGREGATE_BYTES / size);
+      for (let i = 0; i <= needed; i++) {
+        await writeScoped(root, `f${i}.instructions.md`, scopedFile('**/*.ts', 'x'.repeat(size)));
+      }
+
+      const result = await loadCopilotInstructions(root);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toMatch(/^INVALID_INPUT:/);
+        expect(result.error).toContain('total limit');
+      }
+    });
+
+    it('escapes control characters in a limit message', async () => {
+      // A limit message names the file, and the file name comes off a disk the
+      // caller pointed us at — it must not be able to repaint a terminal.
+      const esc = String.fromCharCode(27);
+      const root = await projectDir();
+      await writeScoped(
+        root,
+        `we${esc}[31mird.instructions.md`,
+        scopedFile('**/*.ts', 'x'.repeat(MAX_INSTRUCTION_FILE_BYTES)),
+      );
+
+      const result = await loadCopilotInstructions(root);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain('\\x1B');
+        expect(result.error).not.toContain(esc);
+      }
+    });
+  });
+
+  // A named pipe where an instruction file is expected. open() on a FIFO blocks
+  // until a writer appears — which may be never — and this load runs while a
+  // preparation permit is held, so blocking here wedges the server permanently.
+  // A 5s test timeout turns a regression into a failure rather than a hang.
+  describe('non-regular files', () => {
+    async function mkfifo(path: string): Promise<boolean> {
+      try {
+        await promisify(execFile)('mkfifo', [path]);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    it('skips a FIFO where the repo-wide file belongs instead of blocking on it', async () => {
+      const root = await projectDir();
+      await mkdir(join(root, '.github'), { recursive: true });
+      if (!(await mkfifo(join(root, '.github', 'copilot-instructions.md')))) return;
+
+      const result = await loadCopilotInstructions(root);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.data.repoWide).toBeNull();
+    });
+
+    it('skips a FIFO among the scoped files and still reads the real ones', async () => {
+      const root = await projectDir();
+      await writeScoped(root, 'real.instructions.md', scopedFile('**/*.ts', 'real body'));
+      if (!(await mkfifo(join(root, '.github', 'instructions', 'pipe.instructions.md')))) return;
+
+      const result = await loadCopilotInstructions(root);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.data.scoped.map((s) => s.filename)).toEqual(['real.instructions.md']);
+      }
+    });
+  });
+
+  describe('coalescing', () => {
+    it('serves concurrent loads of one root from a single read', async () => {
+      const root = await projectDir();
+      await writeRepoWide(root, '# Global');
+
+      const first = loadCopilotInstructions(root);
+      const second = loadCopilotInstructions(root);
+      expect(first).toBe(second);
+      expect(await first).toBe(await second);
+    });
+
+    it('does not share a load between different roots', async () => {
+      const a = await projectDir();
+      const b = await projectDir();
+      await writeRepoWide(a, '# A');
+      await writeRepoWide(b, '# B');
+
+      const [ra, rb] = await Promise.all([loadCopilotInstructions(a), loadCopilotInstructions(b)]);
+      expect(ra.ok && ra.data.repoWide).toBe('# A');
+      expect(rb.ok && rb.data.repoWide).toBe('# B');
+    });
+
+    it('drops the in-flight entry once the load settles', async () => {
+      const root = await projectDir();
+      await writeRepoWide(root, '# Global');
+
+      const first = loadCopilotInstructions(root);
+      await first;
+      expect(loadCopilotInstructions(root)).not.toBe(first);
+    });
+
+    it('picks up an edited instruction file on the next review', async () => {
+      // Coalescing must not become caching: a fix to the review guidelines has
+      // to take effect without restarting the server.
+      const root = await projectDir();
+      await writeRepoWide(root, '# One');
+      const before = await loadCopilotInstructions(root);
+      await writeRepoWide(root, '# Two');
+      const after = await loadCopilotInstructions(root);
+
+      expect(before.ok && before.data.repoWide).toBe('# One');
+      expect(after.ok && after.data.repoWide).toBe('# Two');
+    });
+
+    it('does not pin a failure for every later request', async () => {
+      const root = await projectDir();
+      await writeRepoWide(root, 'x'.repeat(MAX_INSTRUCTION_FILE_BYTES + 1));
+      expect((await loadCopilotInstructions(root)).ok).toBe(false);
+
+      await writeRepoWide(root, '# Fixed');
+      const retried = await loadCopilotInstructions(root);
+      expect(retried.ok).toBe(true);
+      if (retried.ok) expect(retried.data.repoWide).toBe('# Fixed');
+    });
   });
 });
 
@@ -330,7 +570,7 @@ describe('filterByFiles', () => {
   it('matches multiple scoped instructions', () => {
     const result = filterByFiles(instructions, ['src/config/loader.ts']);
     expect(result.scoped).toHaveLength(2);
-    const filenames = result.scoped.map(s => s.filename);
+    const filenames = result.scoped.map((s) => s.filename);
     expect(filenames).toContain('ts.instructions.md');
     expect(filenames).toContain('config.instructions.md');
   });

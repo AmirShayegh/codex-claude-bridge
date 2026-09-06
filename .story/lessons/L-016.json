@@ -1,0 +1,20 @@
+{
+  "content": "When hardening a fail-open guard into a three-state lookup (found / absent / unavailable), audit every caller that supplies NO source at all — an absent source is not a failed lookup. Collapsing the two makes the strictest branch fire for the most common case, and the block happens before any real work, so it stays invisible to unit tests that always inject a source.",
+  "context": "T-038 replaced the cross-provider resume guard's fail-open contract with a found/absent/unavailable result. inspectSessionProvider returned SESSION_ROUTING_UNAVAILABLE when db was undefined, which is the normal CLI case whenever no reviews.db exists or the CLI runs outside the server's cwd (ISS-018). Every --session resume was refused before any provider call. All 939 tests passed because each one injects a mock db. Found only by running the built CLI with REVIEW_BRIDGE_DB pointed at a missing path. The fix needed TWO sites — the guard itself, and cli/commands.ts still constructing a provider lookup from an undefined db — so fixing the obvious one left the bug live. Fixed in PR #8.",
+  "createdDate": "2026-09-06",
+  "id": "L-016",
+  "lastValidated": "2026-09-06",
+  "reinforcements": 0,
+  "source": "review",
+  "status": "active",
+  "supersedes": null,
+  "tags": [
+    "review",
+    "refactoring",
+    "fail-open",
+    "cli",
+    "testing"
+  ],
+  "title": "Refactoring a fail-open guard: keep \"nothing to consult\" distinct from \"lookup failed\"",
+  "updatedDate": "2026-09-06"
+}

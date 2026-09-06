@@ -1,0 +1,19 @@
+{
+  "content": "Treat \"implemented, tests green, Story-approved\" as unfinished until committed and published. This bridge is consumed via `npx codex-claude-bridge@latest`, so downstream agents run the last PUBLISHED version and an uncommitted working tree is invisible to them however complete it is. When a feature answers a question users are actively asking, land and publish it rather than letting it sit.",
+  "context": "T-038 (responding-model metadata) was finished and Story-approved on 2026-07-13, then sat uncommitted for about two months. During that window external seats hit the exact gap it closes: on 2026-09-05 a peer session (runnerkit-17) reviewing code through the bridge could not tell which model had responded, inferred it from ~/.codex/config.toml, and filed it as feedback (ISS-031). Compounding factor: a stdio MCP server loads code at spawn and never hot-reloads, so even a rebuilt local dist reaches only newly started sessions. Committed to PR #8 this session; still unpublished.",
+  "createdDate": "2026-09-06",
+  "id": "L-017",
+  "lastValidated": "2026-09-06",
+  "reinforcements": 0,
+  "source": "postmortem",
+  "status": "active",
+  "supersedes": null,
+  "tags": [
+    "process",
+    "shipping",
+    "mcp",
+    "npm"
+  ],
+  "title": "A feature that is complete but uncommitted does not exist for anyone downstream",
+  "updatedDate": "2026-09-06"
+}

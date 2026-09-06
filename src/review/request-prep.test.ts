@@ -67,6 +67,18 @@ function deps(defaultWorkingDirectory: string, loadInstructions = false): Reques
   };
 }
 
+// Every describe below that inits a real repository is guarded by this, so a
+// runner without git SKIPS those cases instead of failing them. Skip guard
+// pattern from #7.
+const gitAvailable = await (async () => {
+  try {
+    await run('git', ['--version'], { env: subprocessEnv() });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
 afterAll(async () => {
   for (const dir of created) await rm(dir, { recursive: true, force: true });
 });
@@ -75,7 +87,7 @@ beforeEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('preparePlanReview', () => {
+describe.skipIf(!gitAvailable)('preparePlanReview', () => {
   it('runs in the directory the request names', async () => {
     const a = await tempDir();
     const b = await tempDir();
@@ -111,7 +123,7 @@ describe('preparePlanReview', () => {
   });
 });
 
-describe('prepareDiffReview — capture', () => {
+describe.skipIf(!gitAvailable)('prepareDiffReview — capture', () => {
   it('captures staged changes from the requested repository, not the default one', async () => {
     // The bug this feature fixes: the server sits in repository A while the
     // caller is working in repository B.
@@ -237,7 +249,7 @@ describe('prepareDiffReview — capture', () => {
   });
 });
 
-describe('prepareDiffReview — explicit diffs', () => {
+describe.skipIf(!gitAvailable)('prepareDiffReview — explicit diffs', () => {
   const DIFF = 'diff --git a/f b/f\n@@ -1 +1 @@\n-a\n+b';
 
   it('passes the diff through and reports no capture location', async () => {
@@ -268,7 +280,7 @@ describe('prepareDiffReview — explicit diffs', () => {
   });
 });
 
-describe('repository instruction files', () => {
+describe.skipIf(!gitAvailable)('repository instruction files', () => {
   async function withInstructions(body: string): Promise<string> {
     const repo = await repoWithCommit();
     await mkdir(join(repo, '.github'), { recursive: true });
@@ -369,7 +381,7 @@ describe('repository instruction files', () => {
   });
 });
 
-describe('bounded preparation', () => {
+describe.skipIf(!gitAvailable)('bounded preparation', () => {
   it('refuses excess concurrent preparations with REVIEW_BUSY', async () => {
     const repo = await repoWithCommit();
     const shared = deps(repo);
@@ -466,14 +478,6 @@ describe('bounded preparation', () => {
 // pointing at the main repository, the checked-out files live somewhere else
 // entirely, and a server started in the main repo would review the wrong tree.
 // Nothing here is mocked — this runs real `git worktree`.
-const gitAvailable = await (async () => {
-  try {
-    await run('git', ['--version'], { env: subprocessEnv() });
-    return true;
-  } catch {
-    return false;
-  }
-})();
 
 describe.skipIf(!gitAvailable)('real linked git worktrees', () => {
   async function withWorktree(): Promise<{ main: string; linked: string }> {

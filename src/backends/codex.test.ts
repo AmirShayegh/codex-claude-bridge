@@ -413,6 +413,48 @@ describe('reviewPlan', () => {
   });
 });
 
+// The LAST hop: the directory must reach the SDK as ThreadOptions.workingDirectory
+// (which it forwards as `--cd`), on a fresh thread AND on a resume — the SDK
+// reasserts thread options on resume, so a resume that dropped it would move an
+// in-flight review back to the server's own directory. Without a leaf-level
+// assertion, deleting the field from baseThreadOpts leaves this file green and
+// only the MCP integration suite notices. Shape from #7.
+describe('working directory threading (codex)', () => {
+  it('passes workingDirectory to startThread on a fresh review', async () => {
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
+    await createCodexBackend(config).reviewPlan({
+      execution: { workingDirectory: '/work/other' },
+      plan: 'My plan',
+    });
+    expect(mockStartThread).toHaveBeenCalledWith(
+      expect.objectContaining({ workingDirectory: '/work/other' }),
+    );
+    expect(mockResumeThread).not.toHaveBeenCalled();
+  });
+
+  it('passes workingDirectory to resumeThread on a resumed review', async () => {
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
+    await createCodexBackend(config).reviewPlan({
+      execution: { workingDirectory: '/work/other' },
+      plan: 'My plan',
+      session_id: 'existing_thread',
+    });
+    expect(mockResumeThread).toHaveBeenCalledWith(
+      'existing_thread',
+      expect.objectContaining({ workingDirectory: '/work/other' }),
+    );
+    expect(mockStartThread).not.toHaveBeenCalled();
+  });
+
+  it('never falls back to the process directory', async () => {
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
+    await createCodexBackend(config).reviewPlan({ execution: EXEC, plan: 'My plan' });
+    const opts = mockStartThread.mock.calls[0][0] as { workingDirectory?: string };
+    expect(opts.workingDirectory).toBe(EXEC.workingDirectory);
+    expect(opts.workingDirectory).not.toBe(process.cwd());
+  });
+});
+
 describe('model resolution (codex)', () => {
   it('resolves an unset model to the SDK-pinned default and passes it to startThread', async () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });

@@ -1163,6 +1163,7 @@ describe('createDeliberationBackend — provider-neutral tiers', () => {
     const { primary, secondary } = mixedPair({ crossReview: priCross }, { crossReview: secCross });
 
     await createDeliberationBackend(primary, secondary, { crossReview: true }).reviewCode({
+      execution: EXEC,
       diff: DIFF,
       model: 'max',
     });
@@ -1177,6 +1178,7 @@ describe('createDeliberationBackend — provider-neutral tiers', () => {
     const { primary, secondary } = mixedPair();
 
     await createDeliberationBackend(primary, secondary).reviewCode({
+      execution: EXEC,
       diff: DIFF,
       model: 'gpt-6-astra',
     });
@@ -1194,7 +1196,7 @@ describe('createDeliberationBackend — provider-neutral tiers', () => {
 
     await createDeliberationBackend(primary, secondary, {
       lookup: () => ({ status: 'found', value: 'gemini' }),
-    }).reviewCode({ diff: DIFF, session_id: 'gem-owned', model: 'fast' });
+    }).reviewCode({ execution: EXEC, diff: DIFF, session_id: 'gem-owned', model: 'fast' });
 
     // gemini owns the session and gets the tier as the caller's override;
     // codex reviews fresh and must get the same tier, not undefined.

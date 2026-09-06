@@ -716,7 +716,11 @@ describe('failure persistence', () => {
       recordOutcome: vi.fn(),
     });
 
-    const result = await lifecycle.reviewPlan({ plan: 'plan', session_id: 'old-owner' });
+    const result = await lifecycle.reviewPlan({
+      execution: EXEC,
+      plan: 'plan',
+      session_id: 'old-owner',
+    });
 
     expect(result.ok).toBe(false);
     expect(await statusOf(db, 'old-owner')).toBe('failed');
@@ -733,7 +737,11 @@ describe('failure persistence', () => {
       recordOutcome: vi.fn(),
     });
 
-    const result = await lifecycle.reviewPlan({ plan: 'plan', session_id: 'old-owner' });
+    const result = await lifecycle.reviewPlan({
+      execution: EXEC,
+      plan: 'plan',
+      session_id: 'old-owner',
+    });
 
     expect(result.ok).toBe(false);
     expect(await statusOf(db, 'old-owner')).toBe('failed');
@@ -752,7 +760,7 @@ describe('failure persistence', () => {
       recordOutcome: vi.fn(),
     });
 
-    await lifecycle.reviewPlan({ plan: 'plan' });
+    await lifecycle.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(await statusOf(db, 'fresh-partial')).toBe('failed');
   });
@@ -769,7 +777,7 @@ describe('failure persistence', () => {
       recordOutcome: vi.fn(),
     });
 
-    await lifecycle.reviewPlan({ plan: 'plan', session_id: 'old-owner' });
+    await lifecycle.reviewPlan({ execution: EXEC, plan: 'plan', session_id: 'old-owner' });
 
     expect(await statusOf(db, 'old-owner')).toBe('completed');
   });

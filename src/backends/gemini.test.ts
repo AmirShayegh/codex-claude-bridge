@@ -106,6 +106,7 @@ import {
   parseAgyModels,
   warnIfUnknownModel,
   clearGeminiModelCatalogCache,
+  MAX_AGY_PROMPT_BYTES,
 } from './gemini.js';
 import { DEFAULT_CONFIG } from '../config/types.js';
 
@@ -193,11 +194,22 @@ describe('runAgyPrint', () => {
 
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.data).toBe('{"verdict":"approve"}');
-    expect(lastArgs).toEqual(['--print', '--sandbox', '--model', 'Gemini 3.5 Flash (Medium)']);
+    // --print consumes the NEXT argument as the prompt, so it must be last:
+    // `--print --sandbox` made agy take "--sandbox" as the prompt.
+    expect(lastArgs).toEqual([
+      '--sandbox',
+      '--model',
+      'Gemini 3.5 Flash (Medium)',
+      '--print',
+      'review this',
+    ]);
     expect(lastArgs).not.toContain('--conversation');
     expect(lastArgs).not.toContain('--dangerously-skip-permissions');
     expect(lastCwd).toBe('/repo');
-    expect(lastChild.stdinChunks.join('')).toBe('review this');
+    // Nothing goes over stdin any more — agy binds the prompt to --print — but
+    // stdin must still be closed so agy sees EOF instead of waiting.
+    expect(lastChild.stdinChunks).toEqual([]);
+    expect(lastChild.stdin.end).toHaveBeenCalled();
     expect(lastChild.stdin.end).toHaveBeenCalled();
   });
 
@@ -815,16 +827,51 @@ describe('createGeminiBackend', () => {
     expect(lastArgs[lastArgs.indexOf('--model') + 1]).toBe('Gemini 3.5 Flash (Medium)');
   });
 
-  it('pipes the orchestrator-built review prompt (including the diff) to agy via stdin', async () => {
+  it('passes the orchestrator-built review prompt (including the diff) as the --print value', async () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-stdin' });
     script({ stdout: JSON.stringify(CODE_OK) });
 
     await createGeminiBackend(PINNED_CONFIG).reviewCode({ execution: EXEC, diff: SMALL_DIFF });
 
-    const piped = lastChild.stdinChunks.join('');
-    expect(piped).toContain(SMALL_DIFF); // the diff itself reaches agy
-    expect(piped.length).toBeGreaterThan(SMALL_DIFF.length); // wrapped in a review prompt
+    const prompt = lastArgs[lastArgs.indexOf('--print') + 1];
+    expect(lastArgs.indexOf('--print')).toBe(lastArgs.length - 2); // last flag, prompt last
+    expect(prompt).toContain(SMALL_DIFF); // the diff itself reaches agy
+    expect(prompt.length).toBeGreaterThan(SMALL_DIFF.length); // wrapped in a review prompt
+    expect(lastChild.stdinChunks).toEqual([]);
     expect(lastChild.stdin.end).toHaveBeenCalled();
+  });
+
+  it('keeps the prompt last even when --conversation is present', async () => {
+    fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-order' });
+    script({ stdout: JSON.stringify(CODE_OK) });
+
+    await createGeminiBackend(PINNED_CONFIG).reviewCode({
+      execution: EXEC,
+      diff: SMALL_DIFF,
+      session_id: 'conv-order',
+    });
+
+    const printAt = lastArgs.indexOf('--print');
+    expect(printAt).toBe(lastArgs.length - 2);
+    expect(lastArgs.indexOf('--conversation')).toBeLessThan(printAt);
+    expect(lastArgs.indexOf('--sandbox')).toBeLessThan(printAt);
+  });
+
+  // Linux caps one argv string at 128 KiB; spawn would fail with an opaque E2BIG.
+  it('refuses a prompt too large for the command line with a message naming the cause', async () => {
+    const res = await runAgyPrint({
+      prompt: 'x'.repeat(MAX_AGY_PROMPT_BYTES + 1),
+      model: 'Gemini 3.5 Flash (Medium)',
+      cwd: CWD,
+      timeoutMs: 1000,
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error).toMatch(/^INVALID_INPUT:/);
+      expect(res.error).toContain('max_chunk_tokens');
+    }
+    expect(spawnCount).toBe(0);
   });
 
   it('retries once on empty agy output, then succeeds', async () => {

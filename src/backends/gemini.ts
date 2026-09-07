@@ -110,9 +110,16 @@ export function classifyAgyError(raw: string): { code: ErrorCode; message: strin
 // length (chars), which is close enough to bytes for a safety valve.
 const MAX_AGY_OUTPUT_CHARS = 10 * 1024 * 1024; // ~10 MB
 
+// agy's --print takes the prompt as its VALUE. Linux caps one argv string at
+// 128 KiB (MAX_ARG_STRLEN); a spawn over that fails with an opaque E2BIG, so it
+// is checked here with a message that names the cause. Prompts are bounded by
+// max_chunk_tokens plus instruction files, and only approach this with very
+// large instruction trees.
+export const MAX_AGY_PROMPT_BYTES = 120 * 1024;
+
 export interface AgyPrintOptions {
-  // The full review prompt, piped to agy via stdin (avoids argv length limits
-  // for large diffs).
+  // The full review prompt. Passed as the value of --print: agy 1.1.27+ binds
+  // the prompt to that flag and no longer reads it from stdin.
   prompt: string;
   // Resolved agy model string, e.g. "Gemini 3.5 Flash (Medium)".
   model: string;
@@ -123,13 +130,30 @@ export interface AgyPrintOptions {
   timeoutMs: number;
 }
 
-// Run one `agy --print --sandbox` invocation and return its stdout. Never
-// throws: spawn failures, non-zero exits, and timeouts all resolve to a
+// Run one `agy --sandbox … --print <prompt>` invocation and return its stdout.
+// Never throws: spawn failures, non-zero exits, and timeouts all resolve to a
 // structured error Result. An exit-0 empty stdout resolves to ok('') so the
 // caller's parse-retry loop treats it like a malformed response.
+//
+// Argument ORDER is load-bearing. `--print` consumes the very next argument as
+// the prompt, so it must come last: `--print --sandbox …` made agy take
+// "--sandbox" as the prompt and drop the real one, and because this path only
+// runs as the failover when the primary is rate-limited, every such review
+// failed with no reviewer at all.
 export function runAgyPrint(opts: AgyPrintOptions): Promise<Result<string>> {
-  const args = ['--print', '--sandbox', '--model', opts.model];
+  const promptBytes = Buffer.byteLength(opts.prompt, 'utf-8');
+  if (promptBytes > MAX_AGY_PROMPT_BYTES) {
+    return Promise.resolve(
+      err(
+        `${ErrorCode.INVALID_INPUT}: review prompt is ${promptBytes} bytes, over the ` +
+          `${MAX_AGY_PROMPT_BYTES}-byte limit agy accepts on its command line. ` +
+          `Lower max_chunk_tokens or trim repository instruction files.`,
+      ),
+    );
+  }
+  const args = ['--sandbox', '--model', opts.model];
   if (opts.conversationId) args.push('--conversation', opts.conversationId);
+  args.push('--print', opts.prompt);
 
   return new Promise<Result<string>>((resolve) => {
     const controller = new AbortController();
@@ -211,14 +235,13 @@ export function runAgyPrint(opts: AgyPrintOptions): Promise<Result<string>> {
       finish(ok(stdout));
     });
 
-    // agy may close its read end before we finish writing (fast-fail paths like
-    // a bad model/auth, or the abort/timeout SIGTERM mid-flush of a large diff),
-    // surfacing EPIPE as an 'error' on the stdin Writable. An unhandled Writable
-    // 'error' is an uncaught exception that would crash the MCP server, so we
-    // swallow it — the real failure is already reported via the child
-    // 'error'/'close'/timeout handlers above. Honors the never-crash contract.
+    // The prompt travels on argv, so stdin only needs EOF — agy reads it and
+    // would otherwise wait. agy may already have closed its read end (fast-fail
+    // paths like a bad model/auth), surfacing EPIPE as an 'error' on the stdin
+    // Writable; an unhandled Writable 'error' is an uncaught exception that
+    // would crash the MCP server, so it is swallowed — the real failure is
+    // reported via the child 'error'/'close'/timeout handlers above.
     child.stdin?.on('error', () => {});
-    child.stdin?.write(opts.prompt);
     child.stdin?.end();
   });
 }

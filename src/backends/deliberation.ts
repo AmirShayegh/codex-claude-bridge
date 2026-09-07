@@ -225,6 +225,7 @@ function combineCode(
       : {}),
     // Surface the primary's chunk count at top level (the presented result).
     ...(ra.chunks_reviewed !== undefined ? { chunks_reviewed: ra.chunks_reviewed } : {}),
+    ...(ra.chunk_files !== undefined ? { chunk_files: ra.chunk_files } : {}),
     deliberation: {
       providers: [p, s],
       verdicts: [

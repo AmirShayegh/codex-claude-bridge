@@ -98,11 +98,18 @@ export function deduplicateFindings(findings: CodeFinding[]): CodeFinding[] {
   return [...map.values(), ...keyless];
 }
 
+// Per-chunk file lists for the result's chunk_files, only when the diff was
+// actually split — a single chunk held everything, so there is nothing to say.
+function chunkFileLists(chunks: string[]): string[][] | undefined {
+  return chunks.length > 1 ? chunks.map(extractFilesFromDiff) : undefined;
+}
+
 const codeVerdictRank: Record<string, number> = { approve: 0, request_changes: 1, reject: 2 };
 
 export function mergeCodeResults(
-  results: Omit<CodeReviewResult, 'chunks_reviewed'>[],
+  results: Omit<CodeReviewResult, 'chunks_reviewed' | 'chunk_files'>[],
   sessionId: string,
+  chunkFiles?: string[][],
 ): CodeReviewResult {
   let worstVerdict = results[0].verdict;
   for (const r of results) {
@@ -117,12 +124,14 @@ export function mergeCodeResults(
     findings: deduplicateFindings(results.flatMap((r) => r.findings)),
     session_id: sessionId,
     chunks_reviewed: results.length,
+    ...(chunkFiles ? { chunk_files: chunkFiles } : {}),
   };
 }
 
 export function mergePrecommitResults(
-  results: Omit<PrecommitResult, 'chunks_reviewed'>[],
+  results: Omit<PrecommitResult, 'chunks_reviewed' | 'chunk_files'>[],
   sessionId: string,
+  chunkFiles?: string[][],
 ): PrecommitResult {
   return {
     ready_to_commit: results.every((r) => r.ready_to_commit),
@@ -133,6 +142,7 @@ export function mergePrecommitResults(
     warnings: [...new Set(results.flatMap((r) => r.warnings))],
     session_id: sessionId,
     chunks_reviewed: results.length,
+    ...(chunkFiles ? { chunk_files: chunkFiles } : {}),
   };
 }
 
@@ -157,6 +167,7 @@ const PlanReviewResponseSchema = PlanReviewResultSchema.omit({
 const CodeReviewResponseSchema = CodeReviewResultSchema.omit({
   session_id: true,
   chunks_reviewed: true,
+  chunk_files: true,
   // Where the bridge captured the diff is host knowledge, not a review finding:
   // omitted so the reviewer can neither read it nor forge it (ISS-028).
   captured_from: true,
@@ -169,6 +180,7 @@ const CodeReviewResponseSchema = CodeReviewResultSchema.omit({
 const PrecommitResponseSchema = PrecommitResultSchema.omit({
   session_id: true,
   chunks_reviewed: true,
+  chunk_files: true,
   // See CodeReviewResponseSchema.
   captured_from: true,
   provider: true,
@@ -516,7 +528,9 @@ export async function runCodeReview(
       criteria: config.review_standards.code_review.criteria,
       require_tests: config.review_standards.code_review.require_tests,
     });
-    const result = await turn<Omit<CodeReviewResult, 'session_id' | 'chunks_reviewed'>>({
+    const result = await turn<
+      Omit<CodeReviewResult, 'session_id' | 'chunks_reviewed' | 'chunk_files'>
+    >({
       prompt,
       responseSchema: CodeReviewResponseSchema,
       workingDirectory,
@@ -534,7 +548,7 @@ export async function runCodeReview(
     criteria: config.review_standards.code_review.criteria,
     require_tests: config.review_standards.code_review.require_tests,
   };
-  const chunkResults: Omit<CodeReviewResult, 'chunks_reviewed'>[] = [];
+  const chunkResults: Omit<CodeReviewResult, 'chunks_reviewed' | 'chunk_files'>[] = [];
   // `threaded` carries chunk 1's session forward only when the backend resumes
   // across chunks; `reviewSessionId` is the id reported for the whole review —
   // always chunk 1's, regardless of mode.
@@ -545,7 +559,9 @@ export async function runCodeReview(
     const chunkHeader = `Chunk ${i + 1} of ${chunks.length}: reviewing the following files only.`;
     const prompt = buildCodeReviewPrompt({ ...input, diff: chunks[i], chunkHeader }, codeConfig);
     const chunkSession = chunkSessionFor(i, resumesAcrossChunks, threaded, input.session_id);
-    const result = await turn<Omit<CodeReviewResult, 'session_id' | 'chunks_reviewed'>>({
+    const result = await turn<
+      Omit<CodeReviewResult, 'session_id' | 'chunks_reviewed' | 'chunk_files'>
+    >({
       prompt,
       responseSchema: CodeReviewResponseSchema,
       workingDirectory,
@@ -573,7 +589,7 @@ export async function runCodeReview(
 
   const finalSessionId = resumesAcrossChunks ? threaded : reviewSessionId;
   return enrichModelIdentity(
-    ok(mergeCodeResults(chunkResults, finalSessionId!)),
+    ok(mergeCodeResults(chunkResults, finalSessionId!, chunkFileLists(chunks))),
     deps,
     prepared,
     'review',
@@ -636,7 +652,9 @@ export async function runPrecommitReview(
       copilot_instructions: precommitInstrText,
       block_on: config.review_standards.precommit.block_on,
     });
-    const result = await turn<Omit<PrecommitResult, 'session_id' | 'chunks_reviewed'>>({
+    const result = await turn<
+      Omit<PrecommitResult, 'session_id' | 'chunks_reviewed' | 'chunk_files'>
+    >({
       prompt,
       responseSchema: PrecommitResponseSchema,
       workingDirectory,
@@ -653,7 +671,7 @@ export async function runPrecommitReview(
     copilot_instructions: precommitInstrText,
     block_on: config.review_standards.precommit.block_on,
   };
-  const chunkResults: Omit<PrecommitResult, 'chunks_reviewed'>[] = [];
+  const chunkResults: Omit<PrecommitResult, 'chunks_reviewed' | 'chunk_files'>[] = [];
   let threaded = input.session_id;
   let reviewSessionId: string | undefined;
 
@@ -664,7 +682,9 @@ export async function runPrecommitReview(
       precommitConfig,
     );
     const chunkSession = chunkSessionFor(i, resumesAcrossChunks, threaded, input.session_id);
-    const result = await turn<Omit<PrecommitResult, 'session_id' | 'chunks_reviewed'>>({
+    const result = await turn<
+      Omit<PrecommitResult, 'session_id' | 'chunks_reviewed' | 'chunk_files'>
+    >({
       prompt,
       responseSchema: PrecommitResponseSchema,
       workingDirectory,
@@ -690,7 +710,7 @@ export async function runPrecommitReview(
 
   const finalSessionId = resumesAcrossChunks ? threaded : reviewSessionId;
   return enrichModelIdentity(
-    ok(mergePrecommitResults(chunkResults, finalSessionId!)),
+    ok(mergePrecommitResults(chunkResults, finalSessionId!, chunkFileLists(chunks))),
     deps,
     prepared,
     'review',

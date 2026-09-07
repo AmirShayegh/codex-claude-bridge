@@ -318,7 +318,7 @@ Create `.reviewbridge.json` in your project root to customize review behavior:
 }
 ```
 
-All fields are optional. Missing fields use the defaults shown above. Large diffs are automatically split into chunks of approximately `max_chunk_tokens` tokens and reviewed sequentially.
+All fields are optional. Missing fields use the defaults shown above. Large diffs are automatically split into chunks of approximately `max_chunk_tokens` tokens and reviewed sequentially. `review_code` and `review_precommit` results report `chunks_reviewed` (how many reviewer calls ran) and, when the diff was split, `chunk_files` — the files each chunk held, in order — so you can tell whether any single call saw two files together.
 
 - **`provider`** — `"codex"` (default) or `"gemini"`. Selects which backend reviews.
 - **`mode`** — `"failover"` (default), `"single"`, `"deliberate"`, or `"deliberate-deep"`. Picks how the two providers combine; see [Provider failover](#provider-failover) and [Deliberation](#deliberation). When unset it's derived from `fallback`.

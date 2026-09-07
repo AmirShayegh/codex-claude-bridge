@@ -726,6 +726,13 @@ describe('merge helpers', () => {
       expect(merged.chunks_reviewed).toBe(2);
       expect(merged.session_id).toBe('sid');
     });
+
+    it('records the files each chunk held when given, and omits chunk_files otherwise', () => {
+      const parts = [cr('approve', 'a.', []), cr('approve', 'b.', [])];
+      const withFiles = mergeCodeResults(parts, 'sid', [['a.ts', 'b.ts'], ['c.ts']]);
+      expect(withFiles.chunk_files).toEqual([['a.ts', 'b.ts'], ['c.ts']]);
+      expect(mergeCodeResults(parts, 'sid')).not.toHaveProperty('chunk_files');
+    });
   });
 
   describe('mergePrecommitResults', () => {
@@ -756,6 +763,15 @@ describe('merge helpers', () => {
       expect(merged.blockers).toEqual(['secret in config', 'debug log']); // 'secret in config' not repeated
       expect(merged.warnings).toEqual(['slow test', 'todo left']);
       expect(merged.chunks_reviewed).toBe(2);
+    });
+
+    it('records the files each chunk held when given, and omits chunk_files otherwise', () => {
+      const parts = [pr(true, [], []), pr(true, [], [])];
+      expect(mergePrecommitResults(parts, 'sid', [['a.ts'], ['b.ts']]).chunk_files).toEqual([
+        ['a.ts'],
+        ['b.ts'],
+      ]);
+      expect(mergePrecommitResults(parts, 'sid')).not.toHaveProperty('chunk_files');
     });
   });
 

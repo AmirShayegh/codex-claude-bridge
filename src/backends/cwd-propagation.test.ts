@@ -114,6 +114,36 @@ describe('every orchestrated turn carries the requested directory', () => {
     expect(calls.every((c) => c.workingDirectory === '/work/repo-b')).toBe(true);
   });
 
+  it('names the files each chunk held, so a reader can tell which files shared a call', async () => {
+    const { turn } = recordingTurn(CODE_OK);
+    const result = await runCodeReview(
+      { diff: BIG_DIFF, execution: REQUESTED },
+      deps({ max_chunk_tokens: 700 }),
+      turn,
+    );
+    if (!result.ok) throw new Error(result.error);
+    const files = result.data.chunk_files!;
+    expect(files).toHaveLength(result.data.chunks_reviewed!);
+    // Every file lands in exactly one chunk, in diff order.
+    expect(files.flat()).toEqual(Array.from({ length: 12 }, (_, i) => `f${i}.ts`));
+    expect(files.every((f) => f.length > 0)).toBe(true);
+
+    const precommit = await runPrecommitReview(
+      { diff: BIG_DIFF, execution: REQUESTED },
+      deps({ max_chunk_tokens: 700 }),
+      recordingTurn(PRECOMMIT_OK).turn,
+    );
+    if (!precommit.ok) throw new Error(precommit.error);
+    expect(precommit.data.chunk_files).toEqual(files);
+  });
+
+  it('omits chunk_files when the diff fit in a single call', async () => {
+    const { turn } = recordingTurn(CODE_OK);
+    const result = await runCodeReview({ diff: SMALL_DIFF, execution: REQUESTED }, deps(), turn);
+    if (!result.ok) throw new Error(result.error);
+    expect(result.data).not.toHaveProperty('chunk_files');
+  });
+
   it('a RESUMED turn, which is where a divergence would be invisible', async () => {
     // Codex reasserts thread options on resume: a resume that kept the server's
     // directory would move an in-flight review to another repository mid-session.

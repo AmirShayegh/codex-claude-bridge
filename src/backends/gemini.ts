@@ -110,16 +110,9 @@ export function classifyAgyError(raw: string): { code: ErrorCode; message: strin
 // length (chars), which is close enough to bytes for a safety valve.
 const MAX_AGY_OUTPUT_CHARS = 10 * 1024 * 1024; // ~10 MB
 
-// agy's --print takes the prompt as its VALUE. Linux caps one argv string at
-// 128 KiB (MAX_ARG_STRLEN); a spawn over that fails with an opaque E2BIG, so it
-// is checked here with a message that names the cause. Prompts are bounded by
-// max_chunk_tokens plus instruction files, and only approach this with very
-// large instruction trees.
-export const MAX_AGY_PROMPT_BYTES = 120 * 1024;
-
 export interface AgyPrintOptions {
-  // The full review prompt. Passed as the value of --print: agy 1.1.27+ binds
-  // the prompt to that flag and no longer reads it from stdin.
+  // The full review prompt. Delivered on stdin as one stream-json message, so
+  // its size is bounded by nothing on the command line (see runAgyPrint).
   prompt: string;
   // Resolved agy model string, e.g. "Gemini 3.5 Flash (Medium)".
   model: string;
@@ -130,30 +123,61 @@ export interface AgyPrintOptions {
   timeoutMs: number;
 }
 
-// Run one `agy --sandbox … --print <prompt>` invocation and return its stdout.
-// Never throws: spawn failures, non-zero exits, and timeouts all resolve to a
-// structured error Result. An exit-0 empty stdout resolves to ok('') so the
+// The one stream-json event agy emits that carries the answer. Everything else
+// on stdout (init, step_update) is progress and is ignored.
+interface AgyResultEvent {
+  event: 'result';
+  result: { status: string; response: string; error?: string; conversation_id?: string };
+}
+
+function isAgyResultEvent(value: unknown): value is AgyResultEvent {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as { event?: unknown; result?: unknown };
+  if (v.event !== 'result' || typeof v.result !== 'object' || v.result === null) return false;
+  const r = v.result as { status?: unknown; response?: unknown };
+  return typeof r.status === 'string' && typeof r.response === 'string';
+}
+
+// Find the final `result` event in agy's NDJSON stdout. Null when agy printed
+// no such event — the caller then hands the raw text to the JSON parser, which
+// reports it the same way it reports an empty response.
+export function extractAgyResult(stdout: string): AgyResultEvent['result'] | null {
+  let found: AgyResultEvent['result'] | null = null;
+  for (const line of stdout.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('{')) continue;
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      if (isAgyResultEvent(parsed)) found = parsed.result;
+    } catch {
+      // A partial or non-JSON line is progress noise, not the answer.
+    }
+  }
+  return found;
+}
+
+// Run one agy turn and return the model's response text. Never throws: spawn
+// failures, non-zero exits, and timeouts all resolve to a structured error
+// Result. An exit-0 run with no result event resolves to ok(raw stdout) so the
 // caller's parse-retry loop treats it like a malformed response.
 //
-// Argument ORDER is load-bearing. `--print` consumes the very next argument as
-// the prompt, so it must come last: `--print --sandbox …` made agy take
-// "--sandbox" as the prompt and drop the real one, and because this path only
-// runs as the failover when the primary is rate-limited, every such review
-// failed with no reviewer at all.
+// WHY stream-json and not --print <prompt>: agy 1.1.27 stopped reading the
+// prompt from stdin and made it the VALUE of --print. Putting it on argv would
+// work until it did not — Linux caps one argv string at 128 KiB, and a
+// ten-commit review of one package already measures over 100 KiB before the
+// prompt scaffolding. `--input-format stream-json` is agy's own stdin channel:
+// one NDJSON message in, a `result` event out, no size limit anywhere, and the
+// result carries the conversation id as well. The old order
+// (`--print --sandbox …`) had made agy take "--sandbox" as the prompt, failing
+// every Gemini review exactly when it was the failover of last resort.
 export function runAgyPrint(opts: AgyPrintOptions): Promise<Result<string>> {
-  const promptBytes = Buffer.byteLength(opts.prompt, 'utf-8');
-  if (promptBytes > MAX_AGY_PROMPT_BYTES) {
-    return Promise.resolve(
-      err(
-        `${ErrorCode.INVALID_INPUT}: review prompt is ${promptBytes} bytes, over the ` +
-          `${MAX_AGY_PROMPT_BYTES}-byte limit agy accepts on its command line. ` +
-          `Lower max_chunk_tokens or trim repository instruction files.`,
-      ),
-    );
-  }
   const args = ['--sandbox', '--model', opts.model];
   if (opts.conversationId) args.push('--conversation', opts.conversationId);
-  args.push('--print', opts.prompt);
+  args.push('--input-format', 'stream-json', '--output-format', 'stream-json');
+  const message = JSON.stringify({
+    event: 'user',
+    message: { role: 'user', content: opts.prompt },
+  });
 
   return new Promise<Result<string>>((resolve) => {
     const controller = new AbortController();
@@ -232,16 +256,29 @@ export function runAgyPrint(opts: AgyPrintOptions): Promise<Result<string>> {
         finish(err(`${classified.code}: ${classified.message}`));
         return;
       }
-      finish(ok(stdout));
+      const result = extractAgyResult(stdout);
+      if (result === null) {
+        finish(ok(stdout));
+        return;
+      }
+      if (result.status !== 'SUCCESS') {
+        // agy reports its own failures (bad model, auth, rate limit) inside the
+        // result event with exit 0, so the text to classify lives there.
+        const classified = classifyAgyError(result.error || stderr || result.status);
+        finish(err(`${classified.code}: ${classified.message}`));
+        return;
+      }
+      finish(ok(result.response));
     });
 
-    // The prompt travels on argv, so stdin only needs EOF — agy reads it and
-    // would otherwise wait. agy may already have closed its read end (fast-fail
-    // paths like a bad model/auth), surfacing EPIPE as an 'error' on the stdin
-    // Writable; an unhandled Writable 'error' is an uncaught exception that
-    // would crash the MCP server, so it is swallowed — the real failure is
-    // reported via the child 'error'/'close'/timeout handlers above.
+    // agy may close its read end before we finish writing (fast-fail paths like
+    // a bad model/auth, or the abort/timeout SIGTERM mid-flush of a large diff),
+    // surfacing EPIPE as an 'error' on the stdin Writable. An unhandled Writable
+    // 'error' is an uncaught exception that would crash the MCP server, so we
+    // swallow it — the real failure is already reported via the child
+    // 'error'/'close'/timeout handlers above. Honors the never-crash contract.
     child.stdin?.on('error', () => {});
+    child.stdin?.write(message + '\n');
     child.stdin?.end();
   });
 }

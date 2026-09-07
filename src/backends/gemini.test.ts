@@ -82,6 +82,22 @@ function script(...responses: Scripted[]): void {
   scriptedResponses.push(...responses);
 }
 
+// What agy actually prints for a successful turn: NDJSON progress events and a
+// final `result` event whose `response` is the model's text. Review fixtures go
+// through this so the tests speak the real protocol, not raw JSON on stdout.
+function agyResultLine(response: string, status = 'SUCCESS', error?: string): string {
+  const init = JSON.stringify({ event: 'init', conversation_id: 'conv-fixture' });
+  const result = JSON.stringify({
+    event: 'result',
+    result: { conversation_id: 'conv-fixture', status, response, ...(error ? { error } : {}) },
+  });
+  return `${init}\n${result}\n`;
+}
+
+function agyOk(response: unknown): Scripted {
+  return { stdout: agyResultLine(JSON.stringify(response)) };
+}
+
 // --- fs/os boundary mock for the conversation-id cache ---
 let fakeFiles: Record<string, string> = {};
 vi.mock('node:os', () => ({ homedir: () => '/home/test' }));
@@ -106,7 +122,6 @@ import {
   parseAgyModels,
   warnIfUnknownModel,
   clearGeminiModelCatalogCache,
-  MAX_AGY_PROMPT_BYTES,
 } from './gemini.js';
 import { DEFAULT_CONFIG } from '../config/types.js';
 
@@ -186,36 +201,79 @@ const OPTS = {
 };
 
 describe('runAgyPrint', () => {
-  it('spawns agy in print+sandbox mode with the model, pipes the prompt to stdin, returns stdout', async () => {
+  it('spawns agy in sandbox stream-json mode, sends the prompt as one NDJSON message, returns the result response', async () => {
     const p = runAgyPrint(OPTS);
-    lastChild.stdout.emit('data', Buffer.from('{"verdict":"approve"}'));
+    lastChild.stdout.emit('data', Buffer.from(agyResultLine('{"verdict":"approve"}')));
     lastChild.emit('close', 0);
     const res = await p;
 
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.data).toBe('{"verdict":"approve"}');
-    // --print consumes the NEXT argument as the prompt, so it must be last:
-    // `--print --sandbox` made agy take "--sandbox" as the prompt.
+    // No --print at all: the prompt is not on argv, so nothing on the command
+    // line can be mistaken for it, and nothing caps its size.
     expect(lastArgs).toEqual([
       '--sandbox',
       '--model',
       'Gemini 3.5 Flash (Medium)',
-      '--print',
-      'review this',
+      '--input-format',
+      'stream-json',
+      '--output-format',
+      'stream-json',
     ]);
+    expect(lastArgs).not.toContain('--print');
     expect(lastArgs).not.toContain('--conversation');
     expect(lastArgs).not.toContain('--dangerously-skip-permissions');
     expect(lastCwd).toBe('/repo');
-    // Nothing goes over stdin any more — agy binds the prompt to --print — but
-    // stdin must still be closed so agy sees EOF instead of waiting.
-    expect(lastChild.stdinChunks).toEqual([]);
+    // Exactly one stream-json user message, newline-terminated, then EOF.
+    const sent = lastChild.stdinChunks.join('');
+    expect(sent.endsWith('\n')).toBe(true);
+    expect(JSON.parse(sent)).toEqual({
+      event: 'user',
+      message: { role: 'user', content: 'review this' },
+    });
     expect(lastChild.stdin.end).toHaveBeenCalled();
-    expect(lastChild.stdin.end).toHaveBeenCalled();
+  });
+
+  it('surfaces an agy-reported failure carried inside an exit-0 result event', async () => {
+    const p = runAgyPrint(OPTS);
+    lastChild.stdout.emit(
+      'data',
+      Buffer.from(agyResultLine('', 'ERROR', 'you are not authenticated')),
+    );
+    lastChild.emit('close', 0);
+    const res = await p;
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain(ErrorCode.AUTH_ERROR);
+  });
+
+  it('ignores progress events and takes the LAST result event', async () => {
+    const p = runAgyPrint(OPTS);
+    const progress = JSON.stringify({ event: 'step_update', step_update: { state: 'DONE' } });
+    lastChild.stdout.emit('data', Buffer.from(`${progress}\n`));
+    lastChild.stdout.emit('data', Buffer.from(agyResultLine('first')));
+    lastChild.stdout.emit('data', Buffer.from(agyResultLine('final')));
+    lastChild.emit('close', 0);
+    const res = await p;
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.data).toBe('final');
+  });
+
+  // A large multi-commit review diff already measures over 100 KiB before the
+  // prompt scaffolding — the channel must carry it, not refuse it.
+  it('carries a prompt far larger than any argv string limit', async () => {
+    const big = 'x'.repeat(512 * 1024);
+    const p = runAgyPrint({ ...OPTS, prompt: big });
+    lastChild.stdout.emit('data', Buffer.from(agyResultLine('{}')));
+    lastChild.emit('close', 0);
+    const res = await p;
+    expect(res.ok).toBe(true);
+    expect(lastArgs.join(' ').length).toBeLessThan(1024);
+    expect(JSON.parse(lastChild.stdinChunks.join('')).message.content).toHaveLength(big.length);
   });
 
   it('passes --conversation <id> when resuming a session', async () => {
     const p = runAgyPrint({ ...OPTS, conversationId: 'conv-123' });
-    lastChild.stdout.emit('data', Buffer.from('{}'));
+    lastChild.stdout.emit('data', Buffer.from(agyResultLine('{}')));
     lastChild.emit('close', 0);
     await p;
     expect(lastArgs).toContain('--conversation');
@@ -263,7 +321,7 @@ describe('runAgyPrint', () => {
     expect(() =>
       lastChild.stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })),
     ).not.toThrow();
-    lastChild.stdout.emit('data', Buffer.from('{"verdict":"approve"}'));
+    lastChild.stdout.emit('data', Buffer.from(agyResultLine('{"verdict":"approve"}')));
     lastChild.emit('close', 0);
     const res = await p;
     expect(res.ok).toBe(true);
@@ -576,7 +634,7 @@ describe('createGeminiBackend', () => {
   it('reviewPlan: fresh run with no model resolves the latest Flash from agy, runs in sandbox, captures the id', async () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-new' });
     // First spawn: `agy models`. Second spawn: the review itself.
-    script({ stdout: REAL_AGY_MODELS, code: 0 }, { stdout: JSON.stringify(PLAN_OK) });
+    script({ stdout: REAL_AGY_MODELS, code: 0 }, agyOk(PLAN_OK));
 
     const res = await createGeminiBackend(DEFAULT_CONFIG).reviewPlan({
       execution: EXEC,
@@ -599,7 +657,7 @@ describe('createGeminiBackend', () => {
 
   it('reviewCode: resuming a session passes --conversation and reuses that id (no capture needed)', async () => {
     // No cache entry on purpose — the resume path must not depend on capture.
-    script({ stdout: JSON.stringify(CODE_OK) });
+    script(agyOk(CODE_OK));
 
     const res = await createGeminiBackend(PINNED_CONFIG).reviewCode({
       execution: EXEC,
@@ -640,7 +698,7 @@ describe('createGeminiBackend', () => {
     ['more than 256 characters', 'x'.repeat(257)],
   ])('rejects a fresh cached conversation id with %s', async (_case, conversationId) => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: conversationId });
-    script({ stdout: JSON.stringify(PLAN_OK) });
+    script(agyOk(PLAN_OK));
 
     const result = await createGeminiBackend(PINNED_CONFIG).reviewPlan({
       execution: EXEC,
@@ -657,7 +715,7 @@ describe('createGeminiBackend', () => {
 
   it('retries once on malformed JSON, then succeeds (two spawns)', async () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-retry' });
-    script({ stdout: 'not json at all' }, { stdout: JSON.stringify(PLAN_OK) });
+    script({ stdout: 'not json at all' }, agyOk(PLAN_OK));
 
     const res = await createGeminiBackend(PINNED_CONFIG).reviewPlan({ execution: EXEC, plan: 'x' });
 
@@ -753,7 +811,7 @@ describe('createGeminiBackend', () => {
 
   it('reports a cache-capture miss as a STORAGE_ERROR, not a parse error (m4)', async () => {
     // cache has no entry for CWD → the review parsed fine but the id can't be read.
-    script({ stdout: JSON.stringify(PLAN_OK) });
+    script(agyOk(PLAN_OK));
 
     const res = await createGeminiBackend(PINNED_CONFIG).reviewPlan({ execution: EXEC, plan: 'x' });
 
@@ -766,7 +824,7 @@ describe('createGeminiBackend', () => {
   });
 
   it('allows session_id + model together — model override on a resumed session', async () => {
-    script({ stdout: JSON.stringify(CODE_OK) });
+    script(agyOk(CODE_OK));
 
     const res = await createGeminiBackend(DEFAULT_CONFIG).reviewCode({
       execution: EXEC,
@@ -784,7 +842,7 @@ describe('createGeminiBackend', () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-latest' });
     script(
       { stdout: 'Gemini 4.0 Flash (Medium)\nGemini 3.5 Flash (Medium)', code: 0 },
-      { stdout: JSON.stringify(CODE_OK) },
+      agyOk(CODE_OK),
     );
 
     const res = await createGeminiBackend(DEFAULT_CONFIG).reviewCode({
@@ -800,7 +858,7 @@ describe('createGeminiBackend', () => {
 
   it('resolves a tier to its Gemini model without querying `agy models`', async () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-tier' });
-    script({ stdout: JSON.stringify(CODE_OK) });
+    script(agyOk(CODE_OK));
 
     const res = await createGeminiBackend(DEFAULT_CONFIG).reviewCode({
       execution: EXEC,
@@ -815,7 +873,7 @@ describe('createGeminiBackend', () => {
 
   it('completes the review on the safe fallback model when the `agy models` query fails', async () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-fallback' });
-    script({ stderr: 'boom', code: 1 }, { stdout: JSON.stringify(PLAN_OK) });
+    script({ stderr: 'boom', code: 1 }, agyOk(PLAN_OK));
 
     const res = await createGeminiBackend(DEFAULT_CONFIG).reviewPlan({
       execution: EXEC,
@@ -827,23 +885,22 @@ describe('createGeminiBackend', () => {
     expect(lastArgs[lastArgs.indexOf('--model') + 1]).toBe('Gemini 3.5 Flash (Medium)');
   });
 
-  it('passes the orchestrator-built review prompt (including the diff) as the --print value', async () => {
+  it('sends the orchestrator-built review prompt (including the diff) as the stream-json message', async () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-stdin' });
-    script({ stdout: JSON.stringify(CODE_OK) });
+    script(agyOk(CODE_OK));
 
     await createGeminiBackend(PINNED_CONFIG).reviewCode({ execution: EXEC, diff: SMALL_DIFF });
 
-    const prompt = lastArgs[lastArgs.indexOf('--print') + 1];
-    expect(lastArgs.indexOf('--print')).toBe(lastArgs.length - 2); // last flag, prompt last
-    expect(prompt).toContain(SMALL_DIFF); // the diff itself reaches agy
-    expect(prompt.length).toBeGreaterThan(SMALL_DIFF.length); // wrapped in a review prompt
-    expect(lastChild.stdinChunks).toEqual([]);
+    const sent = JSON.parse(lastChild.stdinChunks.join(''));
+    expect(sent.event).toBe('user');
+    expect(sent.message.content).toContain(SMALL_DIFF); // the diff itself reaches agy
+    expect(sent.message.content.length).toBeGreaterThan(SMALL_DIFF.length); // wrapped in a prompt
+    expect(lastArgs).not.toContain('--print');
     expect(lastChild.stdin.end).toHaveBeenCalled();
   });
 
-  it('keeps the prompt last even when --conversation is present', async () => {
-    fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-order' });
-    script({ stdout: JSON.stringify(CODE_OK) });
+  it('keeps stream-json mode with --conversation on a resumed session', async () => {
+    script(agyOk(CODE_OK));
 
     await createGeminiBackend(PINNED_CONFIG).reviewCode({
       execution: EXEC,
@@ -851,32 +908,14 @@ describe('createGeminiBackend', () => {
       session_id: 'conv-order',
     });
 
-    const printAt = lastArgs.indexOf('--print');
-    expect(printAt).toBe(lastArgs.length - 2);
-    expect(lastArgs.indexOf('--conversation')).toBeLessThan(printAt);
-    expect(lastArgs.indexOf('--sandbox')).toBeLessThan(printAt);
-  });
-
-  // Linux caps one argv string at 128 KiB; spawn would fail with an opaque E2BIG.
-  it('refuses a prompt too large for the command line with a message naming the cause', async () => {
-    const res = await runAgyPrint({
-      prompt: 'x'.repeat(MAX_AGY_PROMPT_BYTES + 1),
-      model: 'Gemini 3.5 Flash (Medium)',
-      cwd: CWD,
-      timeoutMs: 1000,
-    });
-
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.error).toMatch(/^INVALID_INPUT:/);
-      expect(res.error).toContain('max_chunk_tokens');
-    }
-    expect(spawnCount).toBe(0);
+    expect(lastArgs[lastArgs.indexOf('--conversation') + 1]).toBe('conv-order');
+    expect(lastArgs[lastArgs.indexOf('--input-format') + 1]).toBe('stream-json');
+    expect(lastArgs[lastArgs.indexOf('--output-format') + 1]).toBe('stream-json');
   });
 
   it('retries once on empty agy output, then succeeds', async () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-empty' });
-    script({ stdout: '', code: 0 }, { stdout: JSON.stringify(PLAN_OK) });
+    script({ stdout: '', code: 0 }, agyOk(PLAN_OK));
 
     const res = await createGeminiBackend(PINNED_CONFIG).reviewPlan({ execution: EXEC, plan: 'x' });
 
@@ -887,7 +926,7 @@ describe('createGeminiBackend', () => {
   it('chunked review: each chunk is an independent agy run; the review id is chunk 1’s captured id', async () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-chunk1' });
     // Generously script success for every chunk (extra entries are ignored).
-    script(...Array.from({ length: 10 }, () => ({ stdout: JSON.stringify(CODE_OK) })));
+    script(...Array.from({ length: 10 }, () => agyOk(CODE_OK)));
 
     const res = await createGeminiBackend({ ...PINNED_CONFIG, max_chunk_tokens: 2500 }).reviewCode({
       execution: EXEC,
@@ -908,7 +947,7 @@ describe('createGeminiBackend', () => {
     const warn = vi.spyOn(console, 'error').mockImplementation(() => {});
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-bad' });
     // First spawn validates against `agy models`; second is the review.
-    script({ stdout: REAL_AGY_MODELS, code: 0 }, { stdout: JSON.stringify(CODE_OK) });
+    script({ stdout: REAL_AGY_MODELS, code: 0 }, agyOk(CODE_OK));
 
     const res = await createGeminiBackend({
       ...DEFAULT_CONFIG,
@@ -925,7 +964,7 @@ describe('createGeminiBackend', () => {
   it('a valid but non-recommended pinned model runs with no warning (ISS-006)', async () => {
     const warn = vi.spyOn(console, 'error').mockImplementation(() => {});
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-low' });
-    script({ stdout: REAL_AGY_MODELS, code: 0 }, { stdout: JSON.stringify(CODE_OK) });
+    script({ stdout: REAL_AGY_MODELS, code: 0 }, agyOk(CODE_OK));
 
     const res = await createGeminiBackend({
       ...DEFAULT_CONFIG,
@@ -940,7 +979,7 @@ describe('createGeminiBackend', () => {
 
   it('a recommended pinned model skips the `agy models` validation query entirely (ISS-006)', async () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-rec' });
-    script({ stdout: JSON.stringify(CODE_OK) });
+    script(agyOk(CODE_OK));
 
     const res = await createGeminiBackend({
       ...DEFAULT_CONFIG,
@@ -954,7 +993,7 @@ describe('createGeminiBackend', () => {
   it('multi-chunk: a later chunk failure surfaces chunk 1’s session id (T-001)', async () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-partial' });
     // Chunk 1 succeeds (captures conv-partial); chunk 2 fails at the agy boundary.
-    script({ stdout: JSON.stringify(CODE_OK) }, { stderr: 'you are not authenticated', code: 1 });
+    script(agyOk(CODE_OK), { stderr: 'you are not authenticated', code: 1 });
 
     const res = await createGeminiBackend({ ...PINNED_CONFIG, max_chunk_tokens: 2500 }).reviewCode({
       execution: EXEC,
@@ -975,13 +1014,13 @@ describe('createGeminiBackend', () => {
     // deterministically (both become 'race-id-B') if the serialization is removed.
     script(
       {
-        stdout: JSON.stringify(PLAN_OK),
+        ...agyOk(PLAN_OK),
         onEmit: () => {
           fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'race-id-A' });
         },
       },
       {
-        stdout: JSON.stringify(PLAN_OK),
+        ...agyOk(PLAN_OK),
         onEmit: () => {
           fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'race-id-B' });
         },
@@ -1012,7 +1051,7 @@ describe('createGeminiBackend', () => {
 describe('agy subprocess environment', () => {
   it('spawns the reviewer with a sanitized environment whose PWD is the request directory', async () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-env' });
-    script({ stdout: JSON.stringify(CODE_OK) });
+    script(agyOk(CODE_OK));
 
     const res = await createGeminiBackend(PINNED_CONFIG).reviewCode({ diff: 'x', execution: EXEC });
 

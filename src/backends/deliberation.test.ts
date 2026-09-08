@@ -1110,3 +1110,57 @@ describe('createDeliberationBackend — deliberate-deep (cross-review round)', (
     expect(secReview).toHaveBeenCalledWith(expect.objectContaining({ model: undefined })); // secondary resolves own
   });
 });
+
+// A tier is provider-neutral, so it must reach BOTH reviewers and both
+// adjudicators — as it already does across failover. A concrete model id is
+// meaningful only to the provider it names and must still be dropped.
+describe('createDeliberationBackend — provider-neutral tiers', () => {
+  it('carries a tier to the secondary reviewer and to both adjudicators', async () => {
+    const priCross = vi.fn().mockResolvedValue(ok(cross('confirmed', 'yes')));
+    const secCross = vi.fn().mockResolvedValue(ok(cross('confirmed', 'yes')));
+    const { primary, secondary } = mixedPair({ crossReview: priCross }, { crossReview: secCross });
+
+    await createDeliberationBackend(primary, secondary, { crossReview: true }).reviewCode({
+      diff: DIFF,
+      model: 'max',
+    });
+
+    expect(primary.reviewCode).toHaveBeenCalledWith(expect.objectContaining({ model: 'max' }));
+    expect(secondary.reviewCode).toHaveBeenCalledWith(expect.objectContaining({ model: 'max' }));
+    expect(priCross).toHaveBeenCalledWith(expect.objectContaining({ model: 'max' }));
+    expect(secCross).toHaveBeenCalledWith(expect.objectContaining({ model: 'max' }));
+  });
+
+  it('still drops a concrete model id for the secondary reviewer', async () => {
+    const { primary, secondary } = mixedPair();
+
+    await createDeliberationBackend(primary, secondary).reviewCode({
+      diff: DIFF,
+      model: 'gpt-6-astra',
+    });
+
+    expect(primary.reviewCode).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'gpt-6-astra' }),
+    );
+    expect(secondary.reviewCode).toHaveBeenCalledWith(
+      expect.objectContaining({ model: undefined }),
+    );
+  });
+
+  it('carries a tier to the other reviewer on a resumed session too', async () => {
+    const { primary, secondary } = mixedPair();
+
+    await createDeliberationBackend(primary, secondary, {
+      lookup: () => ({ status: 'found', value: 'gemini' }),
+    }).reviewCode({ diff: DIFF, session_id: 'gem-owned', model: 'fast' });
+
+    // gemini owns the session and gets the tier as the caller's override;
+    // codex reviews fresh and must get the same tier, not undefined.
+    expect(secondary.reviewCode).toHaveBeenCalledWith(
+      expect.objectContaining({ session_id: 'gem-owned', model: 'fast' }),
+    );
+    expect(primary.reviewCode).toHaveBeenCalledWith(
+      expect.objectContaining({ session_id: undefined, model: 'fast' }),
+    );
+  });
+});

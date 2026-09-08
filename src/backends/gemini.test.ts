@@ -754,6 +754,20 @@ describe('createGeminiBackend', () => {
     expect(lastArgs[lastArgs.indexOf('--model') + 1]).toBe('Gemini 4.0 Flash (Medium)');
   });
 
+  it('resolves a tier to its Gemini model without querying `agy models`', async () => {
+    fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-tier' });
+    script({ stdout: JSON.stringify(CODE_OK) });
+
+    const res = await createGeminiBackend(DEFAULT_CONFIG).reviewCode({
+      diff: SMALL_DIFF,
+      model: 'max',
+    });
+
+    expect(res.ok).toBe(true);
+    expect(spawnCount).toBe(1);
+    expect(lastArgs[lastArgs.indexOf('--model') + 1]).toBe('Gemini 3.1 Pro (High)');
+  });
+
   it('completes the review on the safe fallback model when the `agy models` query fails', async () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-fallback' });
     script({ stderr: 'boom', code: 1 }, { stdout: JSON.stringify(PLAN_OK) });

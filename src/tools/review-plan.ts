@@ -1,3 +1,4 @@
+import { TIER_HELP } from '../config/types.js';
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
@@ -28,7 +29,9 @@ export function registerReviewPlanTool(
         depth: z.enum(['quick', 'thorough']).optional().describe('Review depth'),
         session_id: SessionIdSchema.optional().describe('Continue from a previous review session'),
         model: ModelSelectorSchema.optional().describe(
-          'Override the configured default model for this call (e.g., "gpt-5.5"), or "latest". ' +
+          'Override the configured default model for this call (e.g., "gpt-5.6-sol"), or "latest". ' +
+            TIER_HELP +
+            ' ' +
             'With the Codex provider this cannot be combined with session_id; compare returned ' +
             'resolved and observed labels for runtime changes. Gemini allows changing model on resume.',
         ),

@@ -72,8 +72,8 @@ Each `models[]` entry reports:
   "provider": "codex",
   "role": "review",
   "requested": null,
-  "resolved": "gpt-5.6-sol",
-  "observed": "gpt-5.6-sol",
+  "resolved": "gpt-6-astra",
+  "observed": "gpt-6-astra",
   "evidence": "runtime_session_record"
 }
 ```
@@ -156,7 +156,7 @@ Send an implementation plan for architectural/feasibility review.
 | `focus`      | string[]                  | no       | Review focus areas (e.g. `["architecture", "security"]`)                                                                                                                                                                                                                    |
 | `depth`      | `"quick"` \| `"thorough"` | no       | Review depth                                                                                                                                                                                                                                                                |
 | `session_id` | string                    | no       | Continue from a previous review session                                                                                                                                                                                                                                     |
-| `model`      | string                    | no       | Override the model for this call (e.g. `"gpt-5.5"` or `"latest"`). With Codex this can't be combined with `session_id`; the bridge retains the prior resolved identity and reports any different runtime-observed label. Gemini allows changing model on a resumed session. |
+| `model`      | string                    | no       | Override the model for this call (e.g. `"gpt-5.6-sol"` or `"latest"`). With Codex this can't be combined with `session_id`; the bridge retains the prior resolved identity and reports any different runtime-observed label. Gemini allows changing model on a resumed session. |
 
 Returns: `{ verdict, summary, findings[], session_id, models[], provenance }`
 
@@ -170,7 +170,7 @@ Send a code diff for code review.
 | `context`    | string   | no       | Intent of the changes                                                                                                                                                                                                                          |
 | `session_id` | string   | no       | Continue from previous review (e.g. plan review session)                                                                                                                                                                                       |
 | `criteria`   | string[] | no       | Review criteria (e.g. `["bugs", "security", "performance"]`)                                                                                                                                                                                   |
-| `model`      | string   | no       | Override the model for this call (e.g. `"gpt-5.5"` or `"latest"`). With Codex this can't be combined with `session_id`; compare `resolved` and `observed` to see what the runtime recorded. Gemini allows changing model on a resumed session. |
+| `model`      | string   | no       | Override the model for this call (e.g. `"gpt-5.6-sol"` or `"latest"`). With Codex this can't be combined with `session_id`; compare `resolved` and `observed` to see what the runtime recorded. Gemini allows changing model on a resumed session. |
 
 Returns: `{ verdict, summary, findings[], session_id, models[], provenance }`
 
@@ -186,7 +186,7 @@ Quick pre-commit sanity check. Auto-captures staged git changes by default.
 | `diff`       | string   | no       | Explicit diff instead of auto-capture                                                                                                                                                                                                          |
 | `session_id` | string   | no       | Continue from previous review                                                                                                                                                                                                                  |
 | `checklist`  | string[] | no       | Custom pre-commit checks                                                                                                                                                                                                                       |
-| `model`      | string   | no       | Override the model for this call (e.g. `"gpt-5.5"` or `"latest"`). With Codex this can't be combined with `session_id`; compare `resolved` and `observed` to see what the runtime recorded. Gemini allows changing model on a resumed session. |
+| `model`      | string   | no       | Override the model for this call (e.g. `"gpt-5.6-sol"` or `"latest"`). With Codex this can't be combined with `session_id`; compare `resolved` and `observed` to see what the runtime recorded. Gemini allows changing model on a resumed session. |
 
 Returns: `{ ready_to_commit, blockers[], warnings[], session_id, models[], provenance }`
 
@@ -223,7 +223,7 @@ Create `.reviewbridge.json` in your project root to customize review behavior:
 {
   "provider": "codex",
   "fallback": true,
-  "model": "gpt-5.6-sol",
+  "model": "gpt-6-astra",
   "reasoning_effort": "medium",
   "timeout_seconds": 300,
   "max_chunk_tokens": 8000,
@@ -259,7 +259,7 @@ When the MCP server or CLI starts, it looks for `.reviewbridge.json` in this ord
 
 1. **`RB_CONFIG_PATH` env var** — if set, load exactly that file. Useful when the bridge is launched from a directory that isn't your project (e.g. an MCP host launches it from your home dir). Missing or unreadable file is a hard startup error so typos are surfaced immediately, not silently ignored.
 2. **Walk-up from the working directory** — looks for `.reviewbridge.json` in the current directory, then each parent. The walk stops at the first `.git` boundary so a project nested inside an unrelated git repo doesn't accidentally inherit a parent project's config.
-3. **`$HOME/.reviewbridge.json`** — a per-machine default. Drop one here to pin a model (e.g. `{"model": "gpt-5.5"}`) for every project on the box without having to touch each one.
+3. **`$HOME/.reviewbridge.json`** — a per-machine default. Drop one here to pin a model (e.g. `{"model": "gpt-5.6-sol"}`) for every project on the box without having to touch each one.
 4. **Built-in defaults** — what you get if nothing is found anywhere.
 
 A startup log line on stderr names the source (`[codex-bridge] config source: project (/repo/.reviewbridge.json)`) so you can confirm which file is in effect.
@@ -270,14 +270,25 @@ The CLI's `--config <dir>` flag is an explicit override: it looks only at `<dir>
 
 ### Model selection
 
-`model` takes a concrete id or `"latest"`; each provider resolves its own default when the field is unset.
+`model` takes a concrete id, `"latest"`, or a **tier**; each provider resolves its own default when the field is unset.
 
-**Codex** — default `gpt-5.6-sol`. If Sol has not reached your account yet, pin `gpt-5.5`:
+**Tiers** let a caller pick by difficulty or urgency instead of tracking model ids. Each provider maps a tier to its own model, and the tier carries across provider failover:
 
-| Model         | Description                                                            |
-| ------------- | ---------------------------------------------------------------------- |
-| `gpt-5.6-sol` | Latest flagship agentic coding model (default)                         |
-| `gpt-5.5`     | Previous flagship. Use while Sol is still rolling out to your account. |
+| Tier       | Pick it for                                                                   | Codex         | Gemini                      |
+| ---------- | ----------------------------------------------------------------------------- | ------------- | --------------------------- |
+| `max`      | Hardest problems: architecture, concurrency, security, subtle bugs            | `gpt-6-astra` | `Gemini 3.1 Pro (High)`     |
+| `balanced` | Everyday code and plan review                                                 | `gpt-5.6-sol` | `Gemini 3.5 Flash (High)`   |
+| `fast`     | Small diffs, precommit sanity checks, style passes, quick iteration loops     | `gpt-5.6-luna`| `Gemini 3.5 Flash (Medium)` |
+
+Rule of thumb for an agent: `fast` for a precommit check or a diff under a few hundred lines with no cross-file logic, `max` when the plan or diff touches concurrency, auth, data integrity, or a design you are unsure about, `balanced` otherwise. The tier name is reported back as `requested` in `models`, with the concrete id in `resolved`.
+
+**Codex** — default `gpt-6-astra`. If Astra has not reached your account yet, pin `gpt-5.6-sol`:
+
+| Model         | Description                                                              |
+| ------------- | ------------------------------------------------------------------------ |
+| `gpt-6-astra` | Latest flagship agentic coding model (default)                           |
+| `gpt-5.6-sol` | Previous flagship. Use while Astra is still rolling out to your account. |
+| `gpt-5.6-luna`| Cheap and fast line (the `fast` tier).                                   |
 
 **Gemini** — default resolves to the latest Flash via `agy models`. Effort is part of the model name:
 

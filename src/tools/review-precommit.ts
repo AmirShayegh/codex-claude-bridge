@@ -1,3 +1,4 @@
+import { TIER_HELP } from '../config/types.js';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -35,7 +36,9 @@ export function registerReviewPrecommitTool(
         session_id: SessionIdSchema.optional().describe('Continue from previous review'),
         checklist: z.array(z.string()).optional().describe('Custom pre-commit checks'),
         model: ModelSelectorSchema.optional().describe(
-          'Override the configured default model for this call (e.g., "gpt-5.5"), or "latest". ' +
+          'Override the configured default model for this call (e.g., "gpt-5.6-sol"), or "latest". ' +
+            TIER_HELP +
+            ' ' +
             'With the Codex provider this cannot be combined with session_id; compare returned ' +
             'resolved and observed labels for runtime changes. Gemini allows changing model on resume.',
         ),

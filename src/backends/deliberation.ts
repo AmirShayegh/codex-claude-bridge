@@ -1,6 +1,7 @@
 import { ErrorCode, ok, err } from '../utils/errors.js';
 import type { Result } from '../utils/errors.js';
 import type { ReviewProvider } from '../config/types.js';
+import { isReviewTier } from '../config/types.js';
 import { CodeFindingSeveritySchema, PlanFindingSeveritySchema } from '../review/types.js';
 import type { PlanReviewResult, CodeReviewResult, ModelIdentity } from '../review/types.js';
 import { deduplicateModelIdentities, sessionModelConflictMessage } from './orchestrator.js';
@@ -348,6 +349,15 @@ type AdjudicateResult = {
   models: ModelIdentity[];
   failure?: CrossReviewFailure;
 };
+// A per-call model override is meaningful only to the provider it names. A TIER
+// ('max' / 'balanced' / 'fast') is provider-neutral, so it carries to the other
+// reviewer — and to its adjudication — exactly as it carries across failover.
+// Dropping it here made `max` pick the strongest model for one reviewer only,
+// and `fast` run the other at a more expensive default.
+function carriedModel(model: string | undefined): string | undefined {
+  return isReviewTier(model) ? model : undefined;
+}
+
 type DeliberationModelOverrides = {
   primary?: string;
   secondary?: string;
@@ -564,15 +574,18 @@ export async function deliberatePlan(
     if (input.model && !canOverrideModelOnResume(ownerLeaf, ownerLeaf.provider)) {
       return err<PlanReviewResult>(sessionModelConflictMessage());
     }
+    const carried = carriedModel(input.model);
     const modelOverrides: DeliberationModelOverrides =
-      ownerLeaf === primary ? { primary: input.model } : { secondary: input.model };
+      ownerLeaf === primary
+        ? { primary: input.model, secondary: carried }
+        : { primary: carried, secondary: input.model };
     const [ownerRes, otherRes] = await Promise.all([
       resultFromProviderCall(() => ownerLeaf.reviewPlan(input)),
       resultFromProviderCall(() =>
         otherLeaf.reviewPlan({
           ...input,
           session_id: undefined,
-          model: undefined,
+          model: carried,
         }),
       ),
     ]);
@@ -615,7 +628,9 @@ export async function deliberatePlan(
 
   const [ra, rb] = await Promise.all([
     resultFromProviderCall(() => primary.reviewPlan(input)),
-    resultFromProviderCall(() => secondary.reviewPlan({ ...input, model: undefined })),
+    resultFromProviderCall(() =>
+      secondary.reviewPlan({ ...input, model: carriedModel(input.model) }),
+    ),
   ]);
   if (ra.ok && rb.ok) {
     const combined = combinePlan(primary.provider, ra.data, secondary.provider, rb.data);
@@ -626,7 +641,7 @@ export async function deliberatePlan(
         primary,
         secondary,
         crossReview,
-        { primary: input.model },
+        { primary: input.model, secondary: carriedModel(input.model) },
         maxChunkTokens,
       ),
     );
@@ -651,15 +666,18 @@ export async function deliberateCode(
     if (input.model && !canOverrideModelOnResume(ownerLeaf, ownerLeaf.provider)) {
       return err<CodeReviewResult>(sessionModelConflictMessage());
     }
+    const carried = carriedModel(input.model);
     const modelOverrides: DeliberationModelOverrides =
-      ownerLeaf === primary ? { primary: input.model } : { secondary: input.model };
+      ownerLeaf === primary
+        ? { primary: input.model, secondary: carried }
+        : { primary: carried, secondary: input.model };
     const [ownerRes, otherRes] = await Promise.all([
       resultFromProviderCall(() => ownerLeaf.reviewCode(input)),
       resultFromProviderCall(() =>
         otherLeaf.reviewCode({
           ...input,
           session_id: undefined,
-          model: undefined,
+          model: carried,
         }),
       ),
     ]);
@@ -700,7 +718,9 @@ export async function deliberateCode(
 
   const [ra, rb] = await Promise.all([
     resultFromProviderCall(() => primary.reviewCode(input)),
-    resultFromProviderCall(() => secondary.reviewCode({ ...input, model: undefined })),
+    resultFromProviderCall(() =>
+      secondary.reviewCode({ ...input, model: carriedModel(input.model) }),
+    ),
   ]);
   if (ra.ok && rb.ok) {
     const combined = combineCode(primary.provider, ra.data, secondary.provider, rb.data);
@@ -711,7 +731,7 @@ export async function deliberateCode(
         primary,
         secondary,
         crossReview,
-        { primary: input.model },
+        { primary: input.model, secondary: carriedModel(input.model) },
         maxChunkTokens,
       ),
     );

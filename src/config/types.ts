@@ -22,11 +22,41 @@ export function toReviewProvider(value: string | null | undefined): ReviewProvid
 // CLI --model flag are forwarded to the backend as-is; we just don't advertise
 // anything outside this set. See L-006 for the policy.
 export const RECOMMENDED_MODELS = {
-  codex: ['gpt-5.6-sol', 'gpt-5.5'],
+  codex: ['gpt-6-astra', 'gpt-5.6-sol'],
   // agy model strings (effort is part of the name); from `agy models`.
   gemini: ['Gemini 3.5 Flash (Medium)', 'Gemini 3.5 Flash (High)', 'Gemini 3.1 Pro (High)'],
 } as const satisfies Record<ReviewProvider, readonly string[]>;
 export type RecommendedModel = (typeof RECOMMENDED_MODELS)[ReviewProvider][number];
+
+// Provider-neutral capability tiers. A caller that does not want to track
+// model ids picks a tier by difficulty/urgency and each backend maps it to its
+// own model, so the choice survives provider failover. These are reserved
+// selector words, like 'latest'; any other string is forwarded as a model id.
+//   max      — hardest problems: architecture, concurrency, security, subtle bugs.
+//   balanced — the default line: everyday code and plan review.
+//   fast     — cheap and quick: small diffs, precommit sanity, style, iteration loops.
+export const REVIEW_TIERS = ['max', 'balanced', 'fast'] as const;
+export type ReviewTier = (typeof REVIEW_TIERS)[number];
+
+export function isReviewTier(value: string | undefined): value is ReviewTier {
+  return (REVIEW_TIERS as readonly string[]).includes(value ?? '');
+}
+
+export const TIER_MODELS: Record<ReviewProvider, Record<ReviewTier, string>> = {
+  codex: { max: 'gpt-6-astra', balanced: 'gpt-5.6-sol', fast: 'gpt-5.6-luna' },
+  gemini: {
+    max: 'Gemini 3.1 Pro (High)',
+    balanced: 'Gemini 3.5 Flash (High)',
+    fast: 'Gemini 3.5 Flash (Medium)',
+  },
+};
+
+// Shared one-liner for tool/CLI help so every surface explains tiers the same way.
+export const TIER_HELP =
+  'Or pick a tier instead of a model id: "max" (hardest problems — architecture, concurrency, ' +
+  'security, subtle bugs), "balanced" (everyday review), or "fast" (small diffs, precommit ' +
+  'sanity, quick iteration). Tiers map per provider (Codex: gpt-6-astra / gpt-5.6-sol / ' +
+  'gpt-5.6-luna; Gemini: 3.1 Pro (High) / 3.5 Flash (High) / 3.5 Flash (Medium)) and survive failover.';
 
 export const PlanReviewStandardsSchema = z.object({
   focus: z.array(z.string()).default(['architecture', 'feasibility']),

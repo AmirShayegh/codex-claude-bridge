@@ -164,6 +164,19 @@ describe('createFailoverBackend', () => {
     expect(secReview).toHaveBeenCalledWith(expect.objectContaining({ model: undefined }));
   });
 
+  it('carries a provider-neutral tier across failover so the secondary maps it itself', async () => {
+    const secReview = vi.fn().mockResolvedValue(ok(CODE_OK));
+    const primary = backend('codex', {
+      reviewCode: vi.fn().mockResolvedValue(err(`${ErrorCode.MODEL_ERROR}: not supported`)),
+    });
+    await createFailoverBackend(primary, backend('gemini', { reviewCode: secReview })).reviewCode({
+      diff: DIFF,
+      model: 'fast',
+    });
+
+    expect(secReview).toHaveBeenCalledWith(expect.objectContaining({ model: 'fast' }));
+  });
+
   it('narrates the switch on stderr', async () => {
     const warn = vi.spyOn(console, 'error').mockImplementation(() => {});
     const primary = backend('codex', {

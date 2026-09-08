@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { ReviewBridgeConfigSchema, DEFAULT_CONFIG, RECOMMENDED_MODELS } from './types.js';
+import {
+  ReviewBridgeConfigSchema,
+  DEFAULT_CONFIG,
+  RECOMMENDED_MODELS,
+  TIER_MODELS,
+  REVIEW_TIERS,
+  isReviewTier,
+} from './types.js';
 import type { ReviewBridgeConfig } from './types.js';
 
 describe('ReviewBridgeConfigSchema', () => {
@@ -240,7 +247,30 @@ describe('RECOMMENDED_MODELS', () => {
   it('is keyed by provider and is documentation, not an enforced allowlist', () => {
     // recommend-not-enforce (L-006): these models seed error tips and README copy,
     // never a blocking gate — see "accepts any non-empty model string" above.
-    expect(RECOMMENDED_MODELS.codex).toEqual(['gpt-5.6-sol', 'gpt-5.5']);
+    expect(RECOMMENDED_MODELS.codex).toEqual(['gpt-6-astra', 'gpt-5.6-sol']);
     expect(Array.isArray(RECOMMENDED_MODELS.gemini)).toBe(true);
+  });
+});
+
+describe('review tiers', () => {
+  it('maps every tier for every provider to a concrete model id', () => {
+    for (const provider of ['codex', 'gemini'] as const) {
+      for (const tier of REVIEW_TIERS) {
+        expect(TIER_MODELS[provider][tier]).toMatch(/\S/);
+      }
+    }
+    expect(TIER_MODELS.codex).toEqual({
+      max: 'gpt-6-astra',
+      balanced: 'gpt-5.6-sol',
+      fast: 'gpt-5.6-luna',
+    });
+  });
+
+  it('recognises only the reserved tier words, never model ids or "latest"', () => {
+    expect(isReviewTier('max')).toBe(true);
+    expect(isReviewTier('fast')).toBe(true);
+    expect(isReviewTier('latest')).toBe(false);
+    expect(isReviewTier('gpt-6-astra')).toBe(false);
+    expect(isReviewTier(undefined)).toBe(false);
   });
 });

@@ -114,7 +114,7 @@ export interface AgyPrintOptions {
   // The full review prompt. Delivered on stdin as one stream-json message, so
   // its size is bounded by nothing on the command line (see runAgyPrint).
   prompt: string;
-  // Resolved agy model string, e.g. "Gemini 3.5 Flash (Medium)".
+  // Resolved agy model string, e.g. "Gemini 3.8 Flash (Medium)".
   model: string;
   // When set, resume this agy conversation instead of starting a fresh one.
   conversationId?: string;
@@ -127,7 +127,7 @@ export interface AgyPrintOptions {
 // on stdout (init, step_update) is progress and is ignored.
 interface AgyResultEvent {
   event: 'result';
-  result: { status: string; response: string; error?: string; conversation_id?: string };
+  result: { status: string; response: string; error?: unknown; conversation_id?: string };
 }
 
 function isAgyResultEvent(value: unknown): value is AgyResultEvent {
@@ -264,7 +264,10 @@ export function runAgyPrint(opts: AgyPrintOptions): Promise<Result<string>> {
       if (result.status !== 'SUCCESS') {
         // agy reports its own failures (bad model, auth, rate limit) inside the
         // result event with exit 0, so the text to classify lives there.
-        const classified = classifyAgyError(result.error || stderr || result.status);
+        // Optional provider fields are untrusted too. A malformed error object
+        // must not throw from this event callback and terminate the server.
+        const errorText = typeof result.error === 'string' ? result.error : '';
+        const classified = classifyAgyError(errorText || stderr || result.status);
         finish(err(`${classified.code}: ${classified.message}`));
         return;
       }
@@ -338,7 +341,7 @@ function stripCodeFences(text: string): string {
 // the backend (the config schema carries no default). Effort is part of the
 // model string for agy, so reasoning_effort is not applied here. Mirrors
 // RECOMMENDED_MODELS.gemini[0].
-const GEMINI_DEFAULT_MODEL = 'Gemini 3.5 Flash (Medium)';
+const GEMINI_DEFAULT_MODEL = 'Gemini 3.8 Flash (Medium)';
 
 // `agy models` is a quick metadata call; bound it well under a review timeout so
 // a hung query degrades to the fallback fast.
@@ -470,7 +473,7 @@ export async function resolveLatestGeminiModel(timeoutMs?: number): Promise<stri
   return pickLatestFlashModel(output) ?? GEMINI_DEFAULT_MODEL;
 }
 
-// agy lists one concrete model per line (e.g. "Gemini 3.5 Flash (Medium)").
+// agy lists one concrete model per line (e.g. "Gemini 3.8 Flash (Medium)").
 export function parseAgyModels(output: string): string[] {
   return output
     .split('\n')
@@ -621,7 +624,7 @@ export function createGeminiBackend(config: ReviewBridgeConfig): ReviewBackend {
   if (config.reasoning_effort !== 'medium') {
     console.error(
       `[codex-bridge] note: reasoning_effort "${escapeTerminalControls(config.reasoning_effort)}" is ignored by the Gemini backend — ` +
-        `effort is part of the agy model name (e.g. "Gemini 3.5 Flash (High)"). Pin a higher-effort model instead.`,
+        `effort is part of the agy model name (e.g. "Gemini 3.8 Flash (High)"). Pin a higher-effort model instead.`,
     );
   }
 

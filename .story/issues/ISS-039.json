@@ -1,0 +1,27 @@
+{
+  "components": [],
+  "createdBy": "release live smoke",
+  "dedupeKey": "release-1.7:retired-gemini-tiers",
+  "discoveredDate": "2026-09-07",
+  "displayId": "ISS-039",
+  "id": "ISS-039",
+  "impact": "Live release smoke with model=fast failed before review: installed agy rejects Gemini 3.5 Flash (Medium), listing Gemini 3.8 Flash High/Medium/Low as available. TIER_MODELS also pins balanced to retired 3.5 High. Update current recommendations, tier targets, fallback and help to 3.8 and verify both tier contracts plus a real review.",
+  "location": [],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": "Updated Gemini fast/balanced tier targets, recommended labels, fallback and help to Flash 3.8. Exact recommendation/tier assertions failed before implementation; config+Gemini tests pass. Live fast plan review succeeded using Gemini 3.8 Flash (Medium).",
+  "resolvedDate": "2026-09-07",
+  "severity": "high",
+  "sourceRefs": [
+    {
+      "contentHash": "1785cf02cc5adfe346b4476746e069e948022a92409ddd570714f159067f6c41",
+      "endLine": 49,
+      "path": "src/config/types.ts",
+      "reviewId": "release-live-smoke",
+      "revision": "e7e77ea5741da197c2ce5586570dc1e578e6f1b6",
+      "startLine": 48
+    }
+  ],
+  "status": "resolved",
+  "title": "Gemini fast and balanced tiers select retired Flash 3.5 models"
+}

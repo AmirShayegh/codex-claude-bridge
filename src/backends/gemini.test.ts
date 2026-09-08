@@ -246,6 +246,26 @@ describe('runAgyPrint', () => {
     if (!res.ok) expect(res.error).toContain(ErrorCode.AUTH_ERROR);
   });
 
+  it.each([
+    { label: 'object', error: { message: 'quota exhausted' } },
+    { label: 'number', error: 429 },
+    { label: 'boolean', error: true },
+    { label: 'array', error: ['quota exhausted'] },
+  ])('handles a malformed $label error field without throwing from close', async ({ error }) => {
+    const p = runAgyPrint(OPTS);
+    lastChild.stdout.emit(
+      'data',
+      Buffer.from(
+        JSON.stringify({ event: 'result', result: { status: 'ERROR', response: '', error } }),
+      ),
+    );
+    lastChild.stderr.emit('data', Buffer.from('you are not authenticated'));
+    expect(() => lastChild.emit('close', 0)).not.toThrow();
+    const res = await p;
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain(ErrorCode.AUTH_ERROR);
+  });
+
   it('ignores progress events and takes the LAST result event', async () => {
     const p = runAgyPrint(OPTS);
     const progress = JSON.stringify({ event: 'step_update', step_update: { state: 'DONE' } });
@@ -466,20 +486,20 @@ describe('resolveLatestGeminiModel', () => {
 
   it('falls back to the known-good model when the query fails', async () => {
     script({ stderr: 'boom', code: 1 });
-    expect(await resolveLatestGeminiModel()).toBe('Gemini 3.5 Flash (Medium)');
+    expect(await resolveLatestGeminiModel()).toBe('Gemini 3.8 Flash (Medium)');
   });
 
   it('caches an unavailable catalog for five minutes instead of repeatedly spawning agy', async () => {
     script({ stderr: 'boom', code: 1 });
 
-    expect(await resolveLatestGeminiModel()).toBe('Gemini 3.5 Flash (Medium)');
-    expect(await resolveLatestGeminiModel()).toBe('Gemini 3.5 Flash (Medium)');
+    expect(await resolveLatestGeminiModel()).toBe('Gemini 3.8 Flash (Medium)');
+    expect(await resolveLatestGeminiModel()).toBe('Gemini 3.8 Flash (Medium)');
     expect(spawnCount).toBe(1);
   });
 
   it('falls back to the known-good model when no Flash line is parseable', async () => {
     script({ stdout: 'Gemini 9.0 Pro (High)\nGPT-OSS 120B (Medium)', code: 0 });
-    expect(await resolveLatestGeminiModel()).toBe('Gemini 3.5 Flash (Medium)');
+    expect(await resolveLatestGeminiModel()).toBe('Gemini 3.8 Flash (Medium)');
   });
 });
 
@@ -593,7 +613,7 @@ const CODE_OK = { verdict: 'approve', summary: 's', findings: [] };
 // An explicit pin short-circuits `latest` resolution, so the backend makes no
 // `agy models` call — these tests then exercise pure agy review mechanics
 // (resume / retry / fence / error / capture) with a single spawn per review.
-const PINNED_CONFIG = { ...DEFAULT_CONFIG, model: 'Gemini 3.5 Flash (Medium)' };
+const PINNED_CONFIG = { ...DEFAULT_CONFIG, model: 'Gemini 3.8 Flash (Medium)' };
 
 // A multi-file diff large enough to force the chunk loop to split (paired with a
 // tiny max_chunk_tokens). Mirrors the orchestrator suite's bigDiff shape.
@@ -856,19 +876,23 @@ describe('createGeminiBackend', () => {
     expect(lastArgs[lastArgs.indexOf('--model') + 1]).toBe('Gemini 4.0 Flash (Medium)');
   });
 
-  it('resolves a tier to its Gemini model without querying `agy models`', async () => {
+  it.each([
+    ['max', 'Gemini 3.1 Pro (High)'],
+    ['balanced', 'Gemini 3.8 Flash (High)'],
+    ['fast', 'Gemini 3.8 Flash (Medium)'],
+  ])('resolves tier %s without querying `agy models`', async (tier, expectedModel) => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-tier' });
     script(agyOk(CODE_OK));
 
     const res = await createGeminiBackend(DEFAULT_CONFIG).reviewCode({
       execution: EXEC,
       diff: SMALL_DIFF,
-      model: 'max',
+      model: tier,
     });
 
     expect(res.ok).toBe(true);
     expect(spawnCount).toBe(1);
-    expect(lastArgs[lastArgs.indexOf('--model') + 1]).toBe('Gemini 3.1 Pro (High)');
+    expect(lastArgs[lastArgs.indexOf('--model') + 1]).toBe(expectedModel);
   });
 
   it('completes the review on the safe fallback model when the `agy models` query fails', async () => {
@@ -882,7 +906,7 @@ describe('createGeminiBackend', () => {
 
     expect(res.ok).toBe(true);
     expect(spawnCount).toBe(2);
-    expect(lastArgs[lastArgs.indexOf('--model') + 1]).toBe('Gemini 3.5 Flash (Medium)');
+    expect(lastArgs[lastArgs.indexOf('--model') + 1]).toBe('Gemini 3.8 Flash (Medium)');
   });
 
   it('sends the orchestrator-built review prompt (including the diff) as the stream-json message', async () => {

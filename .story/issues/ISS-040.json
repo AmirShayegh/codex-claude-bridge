@@ -1,0 +1,29 @@
+{
+  "components": [
+    "review-lenses"
+  ],
+  "createdBy": "review-lenses:concurrency",
+  "dedupeKey": "review-lenses:19638371a6eb12b04f1c4c4819a26fbebf0f441ca3cd63f946760ec29a5c55a9",
+  "discoveredDate": "2026-09-07",
+  "displayId": "ISS-040",
+  "id": "ISS-040",
+  "impact": "For a fresh Gemini review A, agy writes conversation A to the cwd-keyed cache; an independent bridge/agy process B using the same cwd then writes conversation B before A reads the cache. A returns its own review paired with B's session_id, so a subsequent resume targets another conversation. I read runAgyPrint, runAgyReview, runSerialized, and the lifecycle freshness checks: serialization is process-local, and freshness only rejects an already-known ID, so an external B ID absent from this bridge registry/database passes. The stream-json result already carries the per-invocation conversation_id but runAgyPrint discards it. This is the existing ISS-037, not a newly discovered issue.",
+  "location": [
+    "src/backends/gemini.ts:589"
+  ],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": "Duplicate of existing ISS-037, automatically filed by lens synthesis. The confirmed shared-cache conversation-ID race remains tracked in ISS-037; no production fix claimed here.",
+  "resolvedDate": "2026-09-07",
+  "severity": "high",
+  "sourceRefs": [
+    {
+      "contentHash": "b709b7f8d7a07ba392ade787fd5478cc0b6fa8e6f8d0f6cb013df5c736f57e36",
+      "path": "src/backends/gemini.ts",
+      "reviewId": "lens-mtrzvjpw",
+      "startLine": 589
+    }
+  ],
+  "status": "resolved",
+  "title": "[pre-existing] [race-condition] For a fresh Gemini review A, agy writes conversation A to th"
+}

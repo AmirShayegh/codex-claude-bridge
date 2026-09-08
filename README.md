@@ -323,7 +323,7 @@ All fields are optional. Missing fields use the defaults shown above. Large diff
 - **`provider`** — `"codex"` (default) or `"gemini"`. Selects which backend reviews.
 - **`mode`** — `"failover"` (default), `"single"`, `"deliberate"`, or `"deliberate-deep"`. Picks how the two providers combine; see [Provider failover](#provider-failover) and [Deliberation](#deliberation). When unset it's derived from `fallback`.
 - **`fallback`** — `true` (default) auto-fails-over to the other provider when the configured one is out of usage or unavailable. Set `false` (equivalently `"mode": "single"`) for strict single-provider behavior.
-- **`reasoning_effort`** — Codex only. Gemini's effort is baked into its model name (e.g. `"Gemini 3.5 Flash (High)"`), so the field is ignored for Gemini.
+- **`reasoning_effort`** — Codex only. Gemini's effort is baked into its model name (e.g. `"Gemini 3.8 Flash (High)"`), so the field is ignored for Gemini.
 - **`codex_path`** — absolute path to a codex binary for the Codex SDK to spawn (the `CODEX_PATH` env var works too; the config field wins). Normally unnecessary: when unset, the SDK uses its own bundled binary, and if that binary can't run the bridge **auto-discovers** a working system codex from your PATH and the usual install locations (`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`), retries, and logs the substitution on stderr. Set it explicitly to pin a specific binary — an explicit path disables auto-discovery entirely.
 
 ### Where the config is discovered
@@ -350,8 +350,8 @@ The CLI's `--config <dir>` flag is an explicit override: it looks only at `<dir>
 | Tier       | Pick it for                                                               | Codex          | Gemini                      |
 | ---------- | ------------------------------------------------------------------------- | -------------- | --------------------------- |
 | `max`      | Hardest problems: architecture, concurrency, security, subtle bugs        | `gpt-6-astra`  | `Gemini 3.1 Pro (High)`     |
-| `balanced` | Everyday code and plan review                                             | `gpt-5.6-sol`  | `Gemini 3.5 Flash (High)`   |
-| `fast`     | Small diffs, precommit sanity checks, style passes, quick iteration loops | `gpt-5.6-luna` | `Gemini 3.5 Flash (Medium)` |
+| `balanced` | Everyday code and plan review                                             | `gpt-5.6-sol`  | `Gemini 3.8 Flash (High)`   |
+| `fast`     | Small diffs, precommit sanity checks, style passes, quick iteration loops | `gpt-5.6-luna` | `Gemini 3.8 Flash (Medium)` |
 
 Rule of thumb for an agent: `fast` for a precommit check or a diff under a few hundred lines with no cross-file logic, `max` when the plan or diff touches concurrency, auth, data integrity, or a design you are unsure about, `balanced` otherwise. The tier name is reported back as `requested` in `models`, with the concrete id in `resolved`.
 
@@ -367,8 +367,8 @@ Rule of thumb for an agent: `fast` for a precommit check or a diff under a few h
 
 | Model                       | Description                |
 | --------------------------- | -------------------------- |
-| `Gemini 3.5 Flash (Medium)` | Default — fast review line |
-| `Gemini 3.5 Flash (High)`   | Higher effort              |
+| `Gemini 3.8 Flash (Medium)` | Default — fast review line |
+| `Gemini 3.8 Flash (High)`   | Higher effort              |
 | `Gemini 3.1 Pro (High)`     | Heavier reasoning line     |
 
 `"latest"` resolves to the newest Flash for Gemini, or the SDK-pinned flagship for Codex. These are the models we document and recommend; the `model` field, the `model` tool parameter, and the `--model` CLI flag accept any trimmed, control-free selector up to 200 characters, so you can run others. For Gemini, an unrecognized model triggers a non-blocking stderr warning (agy may silently run a different one) — run `agy models` to see the live list.

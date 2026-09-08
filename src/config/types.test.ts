@@ -249,6 +249,11 @@ describe('RECOMMENDED_MODELS', () => {
     // never a blocking gate — see "accepts any non-empty model string" above.
     expect(RECOMMENDED_MODELS.codex).toEqual(['gpt-6-astra', 'gpt-5.6-sol']);
     expect(Array.isArray(RECOMMENDED_MODELS.gemini)).toBe(true);
+    expect(RECOMMENDED_MODELS.gemini).toEqual([
+      'Gemini 3.8 Flash (Medium)',
+      'Gemini 3.8 Flash (High)',
+      'Gemini 3.1 Pro (High)',
+    ]);
   });
 });
 
@@ -263,6 +268,11 @@ describe('review tiers', () => {
       max: 'gpt-6-astra',
       balanced: 'gpt-5.6-sol',
       fast: 'gpt-5.6-luna',
+    });
+    expect(TIER_MODELS.gemini).toEqual({
+      max: 'Gemini 3.1 Pro (High)',
+      balanced: 'Gemini 3.8 Flash (High)',
+      fast: 'Gemini 3.8 Flash (Medium)',
     });
   });
 

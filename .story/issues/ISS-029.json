@@ -5,6 +5,7 @@
   "createdBy": "external-review:care2talk-9e (three reproductions from seat care2talk-a6; code-verified in this session)",
   "dedupeKey": "care2talk-9e-2026-09-03:agy-print-swallows-sandbox",
   "discoveredDate": "2026-09-04",
+  "displayId": "ISS-029",
   "id": "ISS-029",
   "impact": "runAgyPrint builds `['--print', '--sandbox', '--model', model]` (src/backends/gemini.ts:131) and spawns agy with that argv (no shell, so our own array is not concatenating anything). agy's parser treats `--print` as accepting an OPTIONAL positional prompt, so it consumes the following token and the run dies with `--print took \"--sandbox\" as its prompt`. The real prompt is piped via stdin (gemini.ts:212), so `--print` should never receive a positional at all. Reported from three consecutive review_code calls in session care2talk-a6 against care2talk-core, same error every round; that seat has the session ids. Fix candidates: order `--sandbox` before `--print`, put `--print` last in the array, or use an explicit `--print=` form if agy supports it. MUST be live-validated against the real agy CLI, not just a mocked-spawn unit test: L-011 records that a mocked spawn cannot catch agy argument-handling behavior, and L-012 records that agy silently ignores bad input rather than erroring. Consequence today is that every Gemini review fails, which means deliberate mode degrades to Codex-only every time on this machine (see ISS-030).",
   "location": [
@@ -12,8 +13,8 @@
   ],
   "phase": null,
   "relatedTickets": [],
-  "resolution": null,
-  "resolvedDate": null,
+  "resolution": "Implemented stream-json input/output transport in 7759fae, sending prompt over stdin and keeping sandbox enabled. Release verification from rebuilt dist completed a real Gemini plan review with Flash 3.8 Medium; no --print/--sandbox argument consumption error. Publish/reconnect required for older running servers.",
+  "resolvedDate": "2026-09-07",
   "severity": "high",
   "sourceRefs": [
     {
@@ -25,6 +26,6 @@
       "startLine": 131
     }
   ],
-  "status": "open",
+  "status": "resolved",
   "title": "agy invocation: `--print` swallows `--sandbox` as its positional prompt, failing every Gemini review"
 }

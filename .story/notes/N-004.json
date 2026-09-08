@@ -1,0 +1,14 @@
+{
+  "content": "Relayed from a peer session (care2talk-9e) after a night of heavy bridge use across three seats.\n\nOperational heads-up (not filed as an issue), CORRECTED by the sender: a disk cleanup removed most of ~/.npm/_npx. Two running `codex-bridge` (npx-launched) processes are executing from deleted cache directories and die on the next restart, after which `npx -y codex-claude-bridge` re-downloads on first use. That is a delay and a network dependency, not a loss of review coverage: `codex-bridge-local` launches as `node <repo>/dist/index.js`, was never in the npx cache, exposes the same five tools, and survives a restart with no network. Original message overstated this as a permanent loss; do not carry that forward. Open question remains whether the bridge should defend against a cleared npx cache at all (e.g. README note, or a startup log of the resolved install path). No action decided.\n\nWhat worked (positive signal worth keeping): reviews found three real defects that passing test suites missed — two React Native layout composition errors (second found on review of the fix for the first) and an iOS codegen digest that skipped regeneration after outputs were deleted. Two clean rounds ended without fishing. A seat argued a reviewer suggestion down with a reason (not defaulting NODE_BINARY to `node` in an Xcode script phase) and the reviewer agreed next round.\n\nRelated issues filed from the same report: ISS-027 (worktree capture cwd bug), ISS-028 (name the capture directory).",
+  "createdDate": "2026-09-04",
+  "displayId": "N-004",
+  "id": "N-004",
+  "status": "active",
+  "tags": [
+    "external-feedback",
+    "npx",
+    "ops"
+  ],
+  "title": "External usage report 2026-09-03 (care2talk seats): npx orphan heads-up and what worked",
+  "updatedDate": "2026-09-03"
+}

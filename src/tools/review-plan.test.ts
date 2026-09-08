@@ -1,42 +1,39 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { registerReviewPlanTool } from './review-plan.js';
-import type { ReviewBackend } from '../backends/backend.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { PlanReviewResult } from '../review/types.js';
-import { ok, err } from '../utils/errors.js';
-
-vi.mock('../storage/reviews.js', () => ({
-  saveReview: vi.fn(),
-}));
-
-vi.mock('../storage/sessions.js', () => ({
-  getOrCreateSession: vi.fn(),
-  getSession: vi.fn(),
-  markSessionCompleted: vi.fn(),
-  markSessionFailed: vi.fn(),
-  activateSession: vi.fn(),
-}));
-
-import { saveReview } from '../storage/reviews.js';
-import { getOrCreateSession, getSession, markSessionCompleted, markSessionFailed, activateSession } from '../storage/sessions.js';
+import type { ReviewBackend } from '../backends/backend.js';
+import type { ReviewLifecycle } from '../review/lifecycle.js';
+import type { ModelIdentity, PlanReviewResult } from '../review/types.js';
+import { err, ok } from '../utils/errors.js';
+import { registerReviewPlanTool } from './review-plan.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type HandlerFn = (args: Record<string, unknown>, extra: unknown) => Promise<any>;
 
-let mockClient: ReviewBackend;
-let mockServer: { registerTool: ReturnType<typeof vi.fn> };
-let handler: HandlerFn;
-
-const validResult: PlanReviewResult = {
-  verdict: 'approve',
-  summary: 'Plan looks solid',
-  findings: [{ severity: 'minor', category: 'style', description: 'Consider renaming', file: null, line: null, suggestion: null }],
-  session_id: 'thread_abc',
+const MODEL: ModelIdentity = {
+  provider: 'codex',
+  role: 'review',
+  requested: null,
+  resolved: 'gpt-5.6-sol',
+  observed: 'gpt-5.6-sol',
+  evidence: 'runtime_session_record',
 };
 
+const RESULT: PlanReviewResult = {
+  verdict: 'approve',
+  summary: 'Plan looks solid',
+  findings: [],
+  session_id: '01901234-5678-7abc-8def-0123456789ab',
+  provider: 'codex',
+  models: [MODEL],
+  provenance: { persistence: 'durable', warning: null },
+};
+
+let client: ReviewBackend;
+let lifecycle: ReviewLifecycle;
+let server: { registerTool: ReturnType<typeof vi.fn> };
+
 beforeEach(() => {
-  vi.clearAllMocks();
-  mockClient = {
+  client = {
     provider: 'codex',
     providers: ['codex'],
     allowsModelOverrideOnResume: false,
@@ -44,268 +41,88 @@ beforeEach(() => {
     reviewCode: vi.fn(),
     reviewPrecommit: vi.fn(),
   };
-  mockServer = { registerTool: vi.fn() };
+  lifecycle = {
+    reviewPlan: vi.fn().mockResolvedValue(ok(RESULT)),
+    reviewCode: vi.fn(),
+    reviewPrecommit: vi.fn(),
+  };
+  server = { registerTool: vi.fn() };
 });
 
-function setupHandler(db?: unknown) {
-  registerReviewPlanTool(mockServer as unknown as McpServer, mockClient, db as never);
-  handler = mockServer.registerTool.mock.calls[0][2] as HandlerFn;
+function setup(useLifecycle = true): HandlerFn {
+  registerReviewPlanTool(
+    server as unknown as McpServer,
+    client,
+    undefined,
+    useLifecycle ? lifecycle : undefined,
+  );
+  return server.registerTool.mock.calls[0][2] as HandlerFn;
 }
 
 describe('registerReviewPlanTool', () => {
-  beforeEach(() => setupHandler());
-
-  it('registers tool with name review_plan', () => {
-    expect(mockServer.registerTool).toHaveBeenCalledTimes(1);
-    expect(mockServer.registerTool.mock.calls[0][0]).toBe('review_plan');
+  it('registers the tool and bounded model/session validators', () => {
+    setup();
+    expect(server.registerTool.mock.calls[0][0]).toBe('review_plan');
+    const schema = server.registerTool.mock.calls[0][1].inputSchema as Record<
+      string,
+      { parse(value: unknown): unknown }
+    >;
+    expect(() => schema.plan.parse(undefined)).toThrow();
+    expect(schema.model.parse('  gpt-5.6-sol  ')).toBe('gpt-5.6-sol');
+    expect(() => schema.model.parse(`gpt\nforged`)).toThrow();
+    expect(() => schema.session_id.parse(' surrounded ')).toThrow();
   });
 
-  it('inputSchema marks plan as required (z.string, not optional)', () => {
-    const config = mockServer.registerTool.mock.calls[0][1] as { inputSchema: Record<string, unknown> };
-    const planField = config.inputSchema.plan;
-    expect(planField).toBeDefined();
-    expect(() => (planField as { parse: (v: unknown) => unknown }).parse('hello')).not.toThrow();
-    expect(() => (planField as { parse: (v: unknown) => unknown }).parse(undefined)).toThrow();
+  it('returns lifecycle model and provenance metadata unchanged', async () => {
+    const handler = setup();
+    const response = await handler({ plan: 'My plan' }, {});
+
+    expect(response.isError).toBeUndefined();
+    expect(JSON.parse(response.content[0].text)).toEqual(RESULT);
+    expect(lifecycle.reviewPlan).toHaveBeenCalledWith({ plan: 'My plan' });
+    expect(client.reviewPlan).not.toHaveBeenCalled();
   });
 
-  it('valid plan input returns structured review', async () => {
-    vi.mocked(mockClient.reviewPlan).mockResolvedValue(ok(validResult));
-
-    const result = await handler({ plan: 'My plan' }, {});
-
-    expect(result.content).toHaveLength(1);
-    expect(result.content[0].type).toBe('text');
-    const parsed = JSON.parse(result.content[0].text);
-    expect(parsed.verdict).toBe('approve');
-    expect(parsed.summary).toBe('Plan looks solid');
-    expect(parsed.findings).toHaveLength(1);
-    expect(parsed.session_id).toBe('thread_abc');
-    expect(result.isError).toBeUndefined();
+  it('returns a lifecycle failure as an MCP error', async () => {
+    vi.mocked(lifecycle.reviewPlan).mockResolvedValue(err('REVIEW_BUSY: active'));
+    const response = await setup()({ plan: 'My plan' }, {});
+    expect(response.isError).toBe(true);
+    expect(response.content[0].text).toContain('REVIEW_BUSY');
   });
 
-  it('Codex client error propagates as MCP error', async () => {
-    vi.mocked(mockClient.reviewPlan).mockResolvedValue(
-      err('REVIEW_TIMEOUT: review timed out after 300s'),
+  it('defers resumed model validation to the owner-aware lifecycle', async () => {
+    vi.mocked(lifecycle.reviewPlan).mockResolvedValueOnce(
+      err('INVALID_INPUT: Cannot change model on a resumed session.'),
     );
-
-    const result = await handler({ plan: 'My plan' }, {});
-
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('REVIEW_TIMEOUT');
-  });
-
-  it('unexpected thrown error returns MCP error', async () => {
-    vi.mocked(mockClient.reviewPlan).mockRejectedValue(new Error('network failure'));
-
-    const result = await handler({ plan: 'My plan' }, {});
-
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('network failure');
-  });
-
-  it('session_id passed through to client', async () => {
-    vi.mocked(mockClient.reviewPlan).mockResolvedValue(ok(validResult));
-
-    await handler({ plan: 'My plan', session_id: 'existing_session' }, {});
-
-    expect(mockClient.reviewPlan).toHaveBeenCalledWith(
-      expect.objectContaining({ session_id: 'existing_session' }),
+    const response = await setup()(
+      { plan: 'My plan', session_id: 'session-1', model: 'gpt-5.5' },
+      {},
+    );
+    expect(response.isError).toBe(true);
+    expect(lifecycle.reviewPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ session_id: 'session-1', model: 'gpt-5.5' }),
     );
   });
 
-  it('does not save to storage when no db provided', async () => {
-    vi.mocked(mockClient.reviewPlan).mockResolvedValue(ok(validResult));
-
-    await handler({ plan: 'My plan' }, {});
-
-    expect(saveReview).not.toHaveBeenCalled();
-  });
-
-  it('rejects session_id + model when the backend disallows model override on resume (Codex)', async () => {
-    const result = await handler({ plan: 'My plan', session_id: 's1', model: 'gpt-5.4' }, {});
-
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('Cannot change model on a resumed session');
-    expect(mockClient.reviewPlan).not.toHaveBeenCalled();
-  });
-
-  it('allows session_id + model when the backend permits override on resume (Gemini)', async () => {
-    mockClient.allowsModelOverrideOnResume = true;
-    vi.mocked(mockClient.reviewPlan).mockResolvedValue(ok(validResult));
-
-    const result = await handler({ plan: 'My plan', session_id: 's1', model: 'Gemini 3.1 Pro (High)' }, {});
-
-    expect(result.isError).toBeUndefined();
-    expect(mockClient.reviewPlan).toHaveBeenCalledWith(
-      expect.objectContaining({ session_id: 's1', model: 'Gemini 3.1 Pro (High)' }),
+  it('allows a Gemini model change on resume', async () => {
+    client.allowsModelOverrideOnResume = true;
+    const handler = setup();
+    await handler({ plan: 'My plan', session_id: 'session-1', model: 'Gemini 3.5 Pro (High)' }, {});
+    expect(lifecycle.reviewPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ session_id: 'session-1', model: 'Gemini 3.5 Pro (High)' }),
     );
   });
-});
 
-describe('registerReviewPlanTool with db', () => {
-  // transaction(fn)() invokes fn synchronously — matches better-sqlite3's
-  // shape that recordSuccess uses for atomicity (T-002).
-  const mockDb = { transaction: <T>(fn: () => T) => () => fn() };
-
-  beforeEach(() => {
-    vi.mocked(getOrCreateSession).mockReturnValue(ok({ session_id: 'thread_abc', status: 'in_progress' as const, created_at: '2026-01-01', completed_at: null, provider: null }));
-    vi.mocked(getSession).mockReturnValue(ok(null));
-    vi.mocked(activateSession).mockReturnValue(ok({ session_id: 'thread_abc', status: 'in_progress' as const, created_at: '2026-01-01', completed_at: null, provider: null }));
-    vi.mocked(markSessionCompleted).mockReturnValue(ok(undefined));
-    vi.mocked(markSessionFailed).mockReturnValue(ok(undefined));
-    vi.mocked(saveReview).mockReturnValue(ok(undefined));
-    setupHandler(mockDb);
+  it('retains the no-lifecycle compatibility path', async () => {
+    vi.mocked(client.reviewPlan).mockResolvedValue(ok(RESULT));
+    const response = await setup(false)({ plan: 'My plan' }, {});
+    expect(JSON.parse(response.content[0].text)).toEqual(RESULT);
   });
 
-  it('saves review to storage on success', async () => {
-    vi.mocked(mockClient.reviewPlan).mockResolvedValue(ok(validResult));
-
-    await handler({ plan: 'My plan' }, {});
-
-    expect(saveReview).toHaveBeenCalledWith(mockDb, {
-      session_id: 'thread_abc',
-      type: 'plan',
-      verdict: 'approve',
-      summary: 'Plan looks solid',
-      findings_json: JSON.stringify(validResult.findings),
-    });
-  });
-
-  it('creates session entry on success', async () => {
-    vi.mocked(mockClient.reviewPlan).mockResolvedValue(ok(validResult));
-
-    await handler({ plan: 'My plan' }, {});
-
-    expect(getOrCreateSession).toHaveBeenCalledWith(mockDb, 'thread_abc', 'codex');
-  });
-
-  it('does not save on client error', async () => {
-    vi.mocked(mockClient.reviewPlan).mockResolvedValue(
-      err('REVIEW_TIMEOUT: timed out'),
-    );
-
-    await handler({ plan: 'My plan' }, {});
-
-    expect(saveReview).not.toHaveBeenCalled();
-  });
-
-  it('marks session completed after save', async () => {
-    vi.mocked(mockClient.reviewPlan).mockResolvedValue(ok(validResult));
-
-    await handler({ plan: 'My plan' }, {});
-
-    expect(markSessionCompleted).toHaveBeenCalledWith(mockDb, 'thread_abc');
-  });
-
-  it('logs warning when getOrCreateSession fails', async () => {
-    vi.mocked(mockClient.reviewPlan).mockResolvedValue(ok(validResult));
-    vi.mocked(getOrCreateSession).mockReturnValue(err('STORAGE_ERROR: table missing'));
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    const result = await handler({ plan: 'My plan' }, {});
-
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to track session'));
-    expect(result.isError).toBeUndefined();
-    consoleSpy.mockRestore();
-  });
-
-  it('logs warning when markSessionCompleted fails', async () => {
-    vi.mocked(mockClient.reviewPlan).mockResolvedValue(ok(validResult));
-    vi.mocked(markSessionCompleted).mockReturnValue(err('STORAGE_ERROR: readonly'));
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    const result = await handler({ plan: 'My plan' }, {});
-
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('readonly'));
-    expect(result.isError).toBeUndefined();
-    consoleSpy.mockRestore();
-  });
-
-  it('logs warning when saveReview fails but still returns success', async () => {
-    vi.mocked(mockClient.reviewPlan).mockResolvedValue(ok(validResult));
-    vi.mocked(saveReview).mockReturnValue(err('STORAGE_ERROR: disk full'));
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    const result = await handler({ plan: 'My plan' }, {});
-
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('STORAGE_ERROR'));
-    expect(result.isError).toBeUndefined();
-    consoleSpy.mockRestore();
-  });
-
-  it('activates session before client call when session_id provided', async () => {
-    vi.mocked(mockClient.reviewPlan).mockResolvedValue(ok(validResult));
-
-    await handler({ plan: 'My plan', session_id: 'thread_abc' }, {});
-
-    expect(activateSession).toHaveBeenCalledWith(mockDb, 'thread_abc', 'codex');
-    // activateSession should be called before reviewPlan
-    const activateOrder = vi.mocked(activateSession).mock.invocationCallOrder[0];
-    const reviewOrder = vi.mocked(mockClient.reviewPlan).mock.invocationCallOrder[0];
-    expect(activateOrder).toBeLessThan(reviewOrder);
-  });
-
-  it('does not activate session when no session_id provided', async () => {
-    vi.mocked(mockClient.reviewPlan).mockResolvedValue(ok(validResult));
-
-    await handler({ plan: 'My plan' }, {});
-
-    expect(activateSession).not.toHaveBeenCalled();
-    expect(getOrCreateSession).toHaveBeenCalledWith(mockDb, 'thread_abc', 'codex');
-  });
-
-  it('marks session failed when client returns error and session_id provided', async () => {
-    vi.mocked(mockClient.reviewPlan).mockResolvedValue(err('REVIEW_TIMEOUT: timed out'));
-
-    const result = await handler({ plan: 'My plan', session_id: 'thread_abc' }, {});
-
-    expect(result.isError).toBe(true);
-    expect(markSessionFailed).toHaveBeenCalledWith(mockDb, 'thread_abc');
-  });
-
-  it('marks session failed when handler throws and session_id provided', async () => {
-    vi.mocked(mockClient.reviewPlan).mockRejectedValue(new Error('network error'));
-
-    const result = await handler({ plan: 'My plan', session_id: 'thread_abc' }, {});
-
-    expect(result.isError).toBe(true);
-    expect(markSessionFailed).toHaveBeenCalledWith(mockDb, 'thread_abc');
-  });
-
-  it('does not mark session failed when activateSession fails', async () => {
-    vi.mocked(activateSession).mockReturnValue(err('STORAGE_ERROR: readonly'));
-    vi.mocked(mockClient.reviewPlan).mockResolvedValue(err('REVIEW_TIMEOUT: timed out'));
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    const result = await handler({ plan: 'My plan', session_id: 'thread_abc' }, {});
-
-    expect(result.isError).toBe(true);
-    expect(markSessionFailed).not.toHaveBeenCalled();
-    consoleSpy.mockRestore();
-  });
-
-  it('uses preflightId for markSessionCompleted when session_id provided', async () => {
-    vi.mocked(activateSession).mockReturnValue(ok({ session_id: 'thread_abc', status: 'in_progress' as const, created_at: '2026-01-01', completed_at: null, provider: null }));
-    const codexResult = { ...validResult, session_id: 'thread_different' };
-    vi.mocked(mockClient.reviewPlan).mockResolvedValue(ok(codexResult));
-
-    await handler({ plan: 'My plan', session_id: 'thread_abc' }, {});
-
-    expect(markSessionCompleted).toHaveBeenCalledWith(mockDb, 'thread_abc');
-  });
-
-  it('rejects a cross-provider resume without calling the backend or failing the session', async () => {
-    vi.mocked(getSession).mockReturnValue(
-      ok({ session_id: 'thread_abc', status: 'completed' as const, created_at: '2026-01-01', completed_at: '2026-01-02', provider: 'gemini' }),
-    );
-
-    const result = await handler({ plan: 'My plan', session_id: 'thread_abc' }, {});
-
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('PROVIDER_MISMATCH');
-    expect(mockClient.reviewPlan).not.toHaveBeenCalled();
-    // The session belongs to the other provider — do not touch its state.
-    expect(activateSession).not.toHaveBeenCalled();
-    expect(markSessionFailed).not.toHaveBeenCalled();
+  it('turns an unexpected lifecycle exception into an MCP error', async () => {
+    vi.mocked(lifecycle.reviewPlan).mockRejectedValue(new Error('network failure'));
+    const response = await setup()({ plan: 'My plan' }, {});
+    expect(response.isError).toBe(true);
+    expect(response.content[0].text).toContain('network failure');
   });
 });

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { randomUUID } from 'node:crypto';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import type { ReviewBackend } from '../backends/backend.js';
@@ -6,12 +7,15 @@ import type { ReviewBridgeConfig } from '../config/types.js';
 import { sessionModelConflictMessage } from '../backends/orchestrator.js';
 import { resolvePrecommitDiff, NO_STAGED_CHANGES } from '../utils/resolve-diff.js';
 import { createSessionTracker } from '../storage/session-tracker.js';
+import type { ReviewLifecycle } from '../review/lifecycle.js';
+import { ModelSelectorSchema, SessionIdSchema } from '../utils/input-validation.js';
 
 export function registerReviewPrecommitTool(
   server: McpServer,
   client: ReviewBackend,
   db: Database.Database | undefined,
   config: ReviewBridgeConfig,
+  lifecycle?: ReviewLifecycle,
 ): void {
   server.registerTool(
     'review_precommit',
@@ -19,30 +23,28 @@ export function registerReviewPrecommitTool(
       description:
         'Final sanity check right before committing. Auto-captures staged git changes. ' +
         'Call this after git add and before git commit to catch last-minute issues. ' +
-        'Returns ready_to_commit (boolean), blockers that must be fixed, and warnings.',
+        'Returns ready_to_commit, blockers, warnings, responding models, and persistence provenance.',
       inputSchema: {
         auto_diff: z
           .boolean()
           .optional()
-          .describe('Auto-capture staged git changes. Omit to use the project config default (review_standards.precommit.auto_diff).'),
-        diff: z.string().optional().describe('Explicit diff to review instead of auto-capture'),
-        session_id: z.string().optional().describe('Continue from previous review'),
-        checklist: z.array(z.string()).optional().describe('Custom pre-commit checks'),
-        model: z
-          .string()
-          .min(1)
-          .optional()
           .describe(
-            'Override the configured default model for this call (e.g., "gpt-5.5"), or "latest". ' +
-              'With the Codex provider this cannot be combined with session_id (a resumed thread ' +
-              'keeps its model); the Gemini provider allows changing model on a resumed session.',
+            'Auto-capture staged git changes. Omit to use the project config default (review_standards.precommit.auto_diff).',
           ),
+        diff: z.string().optional().describe('Explicit diff to review instead of auto-capture'),
+        session_id: SessionIdSchema.optional().describe('Continue from previous review'),
+        checklist: z.array(z.string()).optional().describe('Custom pre-commit checks'),
+        model: ModelSelectorSchema.optional().describe(
+          'Override the configured default model for this call (e.g., "gpt-5.5"), or "latest". ' +
+            'With the Codex provider this cannot be combined with session_id; compare returned ' +
+            'resolved and observed labels for runtime changes. Gemini allows changing model on resume.',
+        ),
       },
     },
     async (args) => {
-      // Reject session_id + model only when the backend can't change model on
-      // resume. See review-plan.ts for the rationale.
-      if (!client.allowsModelOverrideOnResume && args.session_id && args.model) {
+      // The shared lifecycle performs owner-aware validation before admission;
+      // this scalar gate remains only for the no-lifecycle compatibility path.
+      if (!lifecycle && !client.allowsModelOverrideOnResume && args.session_id && args.model) {
         return {
           content: [{ type: 'text' as const, text: sessionModelConflictMessage() }],
           isError: true,
@@ -66,7 +68,9 @@ export function registerReviewPrecommitTool(
                     ready_to_commit: false,
                     blockers: [],
                     warnings: ['No staged changes found'],
-                    session_id: args.session_id ?? '',
+                    session_id: args.session_id ?? randomUUID(),
+                    models: [],
+                    provenance: { persistence: 'not_recorded', warning: null },
                   }),
                 },
               ],
@@ -75,6 +79,19 @@ export function registerReviewPrecommitTool(
           return { content: [{ type: 'text' as const, text: diffResult.error }], isError: true };
         }
         const diff = diffResult.data;
+
+        if (lifecycle) {
+          const result = await lifecycle.reviewPrecommit({
+            diff,
+            checklist: args.checklist,
+            session_id: args.session_id,
+            model: args.model,
+          });
+          if (!result.ok) {
+            return { content: [{ type: 'text' as const, text: result.error }], isError: true };
+          }
+          return { content: [{ type: 'text' as const, text: JSON.stringify(result.data) }] };
+        }
 
         // Pre-flight: guard cross-provider resume, then activate session after
         // diff resolved and before the client call.
@@ -110,7 +127,12 @@ export function registerReviewPrecommitTool(
       } catch (e) {
         tracker.recordFailureBestEffort();
         return {
-          content: [{ type: 'text' as const, text: `Unexpected error: ${e instanceof Error ? e.message : String(e)}` }],
+          content: [
+            {
+              type: 'text' as const,
+              text: `Unexpected error: ${e instanceof Error ? e.message : String(e)}`,
+            },
+          ],
           isError: true,
         };
       }

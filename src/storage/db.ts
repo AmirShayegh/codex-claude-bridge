@@ -1,89 +1,208 @@
 import { resolve } from 'node:path';
 import Database from 'better-sqlite3';
 import { initDb } from './reviews.js';
-import { initSessionsDb, getSession } from './sessions.js';
+import { initSessionsDb, parseSessionModelIdentityJson } from './sessions.js';
+import type { SessionModelMetadata } from './sessions.js';
 import { toReviewProvider } from '../config/types.js';
 import type { ReviewProvider } from '../config/types.js';
+import { escapeTerminalControls } from '../utils/terminal.js';
 
-// Milliseconds better-sqlite3 waits on a locked db before throwing SQLITE_BUSY.
-// Lets a CLI reader coexist with the MCP server writer during brief contention.
-const BUSY_TIMEOUT_MS = 5000;
+// Keep lock waits short: the outcome writer performs one explicit retry after
+// yielding, rather than blocking the synchronous server for seconds.
+export const BUSY_TIMEOUT_MS = 100;
+export const STARTUP_BUSY_TIMEOUT_MS = 2_000;
 
-// The review database path, resolved to ABSOLUTE so the server and the CLI open
-// the SAME file regardless of how each interprets a relative cwd. REVIEW_BRIDGE_DB
-// wins (tests pass an absolute path); otherwise a cwd-relative 'reviews.db'.
-//
-// NOTE (ISS-018): the default is still cwd-anchored, so the CLI's cross-provider
-// guard is only effective when the CLI runs from the same cwd as the MCP server
-// (the project root — the documented workflow) or when REVIEW_BRIDGE_DB is set to
-// an absolute path. Otherwise the readonly open below finds no file and the guard
-// fails open. A stable global/app-data location is deferred to ISS-018.
-export function reviewDbPath(): string {
-  const p = process.env.REVIEW_BRIDGE_DB ?? 'reviews.db';
-  return p === ':memory:' ? p : resolve(p);
+export type StorageDurability = 'durable' | 'memory_only';
+
+export interface OpenReviewDbMetadata {
+  db: Database.Database;
+  durability: StorageDurability;
+  warning: string | null;
 }
 
-// Open the review database.
-//
-// Default (server): read-write. Falls back to an in-memory db if the file can't
-// be opened, then initializes the schema and enables WAL so a concurrent CLI
-// reader doesn't block the writer. Always returns a usable db.
-//
-// { readonly: true } (CLI): opens the existing file read-only and never creates
-// one (fileMustExist). Returns undefined on any failure — no file, no schema, a
-// lock, etc. — so callers fail open rather than crash. Never writes, so a CLI run
-// records nothing.
+export interface OpenReviewDbDependencies {
+  openPersistentDatabase?: (path: string, timeoutMs: number) => Database.Database;
+  configureStartup?: (db: Database.Database) => void;
+}
+
+export type LookupResult<T> =
+  | { status: 'found'; value: T }
+  | { status: 'absent' }
+  | { status: 'unavailable' };
+
+export function reviewDbPath(): string {
+  const path = process.env.REVIEW_BRIDGE_DB ?? 'reviews.db';
+  return path === ':memory:' ? path : resolve(path);
+}
+
+function columns(db: Database.Database, table: 'sessions' | 'reviews'): Set<string> {
+  const rows = db.pragma(`table_info(${table})`) as Array<{ name: string }>;
+  return new Set(rows.map((row) => row.name));
+}
+
+// The two model-metadata columns migrate in one BEGIN IMMEDIATE transaction.
+// initDb/initSessionsDb detect the enclosing transaction and do not create
+// nested commits, so a failure in either table rolls the whole upgrade back.
+export function initializeStorageSchema(db: Database.Database): void {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    // Reviews first is intentional: a later sessions migration failure must
+    // prove reviews.models_json rolls back with it.
+    initDb(db);
+    initSessionsDb(db);
+
+    if (!columns(db, 'reviews').has('models_json')) {
+      throw new Error('storage migration verification failed: reviews.models_json missing');
+    }
+    if (!columns(db, 'sessions').has('model_identity_json')) {
+      throw new Error(
+        'storage migration verification failed: sessions.model_identity_json missing',
+      );
+    }
+    db.exec('COMMIT');
+  } catch (error) {
+    if (db.inTransaction) db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+function configureConnection(db: Database.Database): void {
+  db.pragma(`busy_timeout = ${BUSY_TIMEOUT_MS}`);
+}
+
+function configureStartupConnection(db: Database.Database): void {
+  db.pragma(`busy_timeout = ${STARTUP_BUSY_TIMEOUT_MS}`);
+}
+
+function closeBestEffort(db: Database.Database): void {
+  try {
+    db.close();
+  } catch {
+    // The original open/configuration error is the useful failure. A close
+    // error must not prevent the fully initialized memory fallback.
+  }
+}
+
+function openConfiguredPersistentDatabase(
+  path: string,
+  dependencies: OpenReviewDbDependencies,
+): Database.Database {
+  const openPersistentDatabase =
+    dependencies.openPersistentDatabase ??
+    ((databasePath: string, timeoutMs: number) =>
+      new Database(databasePath, { timeout: timeoutMs }));
+  const db = openPersistentDatabase(path, STARTUP_BUSY_TIMEOUT_MS);
+  try {
+    (dependencies.configureStartup ?? configureStartupConnection)(db);
+    return db;
+  } catch (error) {
+    closeBestEffort(db);
+    throw error;
+  }
+}
+
+function openInitializedMemory(warning: string | null): OpenReviewDbMetadata {
+  const db = new Database(':memory:', { timeout: BUSY_TIMEOUT_MS });
+  configureConnection(db);
+  initializeStorageSchema(db);
+  return { db, durability: 'memory_only', warning };
+}
+
+export function openReviewDbWithMetadata(
+  dependencies: OpenReviewDbDependencies = {},
+): OpenReviewDbMetadata {
+  const path = reviewDbPath();
+  if (path === ':memory:') return openInitializedMemory(null);
+
+  let db: Database.Database;
+  try {
+    db = openConfiguredPersistentDatabase(path, dependencies);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const warning = `Database open failed (${path}); using in-memory storage: ${message}`;
+    console.error(escapeTerminalControls(warning));
+    return openInitializedMemory(warning);
+  }
+
+  try {
+    initializeStorageSchema(db);
+    db.pragma('journal_mode = WAL');
+    configureConnection(db);
+    return { db, durability: 'durable', warning: null };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    closeBestEffort(db);
+    const warning = `Database initialization failed (${path}); using in-memory storage: ${message}`;
+    console.error(escapeTerminalControls(warning));
+    return openInitializedMemory(warning);
+  }
+}
+
 export function openReviewDb(opts?: { readonly?: false }): Database.Database;
 export function openReviewDb(opts: { readonly: true }): Database.Database | undefined;
-// General overload so a dynamically-computed `readonly` still type-checks (it
-// widens the return to include undefined, matching the readonly branch).
 export function openReviewDb(opts?: { readonly?: boolean }): Database.Database | undefined;
 export function openReviewDb(opts?: { readonly?: boolean }): Database.Database | undefined {
-  const path = reviewDbPath();
-
   if (opts?.readonly) {
     try {
-      return new Database(path, { readonly: true, fileMustExist: true, timeout: BUSY_TIMEOUT_MS });
+      const db = new Database(reviewDbPath(), {
+        readonly: true,
+        fileMustExist: true,
+        timeout: BUSY_TIMEOUT_MS,
+      });
+      configureConnection(db);
+      return db;
     } catch {
       return undefined;
     }
   }
-
-  let db: Database.Database;
-  try {
-    db = new Database(path, { timeout: BUSY_TIMEOUT_MS });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    console.error(`Database open failed (${path}), falling back to in-memory: ${msg}`);
-    db = new Database(':memory:', { timeout: BUSY_TIMEOUT_MS });
-  }
-  try {
-    initDb(db);
-    initSessionsDb(db);
-    // WAL lets a readonly CLI connection read while the server writes. Harmless
-    // (and ignored) for :memory:.
-    if (path !== ':memory:') db.pragma('journal_mode = WAL');
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    console.error(`Database table initialization failed: ${msg}`);
-  }
-  return db;
+  return openReviewDbWithMetadata().db;
 }
 
-// Build a session→owning-provider lookup for resume routing. Returns null for an
-// absent db, an unknown session, a read error, or a legacy/unknown provider —
-// every branch fails open so routing falls back to the primary rather than
-// throwing. Shared by the MCP server and the CLI.
+// Provider lookup intentionally selects only the legacy provider column. It
+// remains usable on a readonly database whose model migration has not run.
 export function makeSessionProviderLookup(
   db: Database.Database | undefined,
-): (sessionId: string) => ReviewProvider | null {
+): (sessionId: string) => LookupResult<ReviewProvider | null> {
   return (sessionId) => {
-    if (!db) return null;
+    if (!db) return { status: 'unavailable' };
     try {
-      const r = getSession(db, sessionId);
-      return r.ok && r.data ? toReviewProvider(r.data.provider) : null;
+      const row = db
+        .prepare('SELECT provider FROM sessions WHERE session_id = ?')
+        .get(sessionId) as { provider: string | null } | undefined;
+      if (!row) return { status: 'absent' };
+      const provider = toReviewProvider(row.provider);
+      // SQL NULL is the only legacy/untagged state. A non-null value that this
+      // binary does not recognize may be corruption or a future provider; never
+      // route it through the configured primary by pretending it is legacy.
+      if (row.provider !== null && provider === null) return { status: 'unavailable' };
+      return { status: 'found', value: provider };
     } catch {
-      return null;
+      return { status: 'unavailable' };
+    }
+  };
+}
+
+// Model lookup is separate so an unmigrated/locked model column reports
+// unavailable without weakening the legacy provider mismatch guard.
+export function makeSessionModelLookup(
+  db: Database.Database | undefined,
+): (sessionId: string) => LookupResult<SessionModelMetadata> {
+  return (sessionId) => {
+    if (!db) return { status: 'unavailable' };
+    try {
+      const row = db
+        .prepare('SELECT provider, model_identity_json FROM sessions WHERE session_id = ?')
+        .get(sessionId) as
+        | { provider: string | null; model_identity_json: string | null }
+        | undefined;
+      return row
+        ? {
+            status: 'found',
+            value: parseSessionModelIdentityJson(row.model_identity_json, row.provider),
+          }
+        : { status: 'absent' };
+    } catch {
+      return { status: 'unavailable' };
     }
   };
 }

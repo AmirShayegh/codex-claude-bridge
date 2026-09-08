@@ -5,12 +5,20 @@ import { loadConfig, formatConfigSource } from './config/loader.js';
 import { createBackend } from './backends/index.js';
 import { loadCopilotInstructions } from './config/copilot-instructions.js';
 import type { CopilotInstructions } from './config/copilot-instructions.js';
-import { openReviewDb, makeSessionProviderLookup } from './storage/db.js';
+import {
+  makeSessionModelLookup,
+  makeSessionProviderLookup,
+  openReviewDbWithMetadata,
+} from './storage/db.js';
+import { createSessionRegistry } from './storage/session-registry.js';
+import { createSessionRouting } from './storage/session-routing.js';
+import { createReviewLifecycle } from './review/lifecycle.js';
 import { registerReviewPlanTool } from './tools/review-plan.js';
 import { registerReviewCodeTool } from './tools/review-code.js';
 import { registerReviewPrecommitTool } from './tools/review-precommit.js';
 import { registerReviewHistoryTool } from './tools/review-history.js';
 import { registerReviewStatusTool } from './tools/review-status.js';
+import { escapeTerminalControls } from './utils/terminal.js';
 
 export const SERVER_INSTRUCTIONS = `codex-claude-bridge — automated code review.
 
@@ -50,6 +58,11 @@ TIPS:
 - Every result carries a 'review_mode' field (single/failover/deliberate/deliberate-deep) naming the
   composition that ran, so you can tell whether deliberation actually happened even without a
   'deliberation' block.
+- Every successful review also carries 'models' (successful reviewer/adjudicator contributions with
+  requested/resolved/observed identity evidence) and 'provenance' (durable, memory_only, or
+  not_recorded). Runtime labels are control-plane evidence, not proof of underlying weights.
+- review_history returns immutable model snapshots in bounded pages. Pass its next_cursor into the
+  next call to continue without overlap.
 - Under deliberate-deep, the top-level 'verdict' reflects both providers' INDEPENDENT reviews; the
   per-finding adjudications in deliberation.divergent[] are advisory for YOUR synthesis and are not
   folded back into the verdict. Weigh disputed findings yourself.`;
@@ -60,7 +73,9 @@ TIPS:
 // tsup-bundled dist, and npm-installed consumers — package.json is always
 // adjacent to the running file's parent dir.
 const PACKAGE_VERSION = (
-  JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf-8')) as { version: string }
+  JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf-8')) as {
+    version: string;
+  }
 ).version;
 
 export function createServer(): McpServer {
@@ -72,7 +87,9 @@ export function createServer(): McpServer {
     throw new Error(configResult.error);
   }
   const { config, source } = configResult.data;
-  console.error(`[codex-bridge] config source: ${formatConfigSource(source)}`);
+  console.error(
+    `[codex-bridge] config source: ${escapeTerminalControls(formatConfigSource(source))}`,
+  );
 
   let copilotInstr: CopilotInstructions | undefined;
   if (config.copilot_instructions) {
@@ -81,15 +98,33 @@ export function createServer(): McpServer {
     if (instrResult.ok) {
       copilotInstr = instrResult.data;
     } else {
-      console.error(`Copilot instructions load failed, skipping: ${instrResult.error}`);
+      console.error(
+        `Copilot instructions load failed, skipping: ${escapeTerminalControls(instrResult.error)}`,
+      );
     }
   }
 
   // Open the db before building the backend so resume routing can consult session
   // ownership. The read-write open always returns a usable db (in-memory on
   // failure); the tools and lookup accept an optional db regardless.
-  const db = openReviewDb();
-  const client = createBackend(config, copilotInstr, makeSessionProviderLookup(db));
+  const storage = openReviewDbWithMetadata();
+  const registry = createSessionRegistry();
+  const routing = createSessionRouting({
+    registry,
+    durability: storage.durability,
+    providerLookup: makeSessionProviderLookup(storage.db),
+    modelLookup: makeSessionModelLookup(storage.db),
+  });
+  const client = createBackend(config, copilotInstr, routing.lookupProvider, routing.lookupModel);
+  const lifecycle = createReviewLifecycle({
+    backend: client,
+    registry,
+    lookupSessionProvider: routing.lookupProvider,
+    lookupResultSession: routing.lookupResultSession,
+    storage,
+    onOutcomePersistenceFailure: routing.markOutcomePersistenceFailure,
+    onOutcomePersisted: routing.markOutcomePersisted,
+  });
 
   try {
     const server = new McpServer(
@@ -97,14 +132,17 @@ export function createServer(): McpServer {
       { instructions: SERVER_INSTRUCTIONS },
     );
 
-    registerReviewPlanTool(server, client, db);
-    registerReviewCodeTool(server, client, db);
-    registerReviewPrecommitTool(server, client, db, config);
-    registerReviewHistoryTool(server, db);
-    registerReviewStatusTool(server, db);
+    registerReviewPlanTool(server, client, storage.db, lifecycle);
+    registerReviewCodeTool(server, client, storage.db, lifecycle);
+    registerReviewPrecommitTool(server, client, storage.db, config, lifecycle);
+    registerReviewHistoryTool(server, storage.db);
+    registerReviewStatusTool(server, storage.db, registry);
 
     return server;
   } catch (e) {
-    throw new Error(`Failed to initialize MCP server: ${e instanceof Error ? e.message : String(e)}`, { cause: e });
+    throw new Error(
+      `Failed to initialize MCP server: ${e instanceof Error ? e.message : String(e)}`,
+      { cause: e },
+    );
   }
 }

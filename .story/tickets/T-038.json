@@ -1,0 +1,13 @@
+{
+  "blockedBy": [],
+  "completedDate": "2026-07-13",
+  "createdDate": "2026-07-13",
+  "description": "Expose requested, resolved, and runtime-observed model identity on successful plan/code/precommit responses and history; preserve host-only schema boundaries; add durable model snapshots, honest Gemini selected-only evidence, bounded Codex rollout observation, lifecycle admission/routing safeguards, history pagination, CLI/docs, and TDD coverage. Persistence failures preserve successful reviews with memory_only provenance. Do not publish or version-bump as part of this ticket.",
+  "displayId": "T-038",
+  "id": "T-038",
+  "order": 10,
+  "phase": "model-currency",
+  "status": "complete",
+  "title": "Report evidence-aware responding model metadata",
+  "type": "feature"
+}

@@ -1,0 +1,37 @@
+{
+  "components": [
+    "backends/orchestrator",
+    "utils/chunking",
+    "tools/review-code"
+  ],
+  "createdBy": "runnerkit-17 (peer Claude session) via triage",
+  "dedupeKey": "runnerkit-feedback-2026-09-04:2",
+  "discoveredDate": "2026-09-05",
+  "id": "ISS-032",
+  "impact": "Verified at a066fba: `mergeCodeResults` in src/backends/orchestrator.ts:117 builds `summary` as `results.map(r => r.summary).join(' ')`, so a ~35 KB diff split into 3 chunks by `max_chunk_tokens` (default 8000, src/config/types.ts:67) returns a summary that is three stitched per-chunk verdict paragraphs (peer saw \"The overall verdict remains deferred…\" repeated three times). Chunking is also invisible to the caller: `chunks_reviewed` is the only hint, the MCP/CLI schemas do not describe that chunk boundaries follow files, and there is no per-call `max_chunk_tokens` parameter, only the .reviewbridge.json field. Fix direction: synthesize one summary (prefix with \"Reviewed in N file-boundary chunks\" and keep the worst-verdict chunk's summary, or run a cheap merge turn), document chunking in the tool descriptions, and accept `max_chunk_tokens` as an optional per-call parameter. Related: ISS-020 (cross-chunk blindness).",
+  "location": [],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": null,
+  "resolvedDate": null,
+  "severity": "medium",
+  "sourceRefs": [
+    {
+      "contentHash": "e604a79aa5c04bafff82988b77f6356d7af1b887c0d878eb1f1ab66ed0fd7e32",
+      "endLine": 120,
+      "path": "src/backends/orchestrator.ts",
+      "reviewId": "runnerkit-feedback-2026-09-04",
+      "revision": "a066fba339b032c0bd20f8bc3737bbaa404bb6b9",
+      "startLine": 105
+    },
+    {
+      "contentHash": "e03d87010a65648709b2f00d643f2d5dc251f12d6a5a4ebce5f461a0fa4fee2b",
+      "path": "src/config/types.ts",
+      "reviewId": "runnerkit-feedback-2026-09-04",
+      "revision": "a066fba339b032c0bd20f8bc3737bbaa404bb6b9",
+      "startLine": 67
+    }
+  ],
+  "status": "open",
+  "title": "Chunked code reviews concatenate per-chunk summaries verbatim and expose no per-call chunk control"
+}

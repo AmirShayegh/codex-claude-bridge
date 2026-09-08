@@ -17,7 +17,12 @@ function backend(provider: ReviewProvider, methods: Methods = {}): ReviewBackend
   };
 }
 
-const CODE_OK = { verdict: 'approve' as const, summary: 's', findings: [], session_id: 'sec-session' };
+const CODE_OK = {
+  verdict: 'approve' as const,
+  summary: 's',
+  findings: [],
+  session_id: 'sec-session',
+};
 const DIFF = 'diff --git a/f b/f\n@@ -1 +1 @@\n-a\n+b';
 
 beforeEach(() => {
@@ -61,9 +66,14 @@ describe('createFailoverBackend', () => {
   it('fails over to the secondary when the primary binary is unavailable (killed/quarantined)', async () => {
     const secReview = vi.fn().mockResolvedValue(ok(CODE_OK));
     const primary = backend('codex', {
-      reviewCode: vi.fn().mockResolvedValue(err(`${ErrorCode.PROVIDER_UNAVAILABLE}: codex binary was killed`)),
+      reviewCode: vi
+        .fn()
+        .mockResolvedValue(err(`${ErrorCode.PROVIDER_UNAVAILABLE}: codex binary was killed`)),
     });
-    const res = await createFailoverBackend(primary, backend('gemini', { reviewCode: secReview })).reviewCode({
+    const res = await createFailoverBackend(
+      primary,
+      backend('gemini', { reviewCode: secReview }),
+    ).reviewCode({
       diff: DIFF,
     });
 
@@ -77,7 +87,10 @@ describe('createFailoverBackend', () => {
     const primary = backend('codex', {
       reviewCode: vi.fn().mockResolvedValue(err(`${ErrorCode.INVALID_INPUT}: bad diff`)),
     });
-    const res = await createFailoverBackend(primary, backend('gemini', { reviewCode: secReview })).reviewCode({
+    const res = await createFailoverBackend(
+      primary,
+      backend('gemini', { reviewCode: secReview }),
+    ).reviewCode({
       diff: DIFF,
     });
 
@@ -91,7 +104,10 @@ describe('createFailoverBackend', () => {
     const primary = backend('codex', {
       reviewCode: vi.fn().mockResolvedValue(ok({ ...CODE_OK, session_id: 'pri' })),
     });
-    const res = await createFailoverBackend(primary, backend('gemini', { reviewCode: secReview })).reviewCode({
+    const res = await createFailoverBackend(
+      primary,
+      backend('gemini', { reviewCode: secReview }),
+    ).reviewCode({
       diff: DIFF,
     });
 
@@ -123,7 +139,10 @@ describe('createFailoverBackend', () => {
     const primary = backend('codex', {
       reviewCode: vi.fn().mockResolvedValue(err(`${ErrorCode.RATE_LIMITED}: usage`)),
     });
-    const res = await createFailoverBackend(primary, backend('gemini', { reviewCode: secReview })).reviewCode({
+    const res = await createFailoverBackend(
+      primary,
+      backend('gemini', { reviewCode: secReview }),
+    ).reviewCode({
       diff: DIFF,
       session_id: 'codex-sess',
     });
@@ -195,7 +214,7 @@ describe('createFailoverBackend — resume ownership routing', () => {
     const secReview = vi.fn().mockResolvedValue(ok({ ...CODE_OK, session_id: 'sess-1' }));
     const primary = backend('codex', { reviewCode: priReview });
     const secondary = backend('gemini', { reviewCode: secReview });
-    const lookup = vi.fn().mockReturnValue('gemini');
+    const lookup = vi.fn().mockReturnValue({ status: 'found', value: 'gemini' });
 
     const res = await createFailoverBackend(primary, secondary, lookup).reviewCode(RESUME);
 
@@ -208,7 +227,11 @@ describe('createFailoverBackend — resume ownership routing', () => {
   it('routes a primary-owned resume to the primary', async () => {
     const priReview = vi.fn().mockResolvedValue(ok({ ...CODE_OK, session_id: 'sess-1' }));
     const secReview = vi.fn();
-    const fb = createFailoverBackend(backend('codex', { reviewCode: priReview }), backend('gemini', { reviewCode: secReview }), vi.fn().mockReturnValue('codex'));
+    const fb = createFailoverBackend(
+      backend('codex', { reviewCode: priReview }),
+      backend('gemini', { reviewCode: secReview }),
+      vi.fn().mockReturnValue({ status: 'found', value: 'codex' }),
+    );
 
     const res = await fb.reviewCode(RESUME);
 
@@ -217,22 +240,46 @@ describe('createFailoverBackend — resume ownership routing', () => {
     expect(res.ok && res.data.provider).toBe('codex');
   });
 
-  it('routes to the primary when the owner is unknown (lookup returns null)', async () => {
+  it('routes to the primary when the owner is absent or legacy', async () => {
     const priReview = vi.fn().mockResolvedValue(ok({ ...CODE_OK, session_id: 'sess-1' }));
     const secReview = vi.fn();
-    const fb = createFailoverBackend(backend('codex', { reviewCode: priReview }), backend('gemini', { reviewCode: secReview }), vi.fn().mockReturnValue(null));
+    const fb = createFailoverBackend(
+      backend('codex', { reviewCode: priReview }),
+      backend('gemini', { reviewCode: secReview }),
+      vi.fn().mockReturnValue({ status: 'absent' }),
+    );
 
     const res = await fb.reviewCode(RESUME);
 
     expect(priReview).toHaveBeenCalledOnce();
     expect(secReview).not.toHaveBeenCalled();
     expect(res.ok && res.data.provider).toBe('codex');
+  });
+
+  it('rejects a resume when ownership lookup is unavailable', async () => {
+    const priReview = vi.fn();
+    const secReview = vi.fn();
+    const fb = createFailoverBackend(
+      backend('codex', { reviewCode: priReview }),
+      backend('gemini', { reviewCode: secReview }),
+      vi.fn().mockReturnValue({ status: 'unavailable' }),
+    );
+
+    const res = await fb.reviewCode(RESUME);
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/^SESSION_ROUTING_UNAVAILABLE:/);
+    expect(priReview).not.toHaveBeenCalled();
+    expect(secReview).not.toHaveBeenCalled();
   });
 
   it('routes to the primary when no lookup is supplied (back-compat)', async () => {
     const priReview = vi.fn().mockResolvedValue(ok({ ...CODE_OK, session_id: 'sess-1' }));
     const secReview = vi.fn();
-    const fb = createFailoverBackend(backend('codex', { reviewCode: priReview }), backend('gemini', { reviewCode: secReview }));
+    const fb = createFailoverBackend(
+      backend('codex', { reviewCode: priReview }),
+      backend('gemini', { reviewCode: secReview }),
+    );
 
     const res = await fb.reviewCode(RESUME);
 

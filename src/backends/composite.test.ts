@@ -3,10 +3,12 @@ import { resolveMode, createCompositeBackend, withSingleMode } from './composite
 import { ok } from '../utils/errors.js';
 import { ErrorCode } from '../utils/errors.js';
 import { DEFAULT_CONFIG } from '../config/types.js';
-import type { ReviewBackend } from './backend.js';
+import { canOverrideModelOnResume, type ReviewBackend } from './backend.js';
 import type { ReviewProvider } from '../config/types.js';
 
-type Methods = Partial<Pick<ReviewBackend, 'reviewPlan' | 'reviewCode' | 'reviewPrecommit' | 'crossReview'>>;
+type Methods = Partial<
+  Pick<ReviewBackend, 'reviewPlan' | 'reviewCode' | 'reviewPrecommit' | 'crossReview'>
+>;
 function backend(provider: ReviewProvider, methods: Methods = {}): ReviewBackend {
   return {
     provider,
@@ -61,7 +63,10 @@ describe('createCompositeBackend — per-call dispatch + review_mode stamping', 
   it('deliberate:true on a failover config runs deliberation and stamps review_mode:deliberate', async () => {
     const p = backend('codex');
     const s = backend('gemini');
-    const res = await createCompositeBackend(p, s, cfg({ mode: 'failover' })).reviewCode({ diff: DIFF, deliberate: true });
+    const res = await createCompositeBackend(p, s, cfg({ mode: 'failover' })).reviewCode({
+      diff: DIFF,
+      deliberate: true,
+    });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.data.review_mode).toBe('deliberate');
@@ -72,7 +77,10 @@ describe('createCompositeBackend — per-call dispatch + review_mode stamping', 
   it('deliberate:false on a deliberate config runs failover and stamps review_mode:failover', async () => {
     const p = backend('codex');
     const s = backend('gemini');
-    const res = await createCompositeBackend(p, s, cfg({ mode: 'deliberate' })).reviewCode({ diff: DIFF, deliberate: false });
+    const res = await createCompositeBackend(p, s, cfg({ mode: 'deliberate' })).reviewCode({
+      diff: DIFF,
+      deliberate: false,
+    });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.data.review_mode).toBe('failover');
@@ -81,24 +89,58 @@ describe('createCompositeBackend — per-call dispatch + review_mode stamping', 
   });
 
   it('no toggle uses the config mode (deliberate-deep stamps deliberate-deep)', async () => {
-    const res = await createCompositeBackend(backend('codex'), backend('gemini'), cfg({ mode: 'deliberate-deep' })).reviewCode({ diff: DIFF });
+    const res = await createCompositeBackend(
+      backend('codex'),
+      backend('gemini'),
+      cfg({ mode: 'deliberate-deep' }),
+    ).reviewCode({ diff: DIFF });
     expect(res.ok && res.data.review_mode).toBe('deliberate-deep');
   });
 
   it('reviewPlan stamps the mode too', async () => {
-    const res = await createCompositeBackend(backend('codex'), backend('gemini'), cfg({ mode: 'failover' })).reviewPlan({ plan: 'p' });
+    const res = await createCompositeBackend(
+      backend('codex'),
+      backend('gemini'),
+      cfg({ mode: 'failover' }),
+    ).reviewPlan({ plan: 'p' });
     expect(res.ok && res.data.review_mode).toBe('failover');
   });
 
   it('reviewPrecommit always runs failover and stamps failover', async () => {
-    const res = await createCompositeBackend(backend('codex'), backend('gemini'), cfg({ mode: 'deliberate' })).reviewPrecommit({ diff: DIFF });
+    const res = await createCompositeBackend(
+      backend('codex'),
+      backend('gemini'),
+      cfg({ mode: 'deliberate' }),
+    ).reviewPrecommit({ diff: DIFF });
     expect(res.ok && res.data.review_mode).toBe('failover');
   });
 
   it('exposes both providers on the composite', () => {
-    const c = createCompositeBackend(backend('codex'), backend('gemini'), cfg({ mode: 'failover' }));
+    const c = createCompositeBackend(
+      backend('codex'),
+      backend('gemini'),
+      cfg({ mode: 'failover' }),
+    );
     expect(c.providers).toEqual(['codex', 'gemini']);
     expect(c.provider).toBe('codex');
+  });
+
+  it('exposes each owning leaf model-override capability independent of primary order', () => {
+    const codexPrimary = createCompositeBackend(
+      backend('codex'),
+      backend('gemini'),
+      cfg({ mode: 'failover' }),
+    );
+    const geminiPrimary = createCompositeBackend(
+      backend('gemini'),
+      backend('codex'),
+      cfg({ mode: 'failover' }),
+    );
+
+    expect(canOverrideModelOnResume(codexPrimary, 'codex')).toBe(false);
+    expect(canOverrideModelOnResume(codexPrimary, 'gemini')).toBe(true);
+    expect(canOverrideModelOnResume(geminiPrimary, 'codex')).toBe(false);
+    expect(canOverrideModelOnResume(geminiPrimary, 'gemini')).toBe(true);
   });
 });
 
@@ -142,14 +184,22 @@ describe('withSingleMode', () => {
 describe('createCompositeBackend — defensive single-mode handling', () => {
   it('runs the primary and stamps single when the config is single', async () => {
     const s = backend('gemini');
-    const res = await createCompositeBackend(backend('codex'), s, cfg({ mode: 'single' })).reviewCode({ diff: DIFF });
+    const res = await createCompositeBackend(
+      backend('codex'),
+      s,
+      cfg({ mode: 'single' }),
+    ).reviewCode({ diff: DIFF });
     expect(res.ok && res.data.review_mode).toBe('single');
     expect(res.ok && res.data.provider).toBe('codex'); // ISS-023
     expect(s.reviewCode).not.toHaveBeenCalled(); // no second provider
   });
 
   it('rejects deliberate:true under a single config with INVALID_INPUT', async () => {
-    const res = await createCompositeBackend(backend('codex'), backend('gemini'), cfg({ mode: 'single' })).reviewPlan({ plan: 'p', deliberate: true });
+    const res = await createCompositeBackend(
+      backend('codex'),
+      backend('gemini'),
+      cfg({ mode: 'single' }),
+    ).reviewPlan({ plan: 'p', deliberate: true });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toContain(ErrorCode.INVALID_INPUT);
   });

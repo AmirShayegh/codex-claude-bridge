@@ -9,9 +9,27 @@ import {
   PlanReviewResultSchema,
   CodeReviewResultSchema,
   PrecommitResultSchema,
+  CrossReviewResponseSchema,
+  CrossReviewResultSchema,
   ReviewStatusSchema,
   ReviewHistoryEntrySchema,
+  ModelIdentitySchema,
+  ReviewProvenanceSchema,
 } from './types.js';
+
+const validModelIdentity = {
+  provider: 'codex',
+  role: 'review',
+  requested: null,
+  resolved: 'gpt-5.6-sol',
+  observed: 'gpt-5.6-sol',
+  evidence: 'runtime_session_record',
+} as const;
+
+const validProvenance = {
+  persistence: 'durable',
+  warning: null,
+} as const;
 
 describe('PlanFindingSeveritySchema', () => {
   it('accepts plan-specific severities', () => {
@@ -186,9 +204,9 @@ describe('ReviewFindingSchema', () => {
   it('fails when required fields are missing', () => {
     expect(ReviewFindingSchema.safeParse({}).success).toBe(false);
     expect(ReviewFindingSchema.safeParse({ severity: 'critical' }).success).toBe(false);
-    expect(
-      ReviewFindingSchema.safeParse({ severity: 'critical', category: 'bug' }).success,
-    ).toBe(false);
+    expect(ReviewFindingSchema.safeParse({ severity: 'critical', category: 'bug' }).success).toBe(
+      false,
+    );
   });
 
   it('fails with invalid severity', () => {
@@ -201,7 +219,13 @@ describe('ReviewFindingSchema', () => {
   });
 
   it('accepts both suggestion and nitpick severities', () => {
-    const base = { category: 'test', description: 'test', file: null, line: null, suggestion: null };
+    const base = {
+      category: 'test',
+      description: 'test',
+      file: null,
+      line: null,
+      suggestion: null,
+    };
     expect(ReviewFindingSchema.safeParse({ ...base, severity: 'suggestion' }).success).toBe(true);
     expect(ReviewFindingSchema.safeParse({ ...base, severity: 'nitpick' }).success).toBe(true);
   });
@@ -236,7 +260,14 @@ describe('PlanReviewResultSchema', () => {
     verdict: 'approve',
     summary: 'Plan looks solid',
     findings: [
-      { severity: 'minor', category: 'style', description: 'Consider renaming', file: null, line: null, suggestion: null },
+      {
+        severity: 'minor',
+        category: 'style',
+        description: 'Consider renaming',
+        file: null,
+        line: null,
+        suggestion: null,
+      },
     ],
     session_id: 'sess_abc123',
   };
@@ -270,6 +301,19 @@ describe('PlanReviewResultSchema', () => {
     const result = PlanReviewResultSchema.safeParse({ ...validPlanResult, findings: [] });
     expect(result.success).toBe(true);
   });
+
+  it('accepts additive model identity and persistence provenance', () => {
+    const result = PlanReviewResultSchema.safeParse({
+      ...validPlanResult,
+      models: [validModelIdentity],
+      provenance: validProvenance,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.models).toEqual([validModelIdentity]);
+      expect(result.data.provenance).toEqual(validProvenance);
+    }
+  });
 });
 
 describe('CodeReviewResultSchema', () => {
@@ -277,7 +321,14 @@ describe('CodeReviewResultSchema', () => {
     verdict: 'request_changes',
     summary: 'Several issues found',
     findings: [
-      { severity: 'critical', category: 'bug', description: 'Null pointer dereference', file: null, line: null, suggestion: null },
+      {
+        severity: 'critical',
+        category: 'bug',
+        description: 'Null pointer dereference',
+        file: null,
+        line: null,
+        suggestion: null,
+      },
     ],
     session_id: 'sess_def456',
   };
@@ -327,9 +378,13 @@ describe('CodeReviewResultSchema', () => {
   // T-028: additive visibility fields.
   it('accepts review_mode on the result', () => {
     for (const mode of ['single', 'failover', 'deliberate', 'deliberate-deep']) {
-      expect(CodeReviewResultSchema.safeParse({ ...validCodeResult, review_mode: mode }).success).toBe(true);
+      expect(
+        CodeReviewResultSchema.safeParse({ ...validCodeResult, review_mode: mode }).success,
+      ).toBe(true);
     }
-    expect(CodeReviewResultSchema.safeParse({ ...validCodeResult, review_mode: 'bogus' }).success).toBe(false);
+    expect(
+      CodeReviewResultSchema.safeParse({ ...validCodeResult, review_mode: 'bogus' }).success,
+    ).toBe(false);
   });
 
   it('accepts a deliberation block with agreement:degraded, per-verdict chunks, and cross_review_failures', () => {
@@ -349,6 +404,25 @@ describe('CodeReviewResultSchema', () => {
       },
     };
     const result = CodeReviewResultSchema.safeParse(withDeliberation);
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts multiple reviewer and adjudicator model identities', () => {
+    const result = CodeReviewResultSchema.safeParse({
+      ...validCodeResult,
+      models: [
+        validModelIdentity,
+        {
+          provider: 'gemini',
+          role: 'adjudication',
+          requested: 'latest',
+          resolved: 'Gemini 3.5 Flash (High)',
+          observed: null,
+          evidence: 'bridge_selection',
+        },
+      ],
+      provenance: { persistence: 'memory_only', warning: 'History was not saved.' },
+    });
     expect(result.success).toBe(true);
   });
 });
@@ -382,9 +456,103 @@ describe('PrecommitResultSchema', () => {
 
   it('rejects missing required fields', () => {
     expect(PrecommitResultSchema.safeParse({}).success).toBe(false);
+    expect(PrecommitResultSchema.safeParse({ ready_to_commit: true }).success).toBe(false);
+  });
+
+  it('accepts empty model metadata for a synthetic result', () => {
+    const result = PrecommitResultSchema.safeParse({
+      ...validPrecommit,
+      models: [],
+      provenance: { persistence: 'not_recorded', warning: null },
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
+describe('model metadata schemas', () => {
+  it('accepts every supported identity role and evidence source', () => {
+    expect(ModelIdentitySchema.safeParse(validModelIdentity).success).toBe(true);
     expect(
-      PrecommitResultSchema.safeParse({ ready_to_commit: true }).success,
+      ModelIdentitySchema.safeParse({
+        ...validModelIdentity,
+        provider: 'gemini',
+        role: 'adjudication',
+        requested: 'latest',
+        observed: null,
+        evidence: 'bridge_selection',
+      }).success,
+    ).toBe(true);
+    expect(
+      ModelIdentitySchema.safeParse({
+        ...validModelIdentity,
+        requested: null,
+        resolved: null,
+        observed: null,
+        evidence: 'unavailable',
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects unsupported providers, roles, and evidence sources', () => {
+    expect(
+      ModelIdentitySchema.safeParse({ ...validModelIdentity, provider: 'other' }).success,
     ).toBe(false);
+    expect(ModelIdentitySchema.safeParse({ ...validModelIdentity, role: 'fallback' }).success).toBe(
+      false,
+    );
+    expect(
+      ModelIdentitySchema.safeParse({ ...validModelIdentity, evidence: 'model_claim' }).success,
+    ).toBe(false);
+  });
+
+  it('rejects control characters and overlong model labels', () => {
+    expect(
+      ModelIdentitySchema.safeParse({ ...validModelIdentity, resolved: 'safe\nforged' }).success,
+    ).toBe(false);
+    expect(
+      ModelIdentitySchema.safeParse({
+        ...validModelIdentity,
+        observed: `safe${String.fromCharCode(0x85)}forged`,
+      }).success,
+    ).toBe(false);
+    expect(
+      ModelIdentitySchema.safeParse({ ...validModelIdentity, requested: 'x'.repeat(201) }).success,
+    ).toBe(false);
+  });
+
+  it('accepts every persistence status', () => {
+    for (const persistence of ['durable', 'memory_only', 'not_recorded']) {
+      expect(
+        ReviewProvenanceSchema.safeParse({
+          persistence,
+          warning: persistence === 'memory_only' ? 'DB unavailable' : null,
+        }).success,
+      ).toBe(true);
+    }
+  });
+});
+
+describe('cross-review response/result separation', () => {
+  const adjudications = [{ index: 0, verdict: 'confirmed', reason: 'The finding is valid.' }];
+
+  it('keeps host-only metadata out of the provider-facing response schema', () => {
+    expect(Object.keys(CrossReviewResponseSchema.shape)).toEqual(['adjudications']);
+    const parsed = CrossReviewResponseSchema.parse({
+      adjudications,
+      models: [validModelIdentity],
+      provenance: validProvenance,
+    });
+    expect(parsed).toEqual({ adjudications });
+  });
+
+  it('accepts host-enriched cross-review results', () => {
+    const parsed = CrossReviewResultSchema.parse({
+      adjudications,
+      models: [{ ...validModelIdentity, role: 'adjudication' }],
+      provenance: validProvenance,
+    });
+    expect(parsed.models).toHaveLength(1);
+    expect(parsed.provenance).toEqual(validProvenance);
   });
 });
 
@@ -431,6 +599,8 @@ describe('ReviewHistoryEntrySchema', () => {
     timestamp: '2026-02-18T10:00:00Z',
     summary: 'Plan approved',
     provider: 'codex',
+    models: [validModelIdentity],
+    model_metadata_status: 'recorded',
   };
 
   it('parses a valid history entry', () => {
@@ -449,6 +619,33 @@ describe('ReviewHistoryEntrySchema', () => {
     if (result.success) {
       expect(result.data.provider).toBeNull();
     }
+  });
+
+  it('accepts explicit legacy and invalid model metadata states', () => {
+    for (const model_metadata_status of ['legacy_unrecorded', 'invalid']) {
+      const result = ReviewHistoryEntrySchema.safeParse({
+        ...validEntry,
+        models: null,
+        model_metadata_status,
+      });
+      expect(result.success).toBe(true);
+    }
+  });
+
+  it('rejects inconsistent history metadata states', () => {
+    expect(
+      ReviewHistoryEntrySchema.safeParse({
+        ...validEntry,
+        models: null,
+        model_metadata_status: 'recorded',
+      }).success,
+    ).toBe(false);
+    expect(
+      ReviewHistoryEntrySchema.safeParse({
+        ...validEntry,
+        model_metadata_status: 'legacy_unrecorded',
+      }).success,
+    ).toBe(false);
   });
 
   it('rejects a missing provider key', () => {

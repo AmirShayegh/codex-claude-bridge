@@ -11,6 +11,7 @@ import {
   PrecommitStandardsSchema,
 } from './types.js';
 import type { ReviewBridgeConfig } from './types.js';
+import { escapeTerminalControls } from '../utils/terminal.js';
 
 const CONFIG_FILENAME = '.reviewbridge.json';
 const ENV_VAR = 'RB_CONFIG_PATH';
@@ -33,7 +34,10 @@ function unknownKeys(raw: unknown, known: string[]): string[] {
 function warnUnknownConfigKeys(raw: unknown, path: string): void {
   const warn = (loc: string, keys: string[]): void => {
     if (keys.length > 0) {
-      console.error(`[codex-bridge] ignoring unrecognized config field(s) in ${loc} (${path}): ${keys.join(', ')}`);
+      console.error(
+        `[codex-bridge] ignoring unrecognized config field(s) in ${escapeTerminalControls(loc)} ` +
+          `(${escapeTerminalControls(path)}): ${escapeTerminalControls(keys.join(', '))}`,
+      );
     }
   };
   if (!isPlainObject(raw)) return;
@@ -41,9 +45,18 @@ function warnUnknownConfigKeys(raw: unknown, path: string): void {
   const rs = raw.review_standards;
   if (!isPlainObject(rs)) return;
   warn('review_standards', unknownKeys(rs, Object.keys(ReviewStandardsSchema.shape)));
-  warn('review_standards.plan_review', unknownKeys(rs.plan_review, Object.keys(PlanReviewStandardsSchema.shape)));
-  warn('review_standards.code_review', unknownKeys(rs.code_review, Object.keys(CodeReviewStandardsSchema.shape)));
-  warn('review_standards.precommit', unknownKeys(rs.precommit, Object.keys(PrecommitStandardsSchema.shape)));
+  warn(
+    'review_standards.plan_review',
+    unknownKeys(rs.plan_review, Object.keys(PlanReviewStandardsSchema.shape)),
+  );
+  warn(
+    'review_standards.code_review',
+    unknownKeys(rs.code_review, Object.keys(CodeReviewStandardsSchema.shape)),
+  );
+  warn(
+    'review_standards.precommit',
+    unknownKeys(rs.precommit, Object.keys(PrecommitStandardsSchema.shape)),
+  );
 }
 
 export type ConfigSource =
@@ -57,9 +70,7 @@ export interface LoadedConfig {
   source: ConfigSource;
 }
 
-type ProbeResult =
-  | { hit: false }
-  | { hit: true; result: Result<ReviewBridgeConfig> };
+type ProbeResult = { hit: false } | { hit: true; result: Result<ReviewBridgeConfig> };
 
 // ENOENT only → { hit: false }. Anything else (EACCES, parse, validate)
 // returns { hit: true } so the caller stops cascading and surfaces it.
@@ -92,7 +103,9 @@ function probe(path: string): ProbeResult {
   if (!validated.success) {
     return {
       hit: true,
-      result: err(`${ErrorCode.CONFIG_ERROR}: invalid config in ${path}: ${validated.error.message}`),
+      result: err(
+        `${ErrorCode.CONFIG_ERROR}: invalid config in ${path}: ${validated.error.message}`,
+      ),
     };
   }
 

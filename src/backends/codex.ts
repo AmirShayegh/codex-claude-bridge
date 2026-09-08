@@ -8,6 +8,7 @@ import type {
   CodeReviewResult,
   PrecommitResult,
   CrossReviewResult,
+  ModelIdentity,
 } from '../review/types.js';
 import { RECOMMENDED_MODELS, type ReviewBridgeConfig } from '../config/types.js';
 import { estimateTokens } from '../utils/chunking.js';
@@ -21,6 +22,14 @@ import {
   type TurnParams,
   type TurnRunner,
 } from './orchestrator.js';
+import { createCodexSessionObserver } from './codex-session-observer.js';
+import { escapeTerminalControls } from '../utils/terminal.js';
+import { SessionIdSchema } from '../utils/input-validation.js';
+
+export interface CodexBackendDependencies {
+  lookupSessionModel?: (sessionId: string) => ModelIdentity | null;
+  observeSessionModel?: (sessionId: string) => Promise<string | undefined>;
+}
 
 function isAbortError(e: unknown): boolean {
   if (e instanceof Error) {
@@ -140,7 +149,11 @@ export function classifyError(
   }
 
   // Network
-  if (lower.includes('fetch failed') || lower.includes('econnrefused') || lower.includes('enotfound')) {
+  if (
+    lower.includes('fetch failed') ||
+    lower.includes('econnrefused') ||
+    lower.includes('enotfound')
+  ) {
     return {
       code: ErrorCode.NETWORK_ERROR,
       message: 'Could not reach OpenAI API. Check your internet connection.',
@@ -159,10 +172,10 @@ const CODEX_DEFAULT_MODEL = RECOMMENDED_MODELS.codex[0];
 // resolves a concrete model for every start — see startThreadOpts), while the
 // resume path deliberately omits it. The SDK forwards `--model` to `codex exec`
 // unconditionally whenever the field is present (see
-// @openai/codex-sdk/dist/index.js:170), which would reassert a model on resume
-// and either break a thread created with an override or fail auth on
-// ChatGPT-tier Codex if the new model isn't available there. A resumed thread
-// keeps whatever model it was started with.
+// @openai/codex-sdk/dist/index.js:170), which would turn a resume into an
+// explicit model override and may fail auth on ChatGPT-tier Codex. The bridge
+// retains the prior resolved identity separately and reports any different
+// runtime-observed label instead of hiding the mismatch.
 function baseThreadOpts(config: ReviewBridgeConfig) {
   return {
     sandboxMode: 'read-only' as const,
@@ -187,13 +200,36 @@ function resumeThreadOpts(config: ReviewBridgeConfig) {
 async function runReview<T extends Record<string, unknown>>(
   params: TurnParams & { codex: Codex; config: ReviewBridgeConfig },
 ): Promise<Result<T & { session_id: string }>> {
-  const { codex, config, prompt, responseSchema, sessionId, model, resolvedModel } = params;
+  const {
+    codex,
+    config,
+    prompt,
+    responseSchema,
+    sessionId: rawSessionId,
+    model,
+    resolvedModel,
+  } = params;
+  let sessionId: string | undefined;
+  if (rawSessionId !== undefined) {
+    const parsedSessionId = SessionIdSchema.safeParse(rawSessionId);
+    if (!parsedSessionId.success) {
+      return err(`${ErrorCode.INVALID_INPUT}: invalid session ID`);
+    }
+    sessionId = parsedSessionId.data;
+  }
+  const startModel = model ?? resolvedModel;
+  if (!sessionId && !startModel) {
+    return err(`${ErrorCode.MODEL_ERROR}: no model was resolved for a fresh Codex session`);
+  }
 
   let thread;
   try {
-    thread = sessionId
-      ? codex.resumeThread(sessionId, resumeThreadOpts(config))
-      : codex.startThread(startThreadOpts(config, model ?? resolvedModel));
+    if (sessionId) {
+      thread = codex.resumeThread(sessionId, resumeThreadOpts(config));
+    } else {
+      if (!startModel) return err(`${ErrorCode.MODEL_ERROR}: no model was resolved`);
+      thread = codex.startThread(startThreadOpts(config, startModel));
+    }
   } catch (e: unknown) {
     if (sessionId) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -224,8 +260,8 @@ async function runReview<T extends Record<string, unknown>>(
         const tokenEst = estimateTokens(prompt);
         return err(
           `${ErrorCode.REVIEW_TIMEOUT}: review timed out after ${config.timeout_seconds}s ` +
-          `(prompt ~${tokenEst} tokens). ` +
-          `Try: increase timeout_seconds in .reviewbridge.json, reduce diff size, or check input format.`,
+            `(prompt ~${tokenEst} tokens). ` +
+            `Try: increase timeout_seconds in .reviewbridge.json, reduce diff size, or check input format.`,
         );
       }
       const classified = classifyError(e, { model: resolvedModel });
@@ -247,12 +283,18 @@ async function runReview<T extends Record<string, unknown>>(
     }
 
     const resolvedId = thread.id ?? sessionId;
-    if (!resolvedId) {
+    if (resolvedId === undefined || resolvedId === null) {
       return err(`${ErrorCode.RESPONSE_PARSE_ERROR}: missing session ID after successful review`);
+    }
+    const parsedSessionId = SessionIdSchema.safeParse(resolvedId);
+    if (!parsedSessionId.success) {
+      return err(
+        `${ErrorCode.RESPONSE_PARSE_ERROR}: provider returned an invalid session ID after successful review`,
+      );
     }
     // Single cast justified: safeParse validated result.data matches the schema
     const validated = result.data as T;
-    return ok({ ...validated, session_id: resolvedId });
+    return ok({ ...validated, session_id: parsedSessionId.data });
   }
 
   return err(`${ErrorCode.RESPONSE_PARSE_ERROR}: ${lastError}`);
@@ -261,6 +303,7 @@ async function runReview<T extends Record<string, unknown>>(
 export function createCodexBackend(
   config: ReviewBridgeConfig,
   copilotInstructions?: CopilotInstructions,
+  runtime: CodexBackendDependencies = {},
 ): ReviewBackend {
   // Point the SDK at an explicit codex binary when configured (config.codex_path,
   // then the CODEX_PATH env). Escape hatch for a missing/unusable bundled binary
@@ -303,7 +346,7 @@ export function createCodexBackend(
         codex = new Codex({ codexPathOverride: found });
         console.error(
           `[codex-bridge] bundled codex binary is unusable (macOS XProtect may have quarantined it); ` +
-            `using discovered ${found}. Pin it explicitly with "codex_path" in .reviewbridge.json to silence this.`,
+            `using discovered ${escapeTerminalControls(found)}. Pin it explicitly with "codex_path" in .reviewbridge.json to silence this.`,
         );
         return 'recovered';
       } catch {
@@ -326,10 +369,13 @@ export function createCodexBackend(
     }
     return result;
   };
-  // Codex's SDK reasserts --model on resume, so the model cannot change
-  // mid-session: reject session_id + model and omit the model on resumed chunks.
+  // Codex's SDK reasserts --model when supplied on resume, so callers cannot
+  // request a model change mid-session. Omit it and let evidence metadata expose
+  // whether the runtime actually retained or changed the recorded label.
+  const sessionObserver = createCodexSessionObserver();
   const deps = {
     config,
+    provider: 'codex' as const,
     copilotInstructions,
     allowsModelOverrideOnResume: false,
     // 'latest' (and unset) → the latest model the SDK-PINNED binary supports. We
@@ -338,6 +384,10 @@ export function createCodexBackend(
     // moves. An explicit pin is forwarded unchanged (L-006).
     resolveModel: async (requested: string | undefined) =>
       requested && requested !== 'latest' ? requested : CODEX_DEFAULT_MODEL,
+    lookupSessionModel: runtime.lookupSessionModel,
+    observeSessionModel:
+      runtime.observeSessionModel ??
+      (async (sessionId: string) => (await sessionObserver.observe(sessionId))?.model),
     // One Codex thread per review: chunks 2..N resume chunk 1's thread.
     resumesAcrossChunks: true,
   };

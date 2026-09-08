@@ -5,6 +5,7 @@ import { createCodexBackend } from './codex.js';
 import { createGeminiBackend } from './gemini.js';
 import type { SessionProviderLookup } from './failover.js';
 import { createCompositeBackend, withSingleMode } from './composite.js';
+import type { ModelIdentity } from '../review/types.js';
 
 export type { ReviewBackend } from './backend.js';
 
@@ -16,10 +17,13 @@ export type { ReviewBackend } from './backend.js';
 function createLeafBackend(
   config: ReviewBridgeConfig,
   copilotInstructions?: CopilotInstructions,
+  lookupSessionModel?: (sessionId: string) => ModelIdentity | null,
 ): ReviewBackend {
   switch (config.provider) {
     case 'codex':
-      return createCodexBackend(config, copilotInstructions);
+      return lookupSessionModel
+        ? createCodexBackend(config, copilotInstructions, { lookupSessionModel })
+        : createCodexBackend(config, copilotInstructions);
     case 'gemini':
       return createGeminiBackend(config, copilotInstructions);
   }
@@ -27,7 +31,9 @@ function createLeafBackend(
   // compile if a provider is added without a case; it then falls back to codex
   // rather than throwing.
   config.provider satisfies never;
-  return createCodexBackend(config, copilotInstructions);
+  return lookupSessionModel
+    ? createCodexBackend(config, copilotInstructions, { lookupSessionModel })
+    : createCodexBackend(config, copilotInstructions);
 }
 
 // Build the review backend the config selects. `mode` picks the base composition:
@@ -43,9 +49,10 @@ export function createBackend(
   config: ReviewBridgeConfig,
   copilotInstructions?: CopilotInstructions,
   lookupSessionProvider?: SessionProviderLookup,
+  lookupSessionModel?: (sessionId: string) => ModelIdentity | null,
 ): ReviewBackend {
   const mode = config.mode ?? (config.fallback ? 'failover' : 'single');
-  const primary = createLeafBackend(config, copilotInstructions);
+  const primary = createLeafBackend(config, copilotInstructions, lookupSessionModel);
   if (mode === 'single') return withSingleMode(primary);
 
   const secondaryProvider: ReviewProvider = config.provider === 'codex' ? 'gemini' : 'codex';
@@ -55,6 +62,7 @@ export function createBackend(
   const secondary = createLeafBackend(
     { ...config, provider: secondaryProvider, model: undefined },
     copilotInstructions,
+    lookupSessionModel,
   );
   return createCompositeBackend(primary, secondary, config, lookupSessionProvider);
 }

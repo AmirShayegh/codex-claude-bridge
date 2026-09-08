@@ -14,13 +14,13 @@ export enum ErrorCode {
   // quarantined (e.g. macOS XProtect trashing the codex binary). Distinct from a
   // model/auth/rate error: the provider never started, so it's failover-eligible.
   PROVIDER_UNAVAILABLE = 'PROVIDER_UNAVAILABLE',
+  REVIEW_BUSY = 'REVIEW_BUSY',
+  SESSION_ROUTING_UNAVAILABLE = 'SESSION_ROUTING_UNAVAILABLE',
   INVALID_INPUT = 'INVALID_INPUT',
   UNKNOWN_ERROR = 'UNKNOWN_ERROR',
 }
 
-export type Result<T> =
-  | { ok: true; data: T }
-  | { ok: false; error: string; session_id?: string };
+export type Result<T> = { ok: true; data: T } | { ok: false; error: string; session_id?: string };
 
 export function ok<T>(data: T): Result<T> {
   return { ok: true, data };

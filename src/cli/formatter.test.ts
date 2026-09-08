@@ -38,8 +38,22 @@ describe('formatPlanResult', () => {
     verdict: 'revise',
     summary: 'Needs some changes.',
     findings: [
-      { severity: 'minor', category: 'style', description: 'Use consistent naming', file: 'src/foo.ts', line: 10, suggestion: 'Rename to camelCase' },
-      { severity: 'critical', category: 'security', description: 'SQL injection risk', file: 'src/db.ts', line: 42, suggestion: null },
+      {
+        severity: 'minor',
+        category: 'style',
+        description: 'Use consistent naming',
+        file: 'src/foo.ts',
+        line: 10,
+        suggestion: 'Rename to camelCase',
+      },
+      {
+        severity: 'critical',
+        category: 'security',
+        description: 'SQL injection risk',
+        file: 'src/db.ts',
+        line: 42,
+        suggestion: null,
+      },
     ],
     session_id: 'sess-123',
   };
@@ -64,7 +78,12 @@ describe('formatPlanResult', () => {
   });
 
   it('handles empty findings', () => {
-    const empty: PlanReviewResult = { verdict: 'approve', summary: 'All good.', findings: [], session_id: 's' };
+    const empty: PlanReviewResult = {
+      verdict: 'approve',
+      summary: 'All good.',
+      findings: [],
+      session_id: 's',
+    };
     const out = formatPlanResult(empty, false);
     expect(out).toContain('No findings');
     expect(out).toContain('APPROVE');
@@ -74,12 +93,140 @@ describe('formatPlanResult', () => {
     const r: PlanReviewResult = {
       verdict: 'approve',
       summary: 'ok',
-      findings: [{ severity: 'suggestion', category: 'docs', description: 'Add readme', file: 'README.md', line: null, suggestion: null }],
+      findings: [
+        {
+          severity: 'suggestion',
+          category: 'docs',
+          description: 'Add readme',
+          file: 'README.md',
+          line: null,
+          suggestion: null,
+        },
+      ],
       session_id: 's',
     };
     const out = formatPlanResult(r, false);
     expect(out).toContain('README.md');
     expect(out).not.toContain('README.md:');
+  });
+
+  it('prints one honest model line per review and adjudication contribution', () => {
+    const withMetadata: PlanReviewResult = {
+      ...result,
+      models: [
+        {
+          provider: 'codex',
+          role: 'review',
+          requested: null,
+          resolved: 'gpt-5.6-sol',
+          observed: 'gpt-5.6-sol',
+          evidence: 'runtime_session_record',
+        },
+        {
+          provider: 'gemini',
+          role: 'adjudication',
+          requested: 'latest',
+          resolved: 'Gemini 3.5 Flash (High)',
+          observed: null,
+          evidence: 'bridge_selection',
+        },
+      ],
+      provenance: { persistence: 'memory_only', warning: 'History was not saved.' },
+    };
+
+    const modelLines = formatPlanResult(withMetadata, false)
+      .split('\n')
+      .filter((line) => line.startsWith('Model:'));
+    expect(modelLines).toEqual([
+      'Model: role=review provider=codex requested=null resolved=gpt-5.6-sol observed=gpt-5.6-sol evidence=runtime_session_record',
+      'Model: role=adjudication provider=gemini requested=latest resolved=Gemini 3.5 Flash (High) observed=null evidence=bridge_selection',
+    ]);
+  });
+
+  it('prints a persistence warning only when provenance.warning is non-null', () => {
+    const warning = formatPlanResult(
+      {
+        ...result,
+        provenance: { persistence: 'memory_only', warning: 'History was not saved.' },
+      },
+      false,
+    );
+    const durable = formatPlanResult(
+      {
+        ...result,
+        provenance: { persistence: 'durable', warning: null },
+      },
+      false,
+    );
+    const absent = formatPlanResult(result, false);
+
+    expect(warning).toContain('Persistence warning: History was not saved.');
+    expect(durable).not.toContain('Persistence warning:');
+    expect(absent).not.toContain('Persistence warning:');
+  });
+
+  it('prints unavailable requested, resolved, and observed identities as null', () => {
+    const out = formatPlanResult(
+      {
+        ...result,
+        models: [
+          {
+            provider: 'codex',
+            role: 'review',
+            requested: null,
+            resolved: null,
+            observed: null,
+            evidence: 'unavailable',
+          },
+        ],
+      },
+      false,
+    );
+    expect(out).toContain(
+      'Model: role=review provider=codex requested=null resolved=null observed=null evidence=unavailable',
+    );
+  });
+
+  it('escapes untrusted controls in every dynamic human field', () => {
+    const escape = String.fromCharCode(0x1b);
+    const c1 = String.fromCharCode(0x85);
+    const unsafe: PlanReviewResult = {
+      verdict: 'approve',
+      summary: 'summary\nforged',
+      findings: [
+        {
+          severity: 'minor',
+          category: 'style',
+          description: `description${escape}forged`,
+          file: 'src/file\rname.ts',
+          line: 1,
+          suggestion: `suggestion${c1}forged`,
+        },
+      ],
+      session_id: 'session\nforged',
+      models: [
+        {
+          provider: 'codex',
+          role: 'review',
+          requested: null,
+          resolved: `model${escape}forged`,
+          observed: null,
+          evidence: 'unavailable',
+        },
+      ],
+      provenance: { persistence: 'memory_only', warning: 'db\nforged' },
+    };
+
+    const out = formatPlanResult(unsafe, false);
+    expect(out).toContain('summary\\nforged');
+    expect(out).toContain('src/file\\rname.ts:1');
+    expect(out).toContain('description\\x1Bforged');
+    expect(out).toContain('suggestion\\x85forged');
+    expect(out).toContain('resolved=model\\x1Bforged');
+    expect(out).toContain('Persistence warning: db\\nforged');
+    expect(out).toContain('Session: session\\nforged');
+    expect(out).not.toContain(escape);
+    expect(out).not.toContain(c1);
   });
 });
 
@@ -88,7 +235,14 @@ describe('formatCodeResult', () => {
     verdict: 'request_changes',
     summary: 'Found bugs.',
     findings: [
-      { severity: 'major', category: 'bugs', description: 'Off by one', file: 'src/loop.ts', line: 5, suggestion: 'Use < instead of <=' },
+      {
+        severity: 'major',
+        category: 'bugs',
+        description: 'Off by one',
+        file: 'src/loop.ts',
+        line: 5,
+        suggestion: 'Use < instead of <=',
+      },
     ],
     session_id: 'sess-456',
   };
@@ -105,17 +259,53 @@ describe('formatCodeResult', () => {
     const r: CodeReviewResult = {
       verdict: 'approve',
       summary: 'ok',
-      findings: [{ severity: 'nitpick', category: 'style', description: 'Trailing space', file: null, line: null, suggestion: null }],
+      findings: [
+        {
+          severity: 'nitpick',
+          category: 'style',
+          description: 'Trailing space',
+          file: null,
+          line: null,
+          suggestion: null,
+        },
+      ],
       session_id: 's',
     };
     const out = formatCodeResult(r, false);
     expect(out).toContain('[NITPICK]');
   });
+
+  it('prints model metadata for code reviews', () => {
+    const out = formatCodeResult(
+      {
+        ...result,
+        models: [
+          {
+            provider: 'gemini',
+            role: 'review',
+            requested: null,
+            resolved: 'Gemini 3.5 Flash (High)',
+            observed: null,
+            evidence: 'bridge_selection',
+          },
+        ],
+      },
+      false,
+    );
+    expect(out).toContain(
+      'Model: role=review provider=gemini requested=null resolved=Gemini 3.5 Flash (High) observed=null evidence=bridge_selection',
+    );
+  });
 });
 
 describe('formatPrecommitResult', () => {
   it('shows OK TO COMMIT when ready', () => {
-    const result: PrecommitResult = { ready_to_commit: true, blockers: [], warnings: [], session_id: 's1' };
+    const result: PrecommitResult = {
+      ready_to_commit: true,
+      blockers: [],
+      warnings: [],
+      session_id: 's1',
+    };
     const out = formatPrecommitResult(result, false);
     expect(out).toContain('OK TO COMMIT');
     expect(out).not.toContain('COMMIT BLOCKED');
@@ -157,5 +347,30 @@ describe('formatPrecommitResult', () => {
     const out = formatPrecommitResult(result, false);
     expect(out).toContain('Blockers:');
     expect(out).not.toContain('Warnings:');
+  });
+
+  it('prints model metadata and escapes blocker/warning controls', () => {
+    const escape = String.fromCharCode(0x1b);
+    const result: PrecommitResult = {
+      ready_to_commit: false,
+      blockers: ['blocker\nforged'],
+      warnings: [`warning${escape}forged`],
+      session_id: 's5',
+      models: [
+        {
+          provider: 'codex',
+          role: 'review',
+          requested: null,
+          resolved: 'gpt-5.6-sol',
+          observed: 'gpt-5.6-sol',
+          evidence: 'runtime_session_record',
+        },
+      ],
+    };
+    const out = formatPrecommitResult(result, false);
+    expect(out).toContain('blocker\\nforged');
+    expect(out).toContain('warning\\x1Bforged');
+    expect(out).toContain('Model: role=review provider=codex');
+    expect(out).not.toContain(escape);
   });
 });

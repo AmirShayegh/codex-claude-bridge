@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Command, Option } from 'commander';
@@ -7,12 +8,12 @@ import { loadConfig, formatConfigSource } from '../config/loader.js';
 import { createBackend } from '../backends/index.js';
 import type { ReviewBackend } from '../backends/backend.js';
 import type { ReviewBridgeConfig } from '../config/types.js';
-import { openReviewDb, makeSessionProviderLookup } from '../storage/db.js';
+import { makeSessionModelLookup, makeSessionProviderLookup, openReviewDb } from '../storage/db.js';
 import { checkSessionProvider } from '../storage/session-tracker.js';
 import { loadCopilotInstructions } from '../config/copilot-instructions.js';
 import type { CopilotInstructions } from '../config/copilot-instructions.js';
 import { readInput, resetStdinGuard } from './stdin.js';
-import { resolvePrecommitDiff } from '../utils/resolve-diff.js';
+import { NO_STAGED_CHANGES, resolvePrecommitDiff } from '../utils/resolve-diff.js';
 import { createHandler } from './handlers.js';
 import type { HandlerIO } from './handlers.js';
 import {
@@ -22,6 +23,10 @@ import {
   detectColor,
 } from './formatter.js';
 import type { PlanReviewResult, CodeReviewResult, PrecommitResult } from '../review/types.js';
+import { escapeTerminalControls } from '../utils/terminal.js';
+import { ModelSelectorSchema, SessionIdSchema } from '../utils/input-validation.js';
+import { err, ErrorCode, ok } from '../utils/errors.js';
+import type { Result } from '../utils/errors.js';
 
 export interface CliDeps {
   stdout: HandlerIO['stdout'];
@@ -58,40 +63,89 @@ interface CliClient {
   config: ReviewBridgeConfig;
 }
 
+interface ValidatedSelectors {
+  session: string | undefined;
+  model: string | undefined;
+}
+
+function validateSelectors(
+  session: string | undefined,
+  model: string | undefined,
+): Result<ValidatedSelectors> {
+  if (session !== undefined) {
+    const parsed = SessionIdSchema.safeParse(session);
+    if (!parsed.success) {
+      return err(
+        `${ErrorCode.INVALID_INPUT}: session must be 1–256 control-free characters without surrounding whitespace`,
+      );
+    }
+  }
+  if (model !== undefined) {
+    const parsed = ModelSelectorSchema.safeParse(model);
+    if (!parsed.success) {
+      return err(
+        `${ErrorCode.INVALID_INPUT}: model must be 1–200 control-free characters after trimming`,
+      );
+    }
+    return ok({ session, model: parsed.data });
+  }
+  return ok({ session, model: undefined });
+}
+
 function initClient(configDir: string | undefined, deps: CliDeps): CliClient | null {
   const configResult = loadConfig(configDir);
   if (!configResult.ok) {
-    deps.stderr.write(`Error: ${configResult.error}\n`);
+    deps.stderr.write(`Error: ${escapeTerminalControls(configResult.error)}\n`);
     deps.exit(1);
     return null;
   }
   const { config, source } = configResult.data;
-  deps.stderr.write(`[codex-bridge] config source: ${formatConfigSource(source)}\n`);
+  deps.stderr.write(
+    `[codex-bridge] config source: ${escapeTerminalControls(formatConfigSource(source))}\n`,
+  );
 
   let copilotInstr: CopilotInstructions | undefined;
   if (config.copilot_instructions) {
     // When walk-up discovered a project config, anchor copilot-instructions
     // at that project root rather than process.cwd(). For env/user/default,
     // copilot stays tied to the caller-passed dir or process.cwd().
-    const instrCwd =
-      source.kind === 'project' ? dirname(source.path) : configDir;
+    const instrCwd = source.kind === 'project' ? dirname(source.path) : configDir;
     const instrResult = loadCopilotInstructions(instrCwd);
     if (instrResult.ok) {
       copilotInstr = instrResult.data;
     } else {
-      deps.stderr.write(`Copilot instructions load failed, skipping: ${instrResult.error}\n`);
+      deps.stderr.write(
+        `Copilot instructions load failed, skipping: ${escapeTerminalControls(instrResult.error)}\n`,
+      );
     }
   }
 
   // Read-only so the CLI never creates or writes the review db (no recording).
-  // Undefined when no shared db is reachable → resume routing + guard fail open.
+  // Undefined when no shared db is reachable (no reviews.db, or the CLI runs
+  // outside the server's cwd — ISS-018). With no db there is nothing to
+  // consult, so resume routing and the cross-provider guard fail OPEN: no
+  // lookup is passed and the backend routes to its primary as before. A db we
+  // have but cannot read still fails closed inside the lookup itself.
   const db = openReviewDb({ readonly: true });
   try {
-    const client = createBackend(config, copilotInstr, makeSessionProviderLookup(db));
+    const storedModels = makeSessionModelLookup(db);
+    const client = createBackend(
+      config,
+      copilotInstr,
+      db ? makeSessionProviderLookup(db) : undefined,
+      (sessionId) => {
+        const found = storedModels(sessionId);
+        return found.status === 'found' && found.value.status === 'recorded'
+          ? found.value.model
+          : null;
+      },
+    );
     return { client, db, config };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    deps.stderr.write(`Error: Failed to initialize the review backend: ${msg}\n`);
+    deps.stderr.write(
+      `Error: Failed to initialize the review backend: ${escapeTerminalControls(msg)}\n`,
+    );
     deps.exit(1);
     return null;
   }
@@ -107,7 +161,7 @@ function guardSession(
 ): boolean {
   const guard = checkSessionProvider(init.db, sessionId, init.client.providers);
   if (!guard.ok) {
-    io.stderr.write(`Error: ${guard.error}\n`);
+    io.stderr.write(`Error: ${escapeTerminalControls(guard.error)}\n`);
     deps.exit(1);
     return false;
   }
@@ -141,7 +195,11 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
   program.exitOverride();
   program.configureOutput({
     writeOut: (str) => deps.stdout.write(str),
-    writeErr: (str) => deps.stderr.write(str),
+    writeErr: (str) => {
+      const finalNewline = str.endsWith('\n');
+      const body = finalNewline ? str.slice(0, -1) : str;
+      return deps.stderr.write(`${escapeTerminalControls(body)}${finalNewline ? '\n' : ''}`);
+    },
   });
 
   program
@@ -160,15 +218,21 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
       resetStdinGuard();
       const json = opts.json ?? false;
       const io = buildIO(deps, json);
+      const selectors = validateSelectors(opts.session, opts.model);
+      if (!selectors.ok) {
+        io.stderr.write(`Error: ${escapeTerminalControls(selectors.error)}\n`);
+        deps.exit(1);
+        return;
+      }
 
       const init = initClient(opts.config, deps);
       if (!init) return;
       const { client } = init;
-      if (!guardSession(init, opts.session, io, deps)) return;
+      if (!guardSession(init, selectors.data.session, io, deps)) return;
 
       const inputResult = await readInput(opts.plan);
       if (!inputResult.ok) {
-        io.stderr.write(`Error: ${inputResult.error}\n`);
+        io.stderr.write(`Error: ${escapeTerminalControls(inputResult.error)}\n`);
         deps.exit(1);
         return;
       }
@@ -177,12 +241,15 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
         execute: () =>
           client.reviewPlan({
             plan: inputResult.data,
-            focus: opts.focus ? opts.focus.split(',').map((s: string) => s.trim()).filter(Boolean) : undefined,
+            focus: opts.focus
+              ? opts.focus
+                  .split(',')
+                  .map((s: string) => s.trim())
+                  .filter(Boolean)
+              : undefined,
             depth: opts.depth,
-            session_id: opts.session,
-            // Normalize empty string to undefined so the client picks config
-            // default (matches MCP's z.string().min(1) behavior).
-            model: opts.model?.trim() || undefined,
+            session_id: selectors.data.session,
+            model: selectors.data.model,
             deliberate: opts.deliberate,
           }),
         format: formatPlanResult,
@@ -207,28 +274,50 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
       resetStdinGuard();
       const json = opts.json ?? false;
       const io = buildIO(deps, json);
-
-      const init = initClient(opts.config, deps);
-      if (!init) return;
-      const { client } = init;
-      if (!guardSession(init, opts.session, io, deps)) return;
-
-      const inputResult = await readInput(opts.diff);
-      if (!inputResult.ok) {
-        io.stderr.write(`Error: ${inputResult.error}\n`);
+      const selectors = validateSelectors(opts.session, opts.model);
+      if (!selectors.ok) {
+        io.stderr.write(`Error: ${escapeTerminalControls(selectors.error)}\n`);
         deps.exit(1);
         return;
       }
 
+      const init = initClient(opts.config, deps);
+      if (!init) return;
+      const { client } = init;
+
+      const inputResult = await readInput(opts.diff);
+      if (!inputResult.ok) {
+        io.stderr.write(`Error: ${escapeTerminalControls(inputResult.error)}\n`);
+        deps.exit(1);
+        return;
+      }
+      const synthetic = inputResult.data.trim().length === 0;
+      if (!synthetic && !guardSession(init, selectors.data.session, io, deps)) return;
+
       const handler = createHandler<CodeReviewResult>({
         execute: () =>
-          client.reviewCode({
-            diff: inputResult.data,
-            criteria: opts.focus ? opts.focus.split(',').map((s: string) => s.trim()).filter(Boolean) : undefined,
-            session_id: opts.session,
-            model: opts.model?.trim() || undefined,
-            deliberate: opts.deliberate,
-          }),
+          synthetic
+            ? Promise.resolve(
+                ok<CodeReviewResult>({
+                  verdict: 'approve',
+                  summary: 'No changes to review.',
+                  findings: [],
+                  session_id: selectors.data.session ?? randomUUID(),
+                  models: [],
+                }),
+              )
+            : client.reviewCode({
+                diff: inputResult.data,
+                criteria: opts.focus
+                  ? opts.focus
+                      .split(',')
+                      .map((s: string) => s.trim())
+                      .filter(Boolean)
+                  : undefined,
+                session_id: selectors.data.session,
+                model: selectors.data.model,
+                deliberate: opts.deliberate,
+              }),
         format: formatCodeResult,
         exitCode: () => 0,
       });
@@ -250,18 +339,23 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
       resetStdinGuard();
       const json = opts.json ?? false;
       const io = buildIO(deps, json);
+      const selectors = validateSelectors(opts.session, opts.model);
+      if (!selectors.ok) {
+        io.stderr.write(`Error: ${escapeTerminalControls(selectors.error)}\n`);
+        deps.exit(1);
+        return;
+      }
 
       const init = initClient(opts.config, deps);
       if (!init) return;
       const { client, config } = init;
-      if (!guardSession(init, opts.session, io, deps)) return;
 
       // Read explicit diff if provided via file/stdin
       let explicitDiff: string | undefined;
       if (opts.diff) {
         const inputResult = await readInput(opts.diff);
         if (!inputResult.ok) {
-          io.stderr.write(`Error: ${inputResult.error}\n`);
+          io.stderr.write(`Error: ${escapeTerminalControls(inputResult.error)}\n`);
           deps.exit(1);
           return;
         }
@@ -275,21 +369,42 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
         ? false
         : (opts.autoDiff ?? config.review_standards.precommit.auto_diff);
 
+      const diffResult = await resolvePrecommitDiff({
+        diff: explicitDiff,
+        auto_diff: autoDiff,
+      });
+      if (!diffResult.ok) {
+        if (!diffResult.error.startsWith(NO_STAGED_CHANGES)) {
+          io.stderr.write(`Error: ${escapeTerminalControls(diffResult.error)}\n`);
+          deps.exit(1);
+          return;
+        }
+        const syntheticHandler = createHandler<PrecommitResult>({
+          execute: () =>
+            Promise.resolve(
+              ok<PrecommitResult>({
+                ready_to_commit: false,
+                blockers: [],
+                warnings: ['No staged changes found'],
+                session_id: selectors.data.session ?? randomUUID(),
+                models: [],
+              }),
+            ),
+          format: formatPrecommitResult,
+          exitCode: () => 2,
+        });
+        await syntheticHandler(io);
+        return;
+      }
+      if (!guardSession(init, selectors.data.session, io, deps)) return;
+
       const handler = createHandler<PrecommitResult>({
-        execute: async () => {
-          const diffResult = await resolvePrecommitDiff({
-            diff: explicitDiff,
-            auto_diff: autoDiff,
-          });
-          if (!diffResult.ok) {
-            return diffResult;
-          }
-          return client.reviewPrecommit({
+        execute: () =>
+          client.reviewPrecommit({
             diff: diffResult.data,
-            session_id: opts.session,
-            model: opts.model?.trim() || undefined,
-          });
-        },
+            session_id: selectors.data.session,
+            model: selectors.data.model,
+          }),
         format: formatPrecommitResult,
         exitCode: (result) => (result.ready_to_commit ? 0 : 2),
       });

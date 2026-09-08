@@ -11,6 +11,20 @@ import type {
   CodeReviewInput,
   PrecommitReviewInput,
 } from './backend.js';
+import { canOverrideModelOnResume } from './backend.js';
+
+function ownerOverrideCapability(
+  primary: ReviewBackend,
+  secondary: ReviewBackend,
+  provider: ReviewProvider,
+): boolean {
+  const owner = primary.providers.includes(provider)
+    ? primary
+    : secondary.providers.includes(provider)
+      ? secondary
+      : null;
+  return owner ? canOverrideModelOnResume(owner, provider) : false;
+}
 
 // The mode a review actually runs in. 'single-deliberate-conflict' is a sentinel
 // the single-mode decorator turns into an INVALID_INPUT error (deliberation asked
@@ -26,7 +40,9 @@ export type EffectiveMode =
 type ReviewMode = 'single' | 'failover' | 'deliberate' | 'deliberate-deep';
 
 // Config-level mode, before any per-call override.
-function configMode(config: ReviewBridgeConfig): 'single' | 'failover' | 'deliberate' | 'deliberate-deep' {
+function configMode(
+  config: ReviewBridgeConfig,
+): 'single' | 'failover' | 'deliberate' | 'deliberate-deep' {
   return config.mode ?? (config.fallback ? 'failover' : 'single');
 }
 
@@ -74,6 +90,7 @@ export function withSingleMode(primary: ReviewBackend): ReviewBackend {
     provider: primary.provider,
     providers: primary.providers,
     allowsModelOverrideOnResume: primary.allowsModelOverrideOnResume,
+    allowsModelOverrideOnResumeFor: (provider) => canOverrideModelOnResume(primary, provider),
     reviewPlan: async (input: PlanReviewInput) => {
       if (input.deliberate === true) return err<PlanReviewResult>(singleModeConflictError());
       return stamp('single', await primary.reviewPlan(input), primary.provider);
@@ -104,29 +121,64 @@ export function createCompositeBackend(
     provider: primary.provider,
     providers: [...primary.providers, ...secondary.providers],
     allowsModelOverrideOnResume: primary.allowsModelOverrideOnResume,
+    allowsModelOverrideOnResumeFor: (provider) =>
+      ownerOverrideCapability(primary, secondary, provider),
     reviewPlan: async (input: PlanReviewInput) => {
       const mode = resolveMode(cfgMode, input.deliberate);
       // cfgMode is never 'single' when this composite is built (createBackend
       // returns withSingleMode instead), but handle those returns defensively so
       // the exported factory is correct in isolation.
-      if (mode === 'single-deliberate-conflict') return err<PlanReviewResult>(singleModeConflictError());
-      if (mode === 'single') return stamp('single', await primary.reviewPlan(input), primary.provider);
+      if (mode === 'single-deliberate-conflict')
+        return err<PlanReviewResult>(singleModeConflictError());
+      if (mode === 'single')
+        return stamp('single', await primary.reviewPlan(input), primary.provider);
       if (mode === 'deliberate' || mode === 'deliberate-deep') {
-        return stamp(mode, await deliberatePlan(primary, secondary, input, mode === 'deliberate-deep', lookup, config.max_chunk_tokens));
+        return stamp(
+          mode,
+          await deliberatePlan(
+            primary,
+            secondary,
+            input,
+            mode === 'deliberate-deep',
+            lookup,
+            config.max_chunk_tokens,
+          ),
+        );
       }
-      return stamp('failover', await withFailover(primary, secondary, input, (b, i) => b.reviewPlan(i), lookup));
+      return stamp(
+        'failover',
+        await withFailover(primary, secondary, input, (b, i) => b.reviewPlan(i), lookup),
+      );
     },
     reviewCode: async (input: CodeReviewInput) => {
       const mode = resolveMode(cfgMode, input.deliberate);
-      if (mode === 'single-deliberate-conflict') return err<CodeReviewResult>(singleModeConflictError());
-      if (mode === 'single') return stamp('single', await primary.reviewCode(input), primary.provider);
+      if (mode === 'single-deliberate-conflict')
+        return err<CodeReviewResult>(singleModeConflictError());
+      if (mode === 'single')
+        return stamp('single', await primary.reviewCode(input), primary.provider);
       if (mode === 'deliberate' || mode === 'deliberate-deep') {
-        return stamp(mode, await deliberateCode(primary, secondary, input, mode === 'deliberate-deep', lookup, config.max_chunk_tokens));
+        return stamp(
+          mode,
+          await deliberateCode(
+            primary,
+            secondary,
+            input,
+            mode === 'deliberate-deep',
+            lookup,
+            config.max_chunk_tokens,
+          ),
+        );
       }
-      return stamp('failover', await withFailover(primary, secondary, input, (b, i) => b.reviewCode(i), lookup));
+      return stamp(
+        'failover',
+        await withFailover(primary, secondary, input, (b, i) => b.reviewCode(i), lookup),
+      );
     },
     // Precommit is always failover — it runs constantly and is latency-sensitive.
     reviewPrecommit: async (input: PrecommitReviewInput) =>
-      stamp('failover', await withFailover(primary, secondary, input, (b, i) => b.reviewPrecommit(i), lookup)),
+      stamp(
+        'failover',
+        await withFailover(primary, secondary, input, (b, i) => b.reviewPrecommit(i), lookup),
+      ),
   };
 }

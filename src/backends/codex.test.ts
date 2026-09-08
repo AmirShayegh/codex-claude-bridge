@@ -85,13 +85,31 @@ const config: ReviewBridgeConfig = { ...DEFAULT_CONFIG };
 const validPlanResponse = {
   verdict: 'approve',
   summary: 'Plan looks solid',
-  findings: [{ severity: 'minor', category: 'style', description: 'Consider renaming', file: null, line: null, suggestion: null }],
+  findings: [
+    {
+      severity: 'minor',
+      category: 'style',
+      description: 'Consider renaming',
+      file: null,
+      line: null,
+      suggestion: null,
+    },
+  ],
 };
 
 const validCodeResponse = {
   verdict: 'request_changes',
   summary: 'Issues found',
-  findings: [{ severity: 'critical', category: 'bug', description: 'Null pointer', file: null, line: null, suggestion: null }],
+  findings: [
+    {
+      severity: 'critical',
+      category: 'bug',
+      description: 'Null pointer',
+      file: null,
+      line: null,
+      suggestion: null,
+    },
+  ],
 };
 
 const validPrecommitResponse = {
@@ -267,7 +285,9 @@ describe('looksLikeDiff', () => {
   });
 
   it('rejects plain prose', () => {
-    expect(looksLikeDiff('This is a summary of my changes to the authentication system.')).toBe(false);
+    expect(looksLikeDiff('This is a summary of my changes to the authentication system.')).toBe(
+      false,
+    );
   });
 
   it('rejects prose that mentions diff --git without hunks', () => {
@@ -289,7 +309,9 @@ describe('looksLikeDiff', () => {
   // ISS-005: hunk-less-but-valid git diffs must be accepted.
   it('accepts a rename-only diff (no hunks, no ---/+++)', () => {
     expect(
-      looksLikeDiff('diff --git a/old.js b/new.js\nsimilarity index 100%\nrename from old.js\nrename to new.js'),
+      looksLikeDiff(
+        'diff --git a/old.js b/new.js\nsimilarity index 100%\nrename from old.js\nrename to new.js',
+      ),
     ).toBe(true);
   });
 
@@ -302,7 +324,11 @@ describe('looksLikeDiff', () => {
   });
 
   it('accepts a binary diff (GIT binary patch)', () => {
-    expect(looksLikeDiff('diff --git a/img.png b/img.png\nindex abc..def 100644\nGIT binary patch\nzcmV')).toBe(true);
+    expect(
+      looksLikeDiff(
+        'diff --git a/img.png b/img.png\nindex abc..def 100644\nGIT binary patch\nzcmV',
+      ),
+    ).toBe(true);
   });
 
   it('accepts a mixed rename + content diff', () => {
@@ -313,22 +339,32 @@ describe('looksLikeDiff', () => {
   });
 
   it('accepts a mode-only change diff', () => {
-    expect(looksLikeDiff('diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755')).toBe(true);
+    expect(looksLikeDiff('diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755')).toBe(
+      true,
+    );
   });
 
   it('accepts a copy-only diff', () => {
     expect(
-      looksLikeDiff('diff --git a/orig.js b/copy.js\nsimilarity index 100%\ncopy from orig.js\ncopy to copy.js'),
+      looksLikeDiff(
+        'diff --git a/orig.js b/copy.js\nsimilarity index 100%\ncopy from orig.js\ncopy to copy.js',
+      ),
     ).toBe(true);
   });
 
   it('accepts an empty-file creation diff', () => {
-    expect(looksLikeDiff('diff --git a/empty.txt b/empty.txt\nnew file mode 100644\nindex 0000000..e69de29')).toBe(true);
+    expect(
+      looksLikeDiff(
+        'diff --git a/empty.txt b/empty.txt\nnew file mode 100644\nindex 0000000..e69de29',
+      ),
+    ).toBe(true);
   });
 
   it('accepts an empty-file deletion diff', () => {
     expect(
-      looksLikeDiff('diff --git a/empty.txt b/empty.txt\ndeleted file mode 100644\nindex e69de29..0000000'),
+      looksLikeDiff(
+        'diff --git a/empty.txt b/empty.txt\ndeleted file mode 100644\nindex e69de29..0000000',
+      ),
     ).toBe(true);
   });
 
@@ -417,7 +453,9 @@ describe('codex binary override (codex_path)', () => {
 
 describe('provider unavailable (binary missing / killed / quarantined)', () => {
   it('classifies a constructor "unable to locate codex" as PROVIDER_UNAVAILABLE', async () => {
-    mockConstructorThrow = new Error('Unable to locate Codex CLI binaries. Ensure @openai/codex is installed.');
+    mockConstructorThrow = new Error(
+      'Unable to locate Codex CLI binaries. Ensure @openai/codex is installed.',
+    );
     const res = await createCodexBackend(config).reviewPlan({ plan: 'x' });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toContain(ErrorCode.PROVIDER_UNAVAILABLE);
@@ -663,6 +701,51 @@ describe('session management', () => {
       expect(result.data.session_id).toBe('fallback_id');
     }
   });
+
+  it.each([
+    ['empty', ''],
+    ['surrounding whitespace', ' thread-id '],
+    ['control characters', 'thread\nforged'],
+    ['more than 256 characters', 'x'.repeat(257)],
+  ])('rejects a fresh provider thread id with %s', async (_case, providerId) => {
+    mockThreadId = providerId;
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
+
+    const result = await createCodexBackend(config).reviewPlan({ plan: 'plan' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain(ErrorCode.RESPONSE_PARSE_ERROR);
+      expect(result.error).toContain('invalid session ID');
+      expect(result).not.toHaveProperty('session_id');
+    }
+  });
+
+  it.each([
+    ['empty', ''],
+    ['surrounding whitespace', ' thread-id '],
+    ['control characters', 'thread\u0085forged'],
+    ['more than 256 characters', 'x'.repeat(257)],
+  ])(
+    'rejects a resumed session id with %s before calling the provider',
+    async (_case, sessionId) => {
+      mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
+
+      const result = await createCodexBackend(config).reviewPlan({
+        plan: 'plan',
+        session_id: sessionId,
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain(ErrorCode.INVALID_INPUT);
+        expect(result.error).toContain('invalid session ID');
+        expect(result).not.toHaveProperty('session_id');
+      }
+      expect(mockResumeThread).not.toHaveBeenCalled();
+      expect(mockRun).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe('runtime errors', () => {
@@ -793,7 +876,9 @@ describe('error classification', () => {
 
   it('surfaces ChatGPT-account fallback tip recommending a different model + the Gemini backend', async () => {
     mockRun.mockRejectedValue(
-      new Error(`The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.`),
+      new Error(
+        `The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.`,
+      ),
     );
 
     const client = createCodexBackend(config);
@@ -905,7 +990,9 @@ describe('error classification', () => {
   });
 
   it('does NOT match when "model" and "not supported" are in different sentences', async () => {
-    mockRun.mockRejectedValue(new Error('The current model works fine. However, the operation is not supported.'));
+    mockRun.mockRejectedValue(
+      new Error('The current model works fine. However, the operation is not supported.'),
+    );
 
     const client = createCodexBackend(config);
     const result = await client.reviewPlan({ plan: 'plan' });
@@ -1004,9 +1091,7 @@ describe('per-call model override (T-011)', () => {
     await client.reviewPlan({ plan: 'plan', model: 'gpt-5.4' });
 
     expect(mockStartThread).toHaveBeenCalledOnce();
-    expect(mockStartThread).toHaveBeenCalledWith(
-      expect.objectContaining({ model: 'gpt-5.4' }),
-    );
+    expect(mockStartThread).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-5.4' }));
   });
 
   it('reviewCode forwards override to startThread on single-chunk path', async () => {
@@ -1018,9 +1103,7 @@ describe('per-call model override (T-011)', () => {
       model: 'gpt-5.4',
     });
 
-    expect(mockStartThread).toHaveBeenCalledWith(
-      expect.objectContaining({ model: 'gpt-5.4' }),
-    );
+    expect(mockStartThread).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-5.4' }));
   });
 
   it('reviewPrecommit forwards override to startThread on single-chunk path', async () => {
@@ -1032,9 +1115,7 @@ describe('per-call model override (T-011)', () => {
       model: 'gpt-5.4',
     });
 
-    expect(mockStartThread).toHaveBeenCalledWith(
-      expect.objectContaining({ model: 'gpt-5.4' }),
-    );
+    expect(mockStartThread).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-5.4' }));
   });
 
   it('uses config.model when set and no per-call override is given', async () => {
@@ -1043,9 +1124,7 @@ describe('per-call model override (T-011)', () => {
     const client = createCodexBackend({ ...config, model: 'gpt-5.4' });
     await client.reviewPlan({ plan: 'plan' });
 
-    expect(mockStartThread).toHaveBeenCalledWith(
-      expect.objectContaining({ model: 'gpt-5.4' }),
-    );
+    expect(mockStartThread).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-5.4' }));
   });
 
   it('falls back to the backend default model when neither override nor config.model is set', async () => {
@@ -1055,9 +1134,7 @@ describe('per-call model override (T-011)', () => {
     await client.reviewPlan({ plan: 'plan' });
 
     // codex resolves its own default — the schema no longer supplies one.
-    expect(mockStartThread).toHaveBeenCalledWith(
-      expect.objectContaining({ model: 'gpt-5.6-sol' }),
-    );
+    expect(mockStartThread).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-5.6-sol' }));
   });
 
   it('rejects session_id + model combination with INVALID_INPUT', async () => {
@@ -1094,9 +1171,7 @@ describe('per-call model override (T-011)', () => {
 
     // Chunk 1: startThread with the override
     expect(mockStartThread).toHaveBeenCalledOnce();
-    expect(mockStartThread).toHaveBeenCalledWith(
-      expect.objectContaining({ model: 'gpt-5.4' }),
-    );
+    expect(mockStartThread).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-5.4' }));
     // Chunk 2: resumeThread is called WITHOUT any `model` field. The SDK
     // would otherwise forward `--model` to the CLI and reassert a model
     // on a resumed thread — breaking the "inherit" guarantee. The resumed
@@ -1125,9 +1200,7 @@ describe('per-call model override (T-011)', () => {
     });
 
     expect(mockStartThread).toHaveBeenCalledOnce();
-    expect(mockStartThread).toHaveBeenCalledWith(
-      expect.objectContaining({ model: 'gpt-5.4' }),
-    );
+    expect(mockStartThread).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-5.4' }));
     expect(mockResumeThread).toHaveBeenCalledOnce();
     expect(mockResumeThread).toHaveBeenCalledWith(
       'thread_abc123',
@@ -1201,7 +1274,9 @@ describe('config flows to prompts', () => {
       },
       precommit: {
         auto_diff: true,
-        block_on: ['critical', 'major'] as Array<'critical' | 'major' | 'minor' | 'suggestion' | 'nitpick'>,
+        block_on: ['critical', 'major'] as Array<
+          'critical' | 'major' | 'minor' | 'suggestion' | 'nitpick'
+        >,
       },
     },
   };
@@ -1309,15 +1384,27 @@ describe('constructor failure', () => {
 });
 
 describe('chunking', () => {
-  const makeCodeResponse = (verdict: string, findings: Array<{ severity: string; category: string; file: string | null; line: number | null }> = [], summary = 'chunk summary') =>
+  const makeCodeResponse = (
+    verdict: string,
+    findings: Array<{
+      severity: string;
+      category: string;
+      file: string | null;
+      line: number | null;
+    }> = [],
+    summary = 'chunk summary',
+  ) =>
     JSON.stringify({
       verdict,
       summary,
       findings: findings.map((f) => ({ ...f, description: 'desc', suggestion: null })),
     });
 
-  const makePrecommitResponse = (ready: boolean, blockers: string[] = [], warnings: string[] = []) =>
-    JSON.stringify({ ready_to_commit: ready, blockers, warnings });
+  const makePrecommitResponse = (
+    ready: boolean,
+    blockers: string[] = [],
+    warnings: string[] = [],
+  ) => JSON.stringify({ ready_to_commit: ready, blockers, warnings });
 
   it('small diff (under threshold) uses single startThread, no chunks_reviewed', async () => {
     mockChunkDiff.mockReturnValue(['small diff']);
@@ -1339,10 +1426,20 @@ describe('chunking', () => {
     const thread2Id = 'thread_chunk2';
 
     mockStartThread.mockImplementation(() => {
-      return { run: mockRun, get id() { return thread1Id; } };
+      return {
+        run: mockRun,
+        get id() {
+          return thread1Id;
+        },
+      };
     });
     mockResumeThread.mockImplementation(() => {
-      return { run: mockRun, get id() { return thread2Id; } };
+      return {
+        run: mockRun,
+        get id() {
+          return thread2Id;
+        },
+      };
     });
 
     mockRun.mockResolvedValue({ finalResponse: makeCodeResponse('approve') });
@@ -1498,7 +1595,9 @@ describe('chunking', () => {
       expect(result.data.verdict).toBe('approve');
       expect(result.data.summary).toBe('No changes to review.');
       expect(result.data.chunks_reviewed).toBeUndefined();
-      expect(result.data.session_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+      expect(result.data.session_id).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+      );
     }
     expect(mockStartThread).not.toHaveBeenCalled();
     expect(mockResumeThread).not.toHaveBeenCalled();
@@ -1546,7 +1645,9 @@ describe('chunking', () => {
       expect(result.data.blockers).toEqual([]);
       expect(result.data.warnings).toEqual([]);
       expect(result.data.chunks_reviewed).toBeUndefined();
-      expect(result.data.session_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+      expect(result.data.session_id).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+      );
     }
     expect(mockStartThread).not.toHaveBeenCalled();
   });
@@ -1591,8 +1692,18 @@ describe('chunking', () => {
   it('multi-chunk reviewCode: chunk 2 timeout returns the chunk-1 thread id on the error', async () => {
     mockChunkDiff.mockReturnValue(['chunk1', 'chunk2']);
     const thread1Id = 'thread_partial_failure';
-    mockStartThread.mockImplementation(() => ({ run: mockRun, get id() { return thread1Id; } }));
-    mockResumeThread.mockImplementation(() => ({ run: mockRun, get id() { return thread1Id; } }));
+    mockStartThread.mockImplementation(() => ({
+      run: mockRun,
+      get id() {
+        return thread1Id;
+      },
+    }));
+    mockResumeThread.mockImplementation(() => ({
+      run: mockRun,
+      get id() {
+        return thread1Id;
+      },
+    }));
 
     mockRun
       .mockResolvedValueOnce({ finalResponse: makeCodeResponse('approve') })
@@ -1611,8 +1722,18 @@ describe('chunking', () => {
   it('multi-chunk reviewPrecommit: chunk 2 timeout returns the chunk-1 thread id on the error', async () => {
     mockChunkDiff.mockReturnValue(['chunk1', 'chunk2']);
     const thread1Id = 'thread_pre_partial_failure';
-    mockStartThread.mockImplementation(() => ({ run: mockRun, get id() { return thread1Id; } }));
-    mockResumeThread.mockImplementation(() => ({ run: mockRun, get id() { return thread1Id; } }));
+    mockStartThread.mockImplementation(() => ({
+      run: mockRun,
+      get id() {
+        return thread1Id;
+      },
+    }));
+    mockResumeThread.mockImplementation(() => ({
+      run: mockRun,
+      get id() {
+        return thread1Id;
+      },
+    }));
 
     const validPrecommit = { ready_to_commit: true, blockers: [], warnings: [] };
     mockRun
@@ -1620,7 +1741,9 @@ describe('chunking', () => {
       .mockRejectedValueOnce(new DOMException('aborted', 'AbortError'));
 
     const client = createCodexBackend(config);
-    const result = await client.reviewPrecommit({ diff: 'diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new' });
+    const result = await client.reviewPrecommit({
+      diff: 'diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new',
+    });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {

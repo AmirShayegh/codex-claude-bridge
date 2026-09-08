@@ -7,6 +7,20 @@ import type {
   CodeReviewInput,
   PrecommitReviewInput,
 } from './backend.js';
+import { canOverrideModelOnResume } from './backend.js';
+
+function ownerOverrideCapability(
+  primary: ReviewBackend,
+  secondary: ReviewBackend,
+  provider: ReviewProvider,
+): boolean {
+  const owner = primary.providers.includes(provider)
+    ? primary
+    : secondary.providers.includes(provider)
+      ? secondary
+      : null;
+  return owner ? canOverrideModelOnResume(owner, provider) : false;
+}
 
 // Provider failover: wrap a primary + secondary backend so a review that fails
 // because the primary is out of usage / unavailable is transparently retried
@@ -43,13 +57,42 @@ function tag<R extends { provider?: ReviewProvider }>(
 
 type FailoverInput = { session_id?: string; model?: string };
 
-// Resolve a session id to the provider that owns it (from the sessions table).
-// Sync — better-sqlite3 is synchronous. Returns null when unknown/unresolvable.
-export type SessionProviderLookup = (sessionId: string) => ReviewProvider | null;
+export type SessionProviderLookupResult =
+  | { status: 'found'; value: ReviewProvider | null }
+  | { status: 'absent' }
+  | { status: 'unavailable' };
+
+// Ownership failures are not equivalent to an unknown legacy session: silently
+// routing through the configured primary could resume a provider-incompatible
+// conversation. Only an explicit absent/legacy result may use that fallback.
+export type SessionProviderLookup = (sessionId: string) => SessionProviderLookupResult;
+
+export function lookupSessionOwner(
+  sessionId: string,
+  lookup?: SessionProviderLookup,
+): Result<ReviewProvider | null> {
+  if (!lookup) return ok(null);
+  try {
+    const result = lookup(sessionId);
+    if (result.status === 'unavailable') {
+      return err(
+        `${ErrorCode.SESSION_ROUTING_UNAVAILABLE}: session ownership could not be established safely`,
+      );
+    }
+    return ok(result.status === 'found' ? result.value : null);
+  } catch {
+    return err(
+      `${ErrorCode.SESSION_ROUTING_UNAVAILABLE}: session ownership could not be established safely`,
+    );
+  }
+}
 
 // Exported for reuse by the deliberation composite, whose precommit path (and
 // resumed-session path) is plain failover, not deliberation.
-export async function withFailover<I extends FailoverInput, R extends { provider?: ReviewProvider }>(
+export async function withFailover<
+  I extends FailoverInput,
+  R extends { provider?: ReviewProvider },
+>(
   primary: ReviewBackend,
   secondary: ReviewBackend,
   input: I,
@@ -62,7 +105,9 @@ export async function withFailover<I extends FailoverInput, R extends { provider
   // backend ever serves >1 provider. Unknown owner (no lookup / not found) →
   // primary, the historical default.
   if (input.session_id) {
-    const owner = lookup?.(input.session_id) ?? null;
+    const ownerResult = lookupSessionOwner(input.session_id, lookup);
+    if (!ownerResult.ok) return err<R>(ownerResult.error);
+    const owner = ownerResult.data;
     const target = owner && secondary.providers.includes(owner) ? secondary : primary;
     return tag(target.provider, await run(target, input));
   }
@@ -81,9 +126,7 @@ export async function withFailover<I extends FailoverInput, R extends { provider
 
   // Both failed: lead with the primary's error (its code/prefix), note the
   // fallback outcome so the failure is diagnosable.
-  return err<R>(
-    `${first.error} (fallback to ${secondary.provider} also failed: ${second.error})`,
-  );
+  return err<R>(`${first.error} (fallback to ${secondary.provider} also failed: ${second.error})`);
 }
 
 export function createFailoverBackend(
@@ -92,12 +135,13 @@ export function createFailoverBackend(
   lookup?: SessionProviderLookup,
 ): ReviewBackend {
   return {
-    // The composite presents as the primary for tagging new sessions + the
-    // session_id/model gate. Resumes route to the OWNING leaf via `lookup`, not
-    // unconditionally to the primary.
+    // The composite presents as the primary for tagging new sessions. Resumes
+    // and their model capability checks target the OWNING leaf via `lookup`.
     provider: primary.provider,
     providers: [...primary.providers, ...secondary.providers],
     allowsModelOverrideOnResume: primary.allowsModelOverrideOnResume,
+    allowsModelOverrideOnResumeFor: (provider) =>
+      ownerOverrideCapability(primary, secondary, provider),
     reviewPlan: (input: PlanReviewInput) =>
       withFailover(primary, secondary, input, (b, i) => b.reviewPlan(i), lookup),
     reviewCode: (input: CodeReviewInput) =>

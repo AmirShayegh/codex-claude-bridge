@@ -15,14 +15,20 @@ class FakeChild extends EventEmitter {
   stdin: EventEmitter & { write: (s: string) => void; end: ReturnType<typeof vi.fn> };
   constructor(signal?: AbortSignal) {
     super();
-    const stdin = new EventEmitter() as EventEmitter & { write: (s: string) => void; end: ReturnType<typeof vi.fn> };
+    const stdin = new EventEmitter() as EventEmitter & {
+      write: (s: string) => void;
+      end: ReturnType<typeof vi.fn>;
+    };
     stdin.write = (s: string) => {
       this.stdinChunks.push(s);
     };
     stdin.end = vi.fn();
     this.stdin = stdin;
     signal?.addEventListener('abort', () => {
-      this.emit('error', Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }));
+      this.emit(
+        'error',
+        Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }),
+      );
     });
   }
 }
@@ -89,6 +95,7 @@ import {
   resolveLatestGeminiModel,
   parseAgyModels,
   warnIfUnknownModel,
+  clearGeminiModelCatalogCache,
 } from './gemini.js';
 import { DEFAULT_CONFIG } from '../config/types.js';
 
@@ -111,6 +118,7 @@ beforeEach(() => {
   fakeFiles = {};
   scriptedResponses = [];
   spawnCount = 0;
+  clearGeminiModelCatalogCache();
   // The flow narrates the resolved model on stderr for unpinned reviews; these
   // tests don't assert on it, so keep their output clean.
   vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -154,7 +162,12 @@ describe('classifyAgyError', () => {
   });
 });
 
-const OPTS = { prompt: 'review this', model: 'Gemini 3.5 Flash (Medium)', cwd: '/repo', timeoutMs: 5000 };
+const OPTS = {
+  prompt: 'review this',
+  model: 'Gemini 3.5 Flash (Medium)',
+  cwd: '/repo',
+  timeoutMs: 5000,
+};
 
 describe('runAgyPrint', () => {
   it('spawns agy in print+sandbox mode with the model, pipes the prompt to stdin, returns stdout', async () => {
@@ -233,7 +246,9 @@ describe('runAgyPrint', () => {
     const p = runAgyPrint(OPTS);
     // One oversized chunk (>10MB) trips the cap: the run resolves to an error and
     // the child is aborted rather than buffering the stream unbounded.
-    expect(() => lastChild.stdout.emit('data', Buffer.from('x'.repeat(10 * 1024 * 1024 + 1)))).not.toThrow();
+    expect(() =>
+      lastChild.stdout.emit('data', Buffer.from('x'.repeat(10 * 1024 * 1024 + 1))),
+    ).not.toThrow();
     const res = await p;
     expect(res.ok).toBe(false);
     if (!res.ok) {
@@ -318,7 +333,9 @@ describe('runAgyModels', () => {
 
   it('returns null (degrades to fallback) when output exceeds the size cap (B2)', async () => {
     const p = runAgyModels();
-    expect(() => lastChild.stdout.emit('data', Buffer.from('x'.repeat(10 * 1024 * 1024 + 1)))).not.toThrow();
+    expect(() =>
+      lastChild.stdout.emit('data', Buffer.from('x'.repeat(10 * 1024 * 1024 + 1))),
+    ).not.toThrow();
     expect(await p).toBeNull(); // over-cap output → null, caller falls back to the default model
   });
 
@@ -334,6 +351,29 @@ describe('runAgyModels', () => {
 });
 
 describe('resolveLatestGeminiModel', () => {
+  it('single-flights and caches the model catalog for repeated resolutions', async () => {
+    script({ stdout: REAL_AGY_MODELS, code: 0 });
+    const [a, b] = await Promise.all([resolveLatestGeminiModel(), resolveLatestGeminiModel()]);
+    const c = await resolveLatestGeminiModel();
+    expect(a).toBe('Gemini 3.5 Flash (Medium)');
+    expect(b).toBe(a);
+    expect(c).toBe(a);
+    expect(spawnCount).toBe(1);
+  });
+
+  it('refreshes the process catalog after the five-minute TTL', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    script(
+      { stdout: 'Gemini 4.0 Flash (Medium)', code: 0 },
+      { stdout: 'Gemini 4.1 Flash (Medium)', code: 0 },
+    );
+
+    expect(await resolveLatestGeminiModel()).toBe('Gemini 4.0 Flash (Medium)');
+    clock.mockReturnValue(301_001);
+    expect(await resolveLatestGeminiModel()).toBe('Gemini 4.1 Flash (Medium)');
+    expect(spawnCount).toBe(2);
+  });
+
   it('resolves to the newest Flash reported by agy', async () => {
     script({ stdout: 'Gemini 4.0 Flash (Medium)\nGemini 3.5 Flash (Medium)', code: 0 });
     expect(await resolveLatestGeminiModel()).toBe('Gemini 4.0 Flash (Medium)');
@@ -342,6 +382,14 @@ describe('resolveLatestGeminiModel', () => {
   it('falls back to the known-good model when the query fails', async () => {
     script({ stderr: 'boom', code: 1 });
     expect(await resolveLatestGeminiModel()).toBe('Gemini 3.5 Flash (Medium)');
+  });
+
+  it('caches an unavailable catalog for five minutes instead of repeatedly spawning agy', async () => {
+    script({ stderr: 'boom', code: 1 });
+
+    expect(await resolveLatestGeminiModel()).toBe('Gemini 3.5 Flash (Medium)');
+    expect(await resolveLatestGeminiModel()).toBe('Gemini 3.5 Flash (Medium)');
+    expect(spawnCount).toBe(1);
   });
 
   it('falls back to the known-good model when no Flash line is parseable', async () => {
@@ -411,6 +459,16 @@ describe('readConversationId', () => {
     fakeFiles[CACHE] = '{ not valid json';
     expect(readConversationId('/repo')).toBeUndefined();
   });
+
+  it.each([
+    ['empty', ''],
+    ['surrounding whitespace', ' conv-abc '],
+    ['control characters', 'conv\u007fabc'],
+    ['more than 256 characters', 'x'.repeat(257)],
+  ])('returns undefined when the cached conversation id has %s', (_case, conversationId) => {
+    fakeFiles[CACHE] = JSON.stringify({ '/repo': conversationId });
+    expect(readConversationId('/repo')).toBeUndefined();
+  });
 });
 
 describe('runSerialized', () => {
@@ -432,7 +490,9 @@ describe('runSerialized', () => {
   });
 
   it('keeps the chain alive after a section rejects (no deadlock)', async () => {
-    await expect(runSerialized(async () => Promise.reject(new Error('boom')))).rejects.toThrow('boom');
+    await expect(runSerialized(async () => Promise.reject(new Error('boom')))).rejects.toThrow(
+      'boom',
+    );
     await expect(runSerialized(async () => 'ok')).resolves.toBe('ok');
   });
 });
@@ -506,11 +566,53 @@ describe('createGeminiBackend', () => {
     // No cache entry on purpose — the resume path must not depend on capture.
     script({ stdout: JSON.stringify(CODE_OK) });
 
-    const res = await createGeminiBackend(PINNED_CONFIG).reviewCode({ diff: SMALL_DIFF, session_id: 'conv-prev' });
+    const res = await createGeminiBackend(PINNED_CONFIG).reviewCode({
+      diff: SMALL_DIFF,
+      session_id: 'conv-prev',
+    });
 
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.data.session_id).toBe('conv-prev');
     expect(lastArgs[lastArgs.indexOf('--conversation') + 1]).toBe('conv-prev');
+  });
+
+  it.each([
+    ['empty', ''],
+    ['surrounding whitespace', ' conv-prev '],
+    ['control characters', 'conv\nforged'],
+    ['more than 256 characters', 'x'.repeat(257)],
+  ])('rejects a resumed session id with %s before calling agy', async (_case, sessionId) => {
+    const result = await createGeminiBackend(PINNED_CONFIG).reviewPlan({
+      plan: 'x',
+      session_id: sessionId,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain(ErrorCode.INVALID_INPUT);
+      expect(result.error).toContain('invalid session ID');
+      expect(result).not.toHaveProperty('session_id');
+    }
+    expect(spawnCount).toBe(0);
+  });
+
+  it.each([
+    ['empty', ''],
+    ['surrounding whitespace', ' conv-new '],
+    ['control characters', 'conv\u009fforged'],
+    ['more than 256 characters', 'x'.repeat(257)],
+  ])('rejects a fresh cached conversation id with %s', async (_case, conversationId) => {
+    fakeFiles[CACHE] = JSON.stringify({ [CWD]: conversationId });
+    script({ stdout: JSON.stringify(PLAN_OK) });
+
+    const result = await createGeminiBackend(PINNED_CONFIG).reviewPlan({ plan: 'x' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain(ErrorCode.STORAGE_ERROR);
+      expect(result.error).toContain('no conversation id was captured');
+      expect(result).not.toHaveProperty('session_id');
+    }
   });
 
   it('retries once on malformed JSON, then succeeds (two spawns)', async () => {
@@ -533,7 +635,9 @@ describe('createGeminiBackend', () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-x' });
     script({ stdout: 'not json', code: 0 }); // attempt 1 malformed; attempt 2 left to time out
 
-    const p = createGeminiBackend({ ...PINNED_CONFIG, timeout_seconds: 10 }).reviewPlan({ plan: 'x' });
+    const p = createGeminiBackend({ ...PINNED_CONFIG, timeout_seconds: 10 }).reviewPlan({
+      plan: 'x',
+    });
     await vi.advanceTimersByTimeAsync(10_000 + 50); // blow past the total budget → attempt 2 aborts
     const res = await p;
 
@@ -550,7 +654,10 @@ describe('createGeminiBackend', () => {
   // timeouts, never real classified errors.
   it('still surfaces a genuine process error on the retry, not a masked parse error (m2)', async () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-x' });
-    script({ stdout: 'not json', code: 0 }, { stderr: 'Error: you are not authenticated', code: 1 });
+    script(
+      { stdout: 'not json', code: 0 },
+      { stderr: 'Error: you are not authenticated', code: 1 },
+    );
 
     const res = await createGeminiBackend(PINNED_CONFIG).reviewPlan({ plan: 'x' });
 
@@ -569,7 +676,9 @@ describe('createGeminiBackend', () => {
     vi.useFakeTimers();
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-x' });
 
-    const p = createGeminiBackend({ ...PINNED_CONFIG, timeout_seconds: 10 }).reviewPlan({ plan: 'x' });
+    const p = createGeminiBackend({ ...PINNED_CONFIG, timeout_seconds: 10 }).reviewPlan({
+      plan: 'x',
+    });
     // Let attempt 1 spawn, consume 6s, then return malformed (exit 0).
     await vi.advanceTimersByTimeAsync(6_000);
     lastChild.stdout.emit('data', Buffer.from('not json'));
@@ -635,7 +744,10 @@ describe('createGeminiBackend', () => {
       { stdout: JSON.stringify(CODE_OK) },
     );
 
-    const res = await createGeminiBackend(DEFAULT_CONFIG).reviewCode({ diff: SMALL_DIFF, model: 'latest' });
+    const res = await createGeminiBackend(DEFAULT_CONFIG).reviewCode({
+      diff: SMALL_DIFF,
+      model: 'latest',
+    });
 
     expect(res.ok).toBe(true);
     expect(spawnCount).toBe(2);
@@ -680,7 +792,9 @@ describe('createGeminiBackend', () => {
     // Generously script success for every chunk (extra entries are ignored).
     script(...Array.from({ length: 10 }, () => ({ stdout: JSON.stringify(CODE_OK) })));
 
-    const res = await createGeminiBackend({ ...PINNED_CONFIG, max_chunk_tokens: 2500 }).reviewCode({ diff: BIG_DIFF });
+    const res = await createGeminiBackend({ ...PINNED_CONFIG, max_chunk_tokens: 2500 }).reviewCode({
+      diff: BIG_DIFF,
+    });
 
     expect(res.ok).toBe(true);
     if (res.ok) {
@@ -698,7 +812,10 @@ describe('createGeminiBackend', () => {
     // First spawn validates against `agy models`; second is the review.
     script({ stdout: REAL_AGY_MODELS, code: 0 }, { stdout: JSON.stringify(CODE_OK) });
 
-    const res = await createGeminiBackend({ ...DEFAULT_CONFIG, model: 'FakeModel-9000' }).reviewCode({
+    const res = await createGeminiBackend({
+      ...DEFAULT_CONFIG,
+      model: 'FakeModel-9000',
+    }).reviewCode({
       diff: SMALL_DIFF,
     });
 
@@ -714,7 +831,10 @@ describe('createGeminiBackend', () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-low' });
     script({ stdout: REAL_AGY_MODELS, code: 0 }, { stdout: JSON.stringify(CODE_OK) });
 
-    const res = await createGeminiBackend({ ...DEFAULT_CONFIG, model: 'Gemini 3.5 Flash (Low)' }).reviewCode({
+    const res = await createGeminiBackend({
+      ...DEFAULT_CONFIG,
+      model: 'Gemini 3.5 Flash (Low)',
+    }).reviewCode({
       diff: SMALL_DIFF,
     });
 
@@ -728,7 +848,10 @@ describe('createGeminiBackend', () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-rec' });
     script({ stdout: JSON.stringify(CODE_OK) });
 
-    const res = await createGeminiBackend({ ...DEFAULT_CONFIG, model: 'Gemini 3.1 Pro (High)' }).reviewCode({
+    const res = await createGeminiBackend({
+      ...DEFAULT_CONFIG,
+      model: 'Gemini 3.1 Pro (High)',
+    }).reviewCode({
       diff: SMALL_DIFF,
     });
 
@@ -741,7 +864,9 @@ describe('createGeminiBackend', () => {
     // Chunk 1 succeeds (captures conv-partial); chunk 2 fails at the agy boundary.
     script({ stdout: JSON.stringify(CODE_OK) }, { stderr: 'you are not authenticated', code: 1 });
 
-    const res = await createGeminiBackend({ ...PINNED_CONFIG, max_chunk_tokens: 2500 }).reviewCode({ diff: BIG_DIFF });
+    const res = await createGeminiBackend({ ...PINNED_CONFIG, max_chunk_tokens: 2500 }).reviewCode({
+      diff: BIG_DIFF,
+    });
 
     expect(res.ok).toBe(false);
     if (!res.ok) {
@@ -756,8 +881,18 @@ describe('createGeminiBackend', () => {
     // capture B's id. Serialization makes each run+capture atomic — this fails
     // deterministically (both become 'race-id-B') if the serialization is removed.
     script(
-      { stdout: JSON.stringify(PLAN_OK), onEmit: () => { fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'race-id-A' }); } },
-      { stdout: JSON.stringify(PLAN_OK), onEmit: () => { fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'race-id-B' }); } },
+      {
+        stdout: JSON.stringify(PLAN_OK),
+        onEmit: () => {
+          fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'race-id-A' });
+        },
+      },
+      {
+        stdout: JSON.stringify(PLAN_OK),
+        onEmit: () => {
+          fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'race-id-B' });
+        },
+      },
     );
     const backend = createGeminiBackend(PINNED_CONFIG);
 

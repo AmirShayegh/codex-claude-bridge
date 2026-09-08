@@ -48,13 +48,31 @@ import { getStagedDiff } from './utils/git.js';
 const validPlanResponse = {
   verdict: 'approve',
   summary: 'Plan looks solid',
-  findings: [{ severity: 'minor', category: 'style', description: 'Consider renaming', file: null, line: null, suggestion: null }],
+  findings: [
+    {
+      severity: 'minor',
+      category: 'style',
+      description: 'Consider renaming',
+      file: null,
+      line: null,
+      suggestion: null,
+    },
+  ],
 };
 
 const validCodeResponse = {
   verdict: 'request_changes',
   summary: 'Issues found',
-  findings: [{ severity: 'critical', category: 'bug', description: 'Null pointer', file: 'src/foo.ts', line: 42, suggestion: null }],
+  findings: [
+    {
+      severity: 'critical',
+      category: 'bug',
+      description: 'Null pointer',
+      file: 'src/foo.ts',
+      line: 42,
+      suggestion: null,
+    },
+  ],
 };
 
 const validPrecommitResponse = {
@@ -66,6 +84,7 @@ const validPrecommitResponse = {
 // --- Helpers ---
 let client: Client;
 const savedEnv: Record<string, string | undefined> = {};
+const temporaryDatabaseDirs: string[] = [];
 
 async function startServer(): Promise<Client> {
   // Dynamic import to get a fresh module with current mock state
@@ -112,6 +131,9 @@ afterEach(async () => {
   } else {
     process.env.REVIEW_BRIDGE_DB = savedEnv.REVIEW_BRIDGE_DB;
   }
+  await Promise.all(
+    temporaryDatabaseDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+  );
 });
 
 describe('MCP integration — review_plan', () => {
@@ -119,13 +141,27 @@ describe('MCP integration — review_plan', () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
     client = await startServer();
 
-    const result = await client.callTool({ name: 'review_plan', arguments: { plan: 'My implementation plan' } });
+    const result = await client.callTool({
+      name: 'review_plan',
+      arguments: { plan: 'My implementation plan' },
+    });
 
     const parsed = parseToolResult(result) as Record<string, unknown>;
     expect(parsed.verdict).toBe('approve');
     expect(parsed.summary).toBe('Plan looks solid');
     expect(parsed.findings).toHaveLength(1);
     expect(parsed.session_id).toBe('thread_integ_001');
+    expect(parsed.models).toEqual([
+      {
+        provider: 'codex',
+        role: 'review',
+        requested: null,
+        resolved: 'gpt-5.6-sol',
+        observed: null,
+        evidence: 'bridge_selection',
+      },
+    ]);
+    expect(parsed.provenance).toEqual({ persistence: 'memory_only', warning: null });
   });
 
   it('Codex SDK init failure returns MCP error without crashing server', async () => {
@@ -157,6 +193,8 @@ describe('MCP integration — review_code', () => {
     expect(finding.file).toBe('src/foo.ts');
     expect(finding.line).toBe(42);
     expect(parsed.session_id).toBe('thread_integ_001');
+    expect(parsed.models).toHaveLength(1);
+    expect(parsed.provenance).toEqual({ persistence: 'memory_only', warning: null });
   });
 
   it('session_id threads from review_plan to review_code', async () => {
@@ -165,7 +203,10 @@ describe('MCP integration — review_code', () => {
       .mockResolvedValueOnce({ finalResponse: JSON.stringify(validCodeResponse) });
     client = await startServer();
 
-    const planResult = await client.callTool({ name: 'review_plan', arguments: { plan: 'My plan' } });
+    const planResult = await client.callTool({
+      name: 'review_plan',
+      arguments: { plan: 'My plan' },
+    });
     const planParsed = parseToolResult(planResult) as Record<string, unknown>;
     const sessionId = planParsed.session_id as string;
 
@@ -190,6 +231,8 @@ describe('MCP integration — review_precommit', () => {
     const parsed = parseToolResult(result) as Record<string, unknown>;
     expect(parsed.ready_to_commit).toBe(true);
     expect(parsed.session_id).toBe('thread_integ_001');
+    expect(parsed.models).toHaveLength(1);
+    expect(parsed.provenance).toEqual({ persistence: 'memory_only', warning: null });
   });
 
   it('empty staged diff returns warning', async () => {
@@ -199,11 +242,32 @@ describe('MCP integration — review_precommit', () => {
     const result = await client.callTool({ name: 'review_precommit', arguments: {} });
 
     const parsed = parseToolResult(result) as Record<string, unknown>;
-    expect((parsed.warnings as string[])).toContain('No staged changes found');
+    expect(parsed.warnings as string[]).toContain('No staged changes found');
+    expect(parsed.models).toEqual([]);
+    expect(parsed.provenance).toEqual({ persistence: 'not_recorded', warning: null });
   });
 });
 
 describe('MCP integration — review_history', () => {
+  it('round-trips durable provenance and model metadata through a file-backed database', async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'rb-durable-int-'));
+    temporaryDatabaseDirs.push(directory);
+    process.env.REVIEW_BRIDGE_DB = path.join(directory, 'reviews.db');
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
+    client = await startServer();
+
+    const review = parseToolResult(
+      await client.callTool({ name: 'review_plan', arguments: { plan: 'Durable plan' } }),
+    ) as Record<string, unknown>;
+    const history = parseToolResult(
+      await client.callTool({ name: 'review_history', arguments: { last_n: 1 } }),
+    ) as { reviews: Array<Record<string, unknown>> };
+
+    expect(review.provenance).toEqual({ persistence: 'durable', warning: null });
+    expect(history.reviews[0].models).toEqual(review.models);
+    expect(history.reviews[0].model_metadata_status).toBe('recorded');
+  });
+
   it('returns saved reviews after review_plan completes', async () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
     client = await startServer();
@@ -219,6 +283,53 @@ describe('MCP integration — review_history', () => {
     expect(parsed.reviews[0].type).toBe('plan');
     expect(parsed.reviews[0].verdict).toBe('approve');
     expect(parsed.reviews[0].session_id).toBe('thread_integ_001');
+    expect(parsed.reviews[0].model_metadata_status).toBe('recorded');
+    expect(parsed.reviews[0].models).toHaveLength(1);
+  });
+
+  it('round-trips identical model snapshots for plan, code, and precommit', async () => {
+    mockRun
+      .mockResolvedValueOnce({ finalResponse: JSON.stringify(validPlanResponse) })
+      .mockResolvedValueOnce({ finalResponse: JSON.stringify(validCodeResponse) })
+      .mockResolvedValueOnce({ finalResponse: JSON.stringify(validPrecommitResponse) });
+    client = await startServer();
+
+    const plan = parseToolResult(
+      await client.callTool({ name: 'review_plan', arguments: { plan: 'My plan' } }),
+    ) as Record<string, unknown>;
+    const code = parseToolResult(
+      await client.callTool({
+        name: 'review_code',
+        arguments: { diff: 'short diff', session_id: plan.session_id },
+      }),
+    ) as Record<string, unknown>;
+    const precommit = parseToolResult(
+      await client.callTool({
+        name: 'review_precommit',
+        arguments: {
+          diff: 'short staged diff',
+          auto_diff: false,
+          session_id: plan.session_id,
+        },
+      }),
+    ) as Record<string, unknown>;
+    const history = parseToolResult(
+      await client.callTool({
+        name: 'review_history',
+        arguments: { session_id: 'thread_integ_001' },
+      }),
+    ) as { reviews: Array<Record<string, unknown>>; next_cursor: string | null };
+
+    expect(history.reviews.map((review) => review.type)).toEqual(['plan', 'code', 'precommit']);
+    expect(history.reviews.map((review) => review.models)).toEqual([
+      plan.models,
+      code.models,
+      precommit.models,
+    ]);
+    expect(history.reviews.every((review) => review.model_metadata_status === 'recorded')).toBe(
+      true,
+    );
+    expect(history.next_cursor).toBeNull();
   });
 });
 
@@ -277,14 +388,15 @@ describe('MCP integration — session lifecycle', () => {
     expect(parsed1.elapsed_seconds).toBe(parsed2.elapsed_seconds);
   });
 
-  it('review_status shows failed after Codex error on resumed session', async () => {
+  it('rejects an unknown memory-only resume without inventing failed session state', async () => {
     mockRun.mockRejectedValue(new Error('network timeout'));
     client = await startServer();
 
-    await client.callTool({
+    const review = await client.callTool({
       name: 'review_plan',
       arguments: { plan: 'My plan', session_id: 'thread_integ_001' },
     });
+    expect(getErrorText(review)).toContain('SESSION_ROUTING_UNAVAILABLE');
 
     const result = await client.callTool({
       name: 'review_status',
@@ -292,7 +404,7 @@ describe('MCP integration — session lifecycle', () => {
     });
 
     const parsed = parseToolResult(result) as Record<string, unknown>;
-    expect(parsed.status).toBe('failed');
+    expect(parsed.status).toBe('not_found');
   });
 
   it('review_history accumulates across plan and code phases', async () => {
@@ -322,7 +434,10 @@ describe('MCP integration — session lifecycle', () => {
       .mockResolvedValueOnce({ finalResponse: JSON.stringify(validPlanResponse) });
     client = await startServer();
 
-    const failResult = await client.callTool({ name: 'review_plan', arguments: { plan: 'Plan A' } });
+    const failResult = await client.callTool({
+      name: 'review_plan',
+      arguments: { plan: 'Plan A' },
+    });
     const failText = getErrorText(failResult);
     expect(failText).toContain('transient failure');
 
@@ -342,7 +457,10 @@ describe('MCP integration — review_code multi-chunk session failure (T-001)', 
   // diffBudget=500 the chunker emits 2 pieces (one per file).
   function makeMultiChunkDiff(): string {
     const padLines = (prefix: string, count: number): string[] =>
-      Array.from({ length: count }, (_, i) => `${prefix}${i} padding-text-here-extra-words-for-volume`);
+      Array.from(
+        { length: count },
+        (_, i) => `${prefix}${i} padding-text-here-extra-words-for-volume`,
+      );
     const fileOne = [
       'diff --git a/a.ts b/a.ts',
       '--- a/a.ts',
@@ -365,7 +483,10 @@ describe('MCP integration — review_code multi-chunk session failure (T-001)', 
   beforeEach(async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rb-int-'));
     configDir = dir;
-    await fs.writeFile(path.join(dir, '.reviewbridge.json'), JSON.stringify({ max_chunk_tokens: 2200 }));
+    await fs.writeFile(
+      path.join(dir, '.reviewbridge.json'),
+      JSON.stringify({ max_chunk_tokens: 2200 }),
+    );
     savedEnv.RB_CONFIG_PATH = process.env.RB_CONFIG_PATH;
     process.env.RB_CONFIG_PATH = path.join(dir, '.reviewbridge.json');
   });

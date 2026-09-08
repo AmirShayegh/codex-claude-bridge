@@ -1,5 +1,14 @@
 import pc from 'picocolors';
-import type { PlanReviewResult, CodeReviewResult, PrecommitResult, PlanFinding, CodeFinding } from '../review/types.js';
+import type {
+  PlanReviewResult,
+  CodeReviewResult,
+  PrecommitResult,
+  PlanFinding,
+  CodeFinding,
+  ModelIdentity,
+  ReviewProvenance,
+} from '../review/types.js';
+import { escapeTerminalControls } from '../utils/terminal.js';
 
 export function detectColor(env: Record<string, string | undefined>, isTTY: boolean): boolean {
   if (env.FORCE_COLOR !== undefined) {
@@ -55,10 +64,14 @@ function verdictBadge(verdict: string, color: boolean): string {
 
 function locationStr(file: string | null, line: number | null): string {
   if (!file) return '';
-  return line ? ` ${file}:${line}` : ` ${file}`;
+  const safeFile = escapeTerminalControls(file);
+  return line ? ` ${safeFile}:${line}` : ` ${safeFile}`;
 }
 
-function formatFindings(findings: ReadonlyArray<PlanFinding | CodeFinding>, color: boolean): string {
+function formatFindings(
+  findings: ReadonlyArray<PlanFinding | CodeFinding>,
+  color: boolean,
+): string {
   if (findings.length === 0) return '  No findings.\n';
 
   const sorted = [...findings].sort(
@@ -69,24 +82,50 @@ function formatFindings(findings: ReadonlyArray<PlanFinding | CodeFinding>, colo
   for (const f of sorted) {
     const badge = severityBadge(f.severity, color);
     const loc = locationStr(f.file, f.line);
-    lines.push(`  ${badge}${loc} — ${f.description}`);
+    lines.push(`  ${badge}${loc} — ${escapeTerminalControls(f.description)}`);
     if (f.suggestion) {
       const prefix = color ? pc.dim('    ↳ ') : '    -> ';
-      lines.push(`${prefix}${f.suggestion}`);
+      lines.push(`${prefix}${escapeTerminalControls(f.suggestion)}`);
     }
   }
   return lines.join('\n') + '\n';
+}
+
+interface ReviewMetadata {
+  models?: ModelIdentity[];
+  provenance?: ReviewProvenance;
+}
+
+function modelValue(value: string | null): string {
+  return value === null ? 'null' : escapeTerminalControls(value);
+}
+
+function appendReviewMetadata(lines: string[], result: ReviewMetadata): void {
+  for (const model of result.models ?? []) {
+    lines.push(
+      `Model: role=${escapeTerminalControls(model.role)} ` +
+        `provider=${escapeTerminalControls(model.provider)} ` +
+        `requested=${modelValue(model.requested)} ` +
+        `resolved=${modelValue(model.resolved)} ` +
+        `observed=${modelValue(model.observed)} ` +
+        `evidence=${escapeTerminalControls(model.evidence)}`,
+    );
+  }
+  if (result.provenance?.warning !== null && result.provenance?.warning !== undefined) {
+    lines.push(`Persistence warning: ${escapeTerminalControls(result.provenance.warning)}`);
+  }
 }
 
 export function formatPlanResult(result: PlanReviewResult, color: boolean): string {
   const lines: string[] = [];
   lines.push(`Verdict: ${verdictBadge(result.verdict, color)}`);
   lines.push('');
-  lines.push(result.summary);
+  lines.push(escapeTerminalControls(result.summary));
   lines.push('');
   lines.push(`Findings (${result.findings.length}):`);
   lines.push(formatFindings(result.findings, color));
-  lines.push(`Session: ${result.session_id}`);
+  appendReviewMetadata(lines, result);
+  lines.push(`Session: ${escapeTerminalControls(result.session_id)}`);
   return lines.join('\n');
 }
 
@@ -94,11 +133,12 @@ export function formatCodeResult(result: CodeReviewResult, color: boolean): stri
   const lines: string[] = [];
   lines.push(`Verdict: ${verdictBadge(result.verdict, color)}`);
   lines.push('');
-  lines.push(result.summary);
+  lines.push(escapeTerminalControls(result.summary));
   lines.push('');
   lines.push(`Findings (${result.findings.length}):`);
   lines.push(formatFindings(result.findings, color));
-  lines.push(`Session: ${result.session_id}`);
+  appendReviewMetadata(lines, result);
+  lines.push(`Session: ${escapeTerminalControls(result.session_id)}`);
   return lines.join('\n');
 }
 
@@ -118,7 +158,7 @@ export function formatPrecommitResult(result: PrecommitResult, color: boolean): 
     lines.push('Blockers:');
     for (const b of result.blockers) {
       const bullet = color ? pc.red('  - ') : '  - ';
-      lines.push(`${bullet}${b}`);
+      lines.push(`${bullet}${escapeTerminalControls(b)}`);
     }
   }
 
@@ -127,11 +167,12 @@ export function formatPrecommitResult(result: PrecommitResult, color: boolean): 
     lines.push('Warnings:');
     for (const w of result.warnings) {
       const bullet = color ? pc.yellow('  - ') : '  - ';
-      lines.push(`${bullet}${w}`);
+      lines.push(`${bullet}${escapeTerminalControls(w)}`);
     }
   }
 
   lines.push('');
-  lines.push(`Session: ${result.session_id}`);
+  appendReviewMetadata(lines, result);
+  lines.push(`Session: ${escapeTerminalControls(result.session_id)}`);
   return lines.join('\n');
 }

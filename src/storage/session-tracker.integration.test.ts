@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
-import { createSessionTracker } from './session-tracker.js';
+import { checkSessionProvider, createSessionTracker } from './session-tracker.js';
 import { initSessionsDb, getOrCreateSession, getSession } from './sessions.js';
 import { initDb } from './reviews.js';
 
-// Real SQLite, no mocks. Reviews table is deliberately omitted so saveReview
-// fails — exercising the actual atomicity contract recordSuccess must satisfy.
+// Real SQLite, no mocks. Reviews table is deliberately omitted so the outcome
+// transaction fails after attempting session work.
 
 describe('createSessionTracker — recordSuccess atomicity (T-002)', () => {
   let db: Database.Database;
@@ -20,6 +20,7 @@ describe('createSessionTracker — recordSuccess atomicity (T-002)', () => {
   });
 
   it('does not mark session completed when saveReview fails (preflight path)', () => {
+    getOrCreateSession(db, 'sess_atomicity_preflight', 'codex');
     const tracker = createSessionTracker(db, ['codex'], 'codex');
     tracker.preflight('sess_atomicity_preflight');
 
@@ -39,7 +40,7 @@ describe('createSessionTracker — recordSuccess atomicity (T-002)', () => {
     expect(row?.status).toBe('in_progress');
   });
 
-  it('does not mark session completed when saveReview fails (fresh path)', () => {
+  it('rolls back creation entirely when saveReview fails (fresh path)', () => {
     const tracker = createSessionTracker(db, ['codex'], 'codex');
 
     tracker.recordSuccess('sess_atomicity_fresh', {
@@ -54,8 +55,27 @@ describe('createSessionTracker — recordSuccess atomicity (T-002)', () => {
       .prepare('SELECT status FROM sessions WHERE session_id = ?')
       .get('sess_atomicity_fresh') as { status: string } | undefined;
 
-    expect(row).toBeDefined();
-    expect(row?.status).toBe('in_progress');
+    expect(row).toBeUndefined();
+  });
+
+  it('rolls back a best-effort failure row when the terminal status update fails', () => {
+    db.exec(`
+      CREATE TRIGGER fail_failed_status
+      BEFORE UPDATE OF status ON sessions
+      WHEN NEW.status = 'failed'
+      BEGIN
+        SELECT RAISE(ABORT, 'injected failure status error');
+      END;
+    `);
+    const tracker = createSessionTracker(db, ['codex'], 'codex');
+    tracker.preflight('sess_best_effort_atomic');
+
+    expect(() => tracker.recordFailureBestEffort()).not.toThrow();
+
+    const row = db
+      .prepare('SELECT status FROM sessions WHERE session_id = ?')
+      .get('sess_best_effort_atomic');
+    expect(row).toBeUndefined();
   });
 });
 
@@ -98,14 +118,45 @@ describe('createSessionTracker — cross-provider resume guard (T-017)', () => {
     expect(result.ok).toBe(true);
   });
 
-  it('preflight on a session not yet in the DB persists its provider, so the guard holds on the next resume (m1)', () => {
-    // Backend session exists (in ~/.gemini) but no bridge row yet — the first
-    // touch is a resume under gemini. Pre-fix this persisted provider=NULL.
-    const first = createSessionTracker(db, ['gemini'], 'gemini').preflight('sess_new_resume');
+  it('still enforces provider mismatch on an unmigrated database', () => {
+    const legacy = new Database(':memory:');
+    legacy.exec(`
+      CREATE TABLE sessions (
+        session_id TEXT PRIMARY KEY,
+        status TEXT NOT NULL DEFAULT 'in_progress',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        completed_at TEXT,
+        provider TEXT
+      );
+      INSERT INTO sessions (session_id, provider) VALUES ('legacy-gemini', 'gemini');
+    `);
+
+    const result = checkSessionProvider(legacy, 'legacy-gemini', ['codex']);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain('PROVIDER_MISMATCH');
+    legacy.close();
+  });
+
+  it('preflight is non-durable; successful outcome persists provider for the next guard', () => {
+    const tracker = createSessionTracker(db, ['gemini'], 'gemini');
+    const first = tracker.preflight('sess_new_resume');
     expect(first.ok).toBe(true);
 
-    const row = getSession(db, 'sess_new_resume');
-    expect(row.ok && row.data?.provider).toBe('gemini');
+    const before = getSession(db, 'sess_new_resume');
+    expect(before.ok && before.data).toBeNull();
+
+    const persisted = tracker.recordSuccess('sess_new_resume', {
+      session_id: 'sess_new_resume',
+      type: 'plan',
+      verdict: 'approve',
+      summary: 'done',
+      findings_json: '[]',
+      models_json: '[]',
+    });
+    expect(persisted.ok).toBe(true);
+    const after = getSession(db, 'sess_new_resume');
+    expect(after.ok && after.data?.provider).toBe('gemini');
 
     // A later resume of the same id under codex is now correctly rejected.
     const second = createSessionTracker(db, ['codex'], 'codex').preflight('sess_new_resume');

@@ -57,7 +57,7 @@ describe('createBackend — two-provider composite', () => {
   it('default (fallback on, no mode) builds both leaves and the composite, passing config + lookup', () => {
     const lookup = vi.fn();
     const config = { ...DEFAULT_CONFIG, provider: 'codex' as const };
-    const backend = createBackend(config, undefined, lookup);
+    const backend = createBackend(config, lookup);
     expect(createCodexBackend).toHaveBeenCalledOnce();
     expect(createGeminiBackend).toHaveBeenCalledOnce();
     expect(createCompositeBackend).toHaveBeenCalledWith(codexStub, geminiStub, config, lookup);
@@ -70,11 +70,10 @@ describe('createBackend — two-provider composite', () => {
     const modelLookup = vi.fn();
     const config = { ...DEFAULT_CONFIG, provider: 'gemini' as const, mode: 'deliberate' as const };
 
-    createBackend(config, undefined, providerLookup, modelLookup);
+    createBackend(config, providerLookup, modelLookup);
 
     expect(createCodexBackend).toHaveBeenCalledWith(
       expect.objectContaining({ provider: 'codex' }),
-      undefined,
       { lookupSessionModel: modelLookup },
     );
     expect(createCompositeBackend).toHaveBeenCalledWith(
@@ -89,7 +88,6 @@ describe('createBackend — two-provider composite', () => {
     createBackend({ ...DEFAULT_CONFIG, provider: 'codex', model: 'gpt-5.4' });
     expect(createGeminiBackend).toHaveBeenCalledWith(
       expect.objectContaining({ provider: 'gemini', model: undefined }),
-      undefined,
     );
   });
 
@@ -106,7 +104,6 @@ describe('createBackend — two-provider composite', () => {
     expect(createGeminiBackend).toHaveBeenCalledOnce(); // primary
     expect(createCodexBackend).toHaveBeenCalledWith(
       expect.objectContaining({ provider: 'codex', model: undefined }),
-      undefined,
     );
   });
 });

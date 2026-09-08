@@ -141,6 +141,16 @@ export const CodeReviewResultSchema = z.object({
   findings: z.array(CodeFindingSchema),
   session_id: SessionIdSchema,
   chunks_reviewed: z.number().int().positive().optional(),
+  // Files each chunk held, in chunk order (index i ↔ chunk i+1). Present only
+  // when the diff was split: a reader with a suspicion spanning two files can
+  // see whether any single reviewer call ever saw both. Host-only, like
+  // chunks_reviewed — never produced by the model.
+  chunk_files: z.array(z.array(z.string())).optional(),
+  // Absolute directory the bridge ran git in when it auto-captured this diff
+  // (ISS-028). Present ONLY on an auto-captured result — omitted entirely for an
+  // explicit diff. Host-only: the response boundary stamps it from the resolver,
+  // the reviewer never produces it, and it is never persisted to history.
+  captured_from: z.string().optional(),
   provider: ServingProviderSchema,
   review_mode: ReviewModeSchema,
   deliberation: deliberationSchema(CodeFindingSchema),
@@ -153,6 +163,16 @@ export const PrecommitResultSchema = z.object({
   warnings: z.array(z.string()),
   session_id: SessionIdSchema,
   chunks_reviewed: z.number().int().positive().optional(),
+  // Files each chunk held, in chunk order (index i ↔ chunk i+1). Present only
+  // when the diff was split: a reader with a suspicion spanning two files can
+  // see whether any single reviewer call ever saw both. Host-only, like
+  // chunks_reviewed — never produced by the model.
+  chunk_files: z.array(z.array(z.string())).optional(),
+  // Absolute directory the bridge ran git in when it auto-captured this diff
+  // (ISS-028). Present ONLY on an auto-captured result — omitted entirely for an
+  // explicit diff. Host-only: the response boundary stamps it from the resolver,
+  // the reviewer never produces it, and it is never persisted to history.
+  captured_from: z.string().optional(),
   provider: ServingProviderSchema,
   review_mode: ReviewModeSchema,
   ...HostReviewMetadataFields,

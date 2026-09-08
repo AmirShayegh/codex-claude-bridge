@@ -35,12 +35,11 @@ vi.mock('./config/loader.js', () => ({
   ),
 }));
 
-vi.mock('./config/copilot-instructions.js', () => ({
-  loadCopilotInstructions: vi.fn(() => ({
-    ok: true,
-    data: { repoWide: null, scoped: [] },
-  })),
-}));
+// Capture the preparation deps each tool is registered with: that object is how
+// every request learns where to run (ISS-027).
+vi.mock('./tools/review-plan.js', () => ({ registerReviewPlanTool: vi.fn() }));
+vi.mock('./tools/review-code.js', () => ({ registerReviewCodeTool: vi.fn() }));
+vi.mock('./tools/review-precommit.js', () => ({ registerReviewPrecommitTool: vi.fn() }));
 
 vi.mock('better-sqlite3', () => {
   const MockDatabase = vi.fn(function () {
@@ -79,7 +78,10 @@ vi.mock('./storage/sessions.js', () => ({
 
 import { loadConfig } from './config/loader.js';
 import { DEFAULT_CONFIG } from './config/types.js';
-import { loadCopilotInstructions } from './config/copilot-instructions.js';
+import { registerReviewPlanTool } from './tools/review-plan.js';
+import { registerReviewCodeTool } from './tools/review-code.js';
+import { registerReviewPrecommitTool } from './tools/review-precommit.js';
+import { realpathSync } from 'node:fs';
 import { initDb } from './storage/reviews.js';
 import { initSessionsDb } from './storage/sessions.js';
 import Database from 'better-sqlite3';
@@ -102,14 +104,18 @@ describe('createServer', () => {
 
   it('registers all 5 tools', () => {
     const server = createServer();
+    // The three review tools are registered through their own modules (mocked
+    // above to capture the preparation deps); history and status register
+    // directly on the server.
+    expect(registerReviewPlanTool).toHaveBeenCalledOnce();
+    expect(registerReviewCodeTool).toHaveBeenCalledOnce();
+    expect(registerReviewPrecommitTool).toHaveBeenCalledOnce();
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const registerTool = (server as any).registerTool as ReturnType<typeof vi.fn>;
-    expect(registerTool).toHaveBeenCalledTimes(5);
+    expect(registerTool).toHaveBeenCalledTimes(2);
 
     const toolNames = registerTool.mock.calls.map((call: unknown[]) => call[0] as string);
-    expect(toolNames).toContain('review_plan');
-    expect(toolNames).toContain('review_code');
-    expect(toolNames).toContain('review_precommit');
     expect(toolNames).toContain('review_status');
     expect(toolNames).toContain('review_history');
   });
@@ -153,27 +159,33 @@ describe('createServer', () => {
     consoleSpy.mockRestore();
   });
 
-  it('derives copilot instructions root from project source path', () => {
-    vi.mocked(loadConfig).mockReturnValue({
-      ok: true,
-      data: {
-        config: DEFAULT_CONFIG,
-        source: { kind: 'project', path: '/some/repo/.reviewbridge.json' },
-      },
-    });
-
-    createServer();
-    expect(loadCopilotInstructions).toHaveBeenCalledWith('/some/repo');
-  });
-
-  it('uses process.cwd() for copilot instructions when source is default/env/user', () => {
+  it('gives every review tool the same preparation deps, anchored at the launch directory', () => {
     vi.mocked(loadConfig).mockReturnValue({
       ok: true,
       data: { config: DEFAULT_CONFIG, source: { kind: 'default' } },
     });
 
     createServer();
-    expect(loadCopilotInstructions).toHaveBeenCalledWith(undefined);
+
+    const prep = vi.mocked(registerReviewPlanTool).mock.calls[0][2];
+    // Canonicalized, so it matches the paths git and the providers report back.
+    expect(prep.defaultWorkingDirectory).toBe(realpathSync(process.cwd()));
+    expect(prep.loadInstructions).toBe(DEFAULT_CONFIG.copilot_instructions);
+    expect(vi.mocked(registerReviewCodeTool).mock.calls[0][2]).toBe(prep);
+    expect(vi.mocked(registerReviewPrecommitTool).mock.calls[0][2]).toBe(prep);
+  });
+
+  it('turns instruction loading off when the config disables it', () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      ok: true,
+      data: {
+        config: { ...DEFAULT_CONFIG, copilot_instructions: false },
+        source: { kind: 'default' },
+      },
+    });
+
+    createServer();
+    expect(vi.mocked(registerReviewPlanTool).mock.calls[0][2].loadInstructions).toBe(false);
   });
 
   it('passes server instructions to McpServer', () => {

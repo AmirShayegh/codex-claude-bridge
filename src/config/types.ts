@@ -24,7 +24,7 @@ export function toReviewProvider(value: string | null | undefined): ReviewProvid
 export const RECOMMENDED_MODELS = {
   codex: ['gpt-6-astra', 'gpt-5.6-sol'],
   // agy model strings (effort is part of the name); from `agy models`.
-  gemini: ['Gemini 3.5 Flash (Medium)', 'Gemini 3.5 Flash (High)', 'Gemini 3.1 Pro (High)'],
+  gemini: ['Gemini 3.8 Flash (Medium)', 'Gemini 3.8 Flash (High)', 'Gemini 3.1 Pro (High)'],
 } as const satisfies Record<ReviewProvider, readonly string[]>;
 export type RecommendedModel = (typeof RECOMMENDED_MODELS)[ReviewProvider][number];
 
@@ -46,8 +46,8 @@ export const TIER_MODELS: Record<ReviewProvider, Record<ReviewTier, string>> = {
   codex: { max: 'gpt-6-astra', balanced: 'gpt-5.6-sol', fast: 'gpt-5.6-luna' },
   gemini: {
     max: 'Gemini 3.1 Pro (High)',
-    balanced: 'Gemini 3.5 Flash (High)',
-    fast: 'Gemini 3.5 Flash (Medium)',
+    balanced: 'Gemini 3.8 Flash (High)',
+    fast: 'Gemini 3.8 Flash (Medium)',
   },
 };
 
@@ -56,7 +56,7 @@ export const TIER_HELP =
   'Or pick a tier instead of a model id: "max" (hardest problems — architecture, concurrency, ' +
   'security, subtle bugs), "balanced" (everyday review), or "fast" (small diffs, precommit ' +
   'sanity, quick iteration). Tiers map per provider (Codex: gpt-6-astra / gpt-5.6-sol / ' +
-  'gpt-5.6-luna; Gemini: 3.1 Pro (High) / 3.5 Flash (High) / 3.5 Flash (Medium)) and survive failover.';
+  'gpt-5.6-luna; Gemini: 3.1 Pro (High) / 3.8 Flash (High) / 3.8 Flash (Medium)) and survive failover.';
 
 export const PlanReviewStandardsSchema = z.object({
   focus: z.array(z.string()).default(['architecture', 'feasibility']),

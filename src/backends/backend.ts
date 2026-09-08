@@ -6,11 +6,27 @@ import type {
   CrossReviewResult,
 } from '../review/types.js';
 import type { ReviewProvider } from '../config/types.js';
+import type { CopilotInstructions } from '../config/copilot-instructions.js';
+
+// Everything about WHERE a review runs, resolved once per request before any
+// provider is contacted (ISS-027). Carrying it on the input rather than baking it
+// into the backend at startup is what lets one server review several repositories
+// — including git worktrees the server was not launched in.
+export interface ReviewExecutionContext {
+  // Absolute, already-canonicalized directory this review runs in. Every git
+  // command and every provider subprocess uses exactly this value; nothing
+  // downstream falls back to process.cwd().
+  workingDirectory: string;
+  // Repository instruction files read for THIS request's repository. Undefined
+  // when instructions are disabled, or when the request needs no provider call.
+  copilotInstructions?: CopilotInstructions;
+}
 
 // Input shapes accepted by every review backend. Provider-agnostic — these are
 // the arguments the tool/CLI layers pass through to whichever backend is active.
 export interface PlanReviewInput {
   plan: string;
+  execution: ReviewExecutionContext;
   context?: string;
   focus?: string[];
   depth?: 'quick' | 'thorough';
@@ -24,6 +40,7 @@ export interface PlanReviewInput {
 
 export interface CodeReviewInput {
   diff: string;
+  execution: ReviewExecutionContext;
   context?: string;
   criteria?: string[];
   session_id?: string;
@@ -34,6 +51,7 @@ export interface CodeReviewInput {
 
 export interface PrecommitReviewInput {
   diff: string;
+  execution: ReviewExecutionContext;
   checklist?: string[];
   session_id?: string;
   model?: string;
@@ -49,6 +67,13 @@ export interface CrossReviewFinding {
 }
 
 export interface CrossReviewInput {
+  execution: ReviewExecutionContext;
+  // What `content` IS. Instruction scoping depends on it: a diff is filtered to
+  // the files it touches, while plan prose has no files and gets every
+  // instruction — exactly as the primary plan review did. Filtering a plan by
+  // "files in the diff" would strip the rules the findings under adjudication
+  // were made with.
+  subject: 'plan' | 'code';
   // The diff (code) or plan text under review.
   content: string;
   // Findings to adjudicate, in order — the response references them by index.

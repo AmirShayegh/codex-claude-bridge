@@ -6,6 +6,10 @@ import { DEFAULT_CONFIG } from '../config/types.js';
 import { canOverrideModelOnResume, type ReviewBackend } from './backend.js';
 import type { ReviewProvider } from '../config/types.js';
 
+// Every backend call now carries WHERE it runs (ISS-027). Tests that don't care
+// about the directory share this one fixture; tests that do build their own.
+const EXEC = { workingDirectory: '/work/repo-b' };
+
 type Methods = Partial<
   Pick<ReviewBackend, 'reviewPlan' | 'reviewCode' | 'reviewPrecommit' | 'crossReview'>
 >;
@@ -64,6 +68,7 @@ describe('createCompositeBackend — per-call dispatch + review_mode stamping', 
     const p = backend('codex');
     const s = backend('gemini');
     const res = await createCompositeBackend(p, s, cfg({ mode: 'failover' })).reviewCode({
+      execution: EXEC,
       diff: DIFF,
       deliberate: true,
     });
@@ -78,6 +83,7 @@ describe('createCompositeBackend — per-call dispatch + review_mode stamping', 
     const p = backend('codex');
     const s = backend('gemini');
     const res = await createCompositeBackend(p, s, cfg({ mode: 'deliberate' })).reviewCode({
+      execution: EXEC,
       diff: DIFF,
       deliberate: false,
     });
@@ -93,7 +99,7 @@ describe('createCompositeBackend — per-call dispatch + review_mode stamping', 
       backend('codex'),
       backend('gemini'),
       cfg({ mode: 'deliberate-deep' }),
-    ).reviewCode({ diff: DIFF });
+    ).reviewCode({ execution: EXEC, diff: DIFF });
     expect(res.ok && res.data.review_mode).toBe('deliberate-deep');
   });
 
@@ -102,7 +108,7 @@ describe('createCompositeBackend — per-call dispatch + review_mode stamping', 
       backend('codex'),
       backend('gemini'),
       cfg({ mode: 'failover' }),
-    ).reviewPlan({ plan: 'p' });
+    ).reviewPlan({ execution: EXEC, plan: 'p' });
     expect(res.ok && res.data.review_mode).toBe('failover');
   });
 
@@ -111,7 +117,7 @@ describe('createCompositeBackend — per-call dispatch + review_mode stamping', 
       backend('codex'),
       backend('gemini'),
       cfg({ mode: 'deliberate' }),
-    ).reviewPrecommit({ diff: DIFF });
+    ).reviewPrecommit({ execution: EXEC, diff: DIFF });
     expect(res.ok && res.data.review_mode).toBe('failover');
   });
 
@@ -146,33 +152,44 @@ describe('createCompositeBackend — per-call dispatch + review_mode stamping', 
 
 describe('withSingleMode', () => {
   it('stamps review_mode:single on success', async () => {
-    const res = await withSingleMode(backend('codex')).reviewCode({ diff: DIFF });
+    const res = await withSingleMode(backend('codex')).reviewCode({ execution: EXEC, diff: DIFF });
     expect(res.ok && res.data.review_mode).toBe('single');
   });
 
   it('stamps single on precommit', async () => {
-    const res = await withSingleMode(backend('codex')).reviewPrecommit({ diff: DIFF });
+    const res = await withSingleMode(backend('codex')).reviewPrecommit({
+      execution: EXEC,
+      diff: DIFF,
+    });
     expect(res.ok && res.data.review_mode).toBe('single');
   });
 
   it('rejects a per-call deliberate:true with INVALID_INPUT (no second provider)', async () => {
     const leaf = backend('codex');
-    const res = await withSingleMode(leaf).reviewCode({ diff: DIFF, deliberate: true });
+    const res = await withSingleMode(leaf).reviewCode({
+      execution: EXEC,
+      diff: DIFF,
+      deliberate: true,
+    });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toContain(ErrorCode.INVALID_INPUT);
     expect(leaf.reviewCode).not.toHaveBeenCalled(); // rejected before touching the leaf
   });
 
   it('allows deliberate:false / undefined (runs the leaf, single)', async () => {
-    const res = await withSingleMode(backend('codex')).reviewPlan({ plan: 'p', deliberate: false });
+    const res = await withSingleMode(backend('codex')).reviewPlan({
+      execution: EXEC,
+      plan: 'p',
+      deliberate: false,
+    });
     expect(res.ok && res.data.review_mode).toBe('single');
   });
 
   it('stamps the serving provider on plan, code, and precommit results (ISS-023)', async () => {
     const single = withSingleMode(backend('codex'));
-    const plan = await single.reviewPlan({ plan: 'p' });
-    const code = await single.reviewCode({ diff: DIFF });
-    const precommit = await single.reviewPrecommit({ diff: DIFF });
+    const plan = await single.reviewPlan({ execution: EXEC, plan: 'p' });
+    const code = await single.reviewCode({ execution: EXEC, diff: DIFF });
+    const precommit = await single.reviewPrecommit({ execution: EXEC, diff: DIFF });
     expect(plan.ok && plan.data.provider).toBe('codex');
     expect(code.ok && code.data.provider).toBe('codex');
     expect(precommit.ok && precommit.data.provider).toBe('codex');
@@ -188,7 +205,7 @@ describe('createCompositeBackend — defensive single-mode handling', () => {
       backend('codex'),
       s,
       cfg({ mode: 'single' }),
-    ).reviewCode({ diff: DIFF });
+    ).reviewCode({ execution: EXEC, diff: DIFF });
     expect(res.ok && res.data.review_mode).toBe('single');
     expect(res.ok && res.data.provider).toBe('codex'); // ISS-023
     expect(s.reviewCode).not.toHaveBeenCalled(); // no second provider
@@ -199,7 +216,7 @@ describe('createCompositeBackend — defensive single-mode handling', () => {
       backend('codex'),
       backend('gemini'),
       cfg({ mode: 'single' }),
-    ).reviewPlan({ plan: 'p', deliberate: true });
+    ).reviewPlan({ execution: EXEC, plan: 'p', deliberate: true });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toContain(ErrorCode.INVALID_INPUT);
   });

@@ -5,13 +5,9 @@ import { join } from 'node:path';
 import { ok, err, ErrorCode } from '../utils/errors.js';
 import type { Result } from '../utils/errors.js';
 import type { ReviewBridgeConfig } from '../config/types.js';
-import {
-  RECOMMENDED_MODELS,
-  TIER_MODELS,
-  isReviewTier,
-} from '../config/types.js';
-import type { CopilotInstructions } from '../config/copilot-instructions.js';
+import { RECOMMENDED_MODELS, TIER_MODELS, isReviewTier } from '../config/types.js';
 import { escapeTerminalControls } from '../utils/terminal.js';
+import { subprocessEnv } from '../utils/subprocess-env.js';
 import { SessionIdSchema } from '../utils/input-validation.js';
 import type { ReviewBackend } from './backend.js';
 import {
@@ -115,10 +111,10 @@ export function classifyAgyError(raw: string): { code: ErrorCode; message: strin
 const MAX_AGY_OUTPUT_CHARS = 10 * 1024 * 1024; // ~10 MB
 
 export interface AgyPrintOptions {
-  // The full review prompt, piped to agy via stdin (avoids argv length limits
-  // for large diffs).
+  // The full review prompt. Delivered on stdin as one stream-json message, so
+  // its size is bounded by nothing on the command line (see runAgyPrint).
   prompt: string;
-  // Resolved agy model string, e.g. "Gemini 3.5 Flash (Medium)".
+  // Resolved agy model string, e.g. "Gemini 3.8 Flash (Medium)".
   model: string;
   // When set, resume this agy conversation instead of starting a fresh one.
   conversationId?: string;
@@ -127,13 +123,61 @@ export interface AgyPrintOptions {
   timeoutMs: number;
 }
 
-// Run one `agy --print --sandbox` invocation and return its stdout. Never
-// throws: spawn failures, non-zero exits, and timeouts all resolve to a
-// structured error Result. An exit-0 empty stdout resolves to ok('') so the
+// The one stream-json event agy emits that carries the answer. Everything else
+// on stdout (init, step_update) is progress and is ignored.
+interface AgyResultEvent {
+  event: 'result';
+  result: { status: string; response: string; error?: unknown; conversation_id?: string };
+}
+
+function isAgyResultEvent(value: unknown): value is AgyResultEvent {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as { event?: unknown; result?: unknown };
+  if (v.event !== 'result' || typeof v.result !== 'object' || v.result === null) return false;
+  const r = v.result as { status?: unknown; response?: unknown };
+  return typeof r.status === 'string' && typeof r.response === 'string';
+}
+
+// Find the final `result` event in agy's NDJSON stdout. Null when agy printed
+// no such event — the caller then hands the raw text to the JSON parser, which
+// reports it the same way it reports an empty response.
+export function extractAgyResult(stdout: string): AgyResultEvent['result'] | null {
+  let found: AgyResultEvent['result'] | null = null;
+  for (const line of stdout.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('{')) continue;
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      if (isAgyResultEvent(parsed)) found = parsed.result;
+    } catch {
+      // A partial or non-JSON line is progress noise, not the answer.
+    }
+  }
+  return found;
+}
+
+// Run one agy turn and return the model's response text. Never throws: spawn
+// failures, non-zero exits, and timeouts all resolve to a structured error
+// Result. An exit-0 run with no result event resolves to ok(raw stdout) so the
 // caller's parse-retry loop treats it like a malformed response.
+//
+// WHY stream-json and not --print <prompt>: agy 1.1.27 stopped reading the
+// prompt from stdin and made it the VALUE of --print. Putting it on argv would
+// work until it did not — Linux caps one argv string at 128 KiB, and a
+// ten-commit review of one package already measures over 100 KiB before the
+// prompt scaffolding. `--input-format stream-json` is agy's own stdin channel:
+// one NDJSON message in, a `result` event out, no size limit anywhere, and the
+// result carries the conversation id as well. The old order
+// (`--print --sandbox …`) had made agy take "--sandbox" as the prompt, failing
+// every Gemini review exactly when it was the failover of last resort.
 export function runAgyPrint(opts: AgyPrintOptions): Promise<Result<string>> {
-  const args = ['--print', '--sandbox', '--model', opts.model];
+  const args = ['--sandbox', '--model', opts.model];
   if (opts.conversationId) args.push('--conversation', opts.conversationId);
+  args.push('--input-format', 'stream-json', '--output-format', 'stream-json');
+  const message = JSON.stringify({
+    event: 'user',
+    message: { role: 'user', content: opts.prompt },
+  });
 
   return new Promise<Result<string>>((resolve) => {
     const controller = new AbortController();
@@ -153,7 +197,16 @@ export function runAgyPrint(opts: AgyPrintOptions): Promise<Result<string>> {
 
     let child;
     try {
-      child = spawn('agy', args, { cwd: opts.cwd, signal: controller.signal });
+      child = spawn('agy', args, {
+        cwd: opts.cwd,
+        // A fresh environment per spawn, with the repository-selecting GIT_*
+        // variables stripped. PWD is set to match `cwd` because agy keys its
+        // conversation cache by workspace path: an inherited PWD naming the
+        // SERVER's directory would file this review's id under the wrong key,
+        // and the capture below would then miss it.
+        env: { ...subprocessEnv(), PWD: opts.cwd },
+        signal: controller.signal,
+      });
     } catch (e: unknown) {
       const raw = e instanceof Error ? e.message : String(e);
       const classified = classifyAgyError(raw);
@@ -203,7 +256,22 @@ export function runAgyPrint(opts: AgyPrintOptions): Promise<Result<string>> {
         finish(err(`${classified.code}: ${classified.message}`));
         return;
       }
-      finish(ok(stdout));
+      const result = extractAgyResult(stdout);
+      if (result === null) {
+        finish(ok(stdout));
+        return;
+      }
+      if (result.status !== 'SUCCESS') {
+        // agy reports its own failures (bad model, auth, rate limit) inside the
+        // result event with exit 0, so the text to classify lives there.
+        // Optional provider fields are untrusted too. A malformed error object
+        // must not throw from this event callback and terminate the server.
+        const errorText = typeof result.error === 'string' ? result.error : '';
+        const classified = classifyAgyError(errorText || stderr || result.status);
+        finish(err(`${classified.code}: ${classified.message}`));
+        return;
+      }
+      finish(ok(result.response));
     });
 
     // agy may close its read end before we finish writing (fast-fail paths like
@@ -213,7 +281,7 @@ export function runAgyPrint(opts: AgyPrintOptions): Promise<Result<string>> {
     // swallow it — the real failure is already reported via the child
     // 'error'/'close'/timeout handlers above. Honors the never-crash contract.
     child.stdin?.on('error', () => {});
-    child.stdin?.write(opts.prompt);
+    child.stdin?.write(message + '\n');
     child.stdin?.end();
   });
 }
@@ -273,7 +341,7 @@ function stripCodeFences(text: string): string {
 // the backend (the config schema carries no default). Effort is part of the
 // model string for agy, so reasoning_effort is not applied here. Mirrors
 // RECOMMENDED_MODELS.gemini[0].
-const GEMINI_DEFAULT_MODEL = 'Gemini 3.5 Flash (Medium)';
+const GEMINI_DEFAULT_MODEL = 'Gemini 3.8 Flash (Medium)';
 
 // `agy models` is a quick metadata call; bound it well under a review timeout so
 // a hung query degrades to the fallback fast.
@@ -342,7 +410,7 @@ export function runAgyModels(timeoutMs: number = MODEL_QUERY_TIMEOUT_MS): Promis
 
     let child;
     try {
-      child = spawn('agy', ['models'], { signal: controller.signal });
+      child = spawn('agy', ['models'], { env: subprocessEnv(), signal: controller.signal });
     } catch {
       finish(null);
       return;
@@ -405,7 +473,7 @@ export async function resolveLatestGeminiModel(timeoutMs?: number): Promise<stri
   return pickLatestFlashModel(output) ?? GEMINI_DEFAULT_MODEL;
 }
 
-// agy lists one concrete model per line (e.g. "Gemini 3.5 Flash (Medium)").
+// agy lists one concrete model per line (e.g. "Gemini 3.8 Flash (Medium)").
 export function parseAgyModels(output: string): string[] {
   return output
     .split('\n')
@@ -509,6 +577,18 @@ async function runAgyReview<T extends Record<string, unknown>>(
 
       // Resume → reuse the conversation we resumed; fresh → capture the new id
       // agy just recorded for this cwd.
+      //
+      // Cross-directory resume safety: this cwd-keyed cache lookup is reachable
+      // ONLY on the fresh branch — `??` short-circuits it whenever sessionId is
+      // present, so a resumed call always returns the caller's OWN id verbatim
+      // and the cache can never substitute a different one. A resume can't
+      // silently fork through this mechanism, whatever cwd accompanies it.
+      // A resume DOES still run agy in whatever directory THIS call names while
+      // continuing conversation `sessionId`; if that differs from where the
+      // session started, the review's content may be incoherent with the
+      // conversation's history — the same caller-coherence concern as passing
+      // an unrelated diff to a resumed session, not an identity one. That is
+      // why callers must repeat cwd on resume. Analysis from #7.
       const resolvedId = sessionId ?? readConversationId(cwd);
       if (!resolvedId) {
         // The review itself parsed fine — this is a storage read failure (agy's
@@ -516,7 +596,8 @@ async function runAgyReview<T extends Record<string, unknown>>(
         // STORAGE_ERROR is accurate and actionable; RESPONSE_PARSE_ERROR would
         // wrongly imply a malformed model response the caller should retry.
         return err<T & { session_id: string }>(
-          `${ErrorCode.STORAGE_ERROR}: agy review succeeded but no conversation id was captured for ${cwd}. ` +
+          `${ErrorCode.STORAGE_ERROR}: agy review succeeded but no conversation id was captured for ` +
+            `"${escapeTerminalControls(cwd)}". ` +
             `Check that ~/.gemini/antigravity-cli is readable.`,
         );
       }
@@ -534,10 +615,7 @@ async function runAgyReview<T extends Record<string, unknown>>(
   });
 }
 
-export function createGeminiBackend(
-  config: ReviewBridgeConfig,
-  copilotInstructions?: CopilotInstructions,
-): ReviewBackend {
+export function createGeminiBackend(config: ReviewBridgeConfig): ReviewBackend {
   // agy carries reasoning effort in the model name (e.g. "... (High)"), so the
   // config's reasoning_effort has no effect here — codex applies it, gemini
   // can't. Surface a one-time startup notice when it's set to a non-default
@@ -546,16 +624,19 @@ export function createGeminiBackend(
   if (config.reasoning_effort !== 'medium') {
     console.error(
       `[codex-bridge] note: reasoning_effort "${escapeTerminalControls(config.reasoning_effort)}" is ignored by the Gemini backend — ` +
-        `effort is part of the agy model name (e.g. "Gemini 3.5 Flash (High)"). Pin a higher-effort model instead.`,
+        `effort is part of the agy model name (e.g. "Gemini 3.8 Flash (High)"). Pin a higher-effort model instead.`,
     );
   }
 
+  // The run directory comes from the REQUEST, never from the server's own
+  // process. agy keys its conversation cache by workspace path, so using
+  // process.cwd() here would both review the wrong tree and look the resulting
+  // conversation id up under the wrong key.
   const turn: TurnRunner = <T extends Record<string, unknown>>(params: TurnParams) =>
-    runAgyReview<T>({ ...params, config, cwd: process.cwd() });
+    runAgyReview<T>({ ...params, config, cwd: params.workingDirectory });
   const deps = {
     config,
     provider: 'gemini' as const,
-    copilotInstructions,
     // agy accepts a model on resume (nothing reasserts it), and persists each
     // conversation natively — so chunks review independently (resumesAcrossChunks
     // false) to avoid resending a growing transcript per chunk.

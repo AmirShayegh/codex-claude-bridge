@@ -8,6 +8,7 @@
   "createdBy": "external-review:care2talk-9e (design suggestion; code-verified in this session)",
   "dedupeKey": "care2talk-9e-2026-09-03:capture-dir-disclosure",
   "discoveredDate": "2026-09-04",
+  "displayId": "ISS-028",
   "id": "ISS-028",
   "impact": "\"No staged changes found\" (src/tools/review-precommit.ts:70, src/utils/resolve-diff.ts:24) and \"No changes found to review.\" (src/tools/review-code.ts:87) are indistinguishable from a legitimate empty result and name no directory. When the capture ran somewhere other than where the user is working (ISS-027), the user has no reason to doubt the tool, checks their own git state first, and only then suspects the bridge; that is why the worktree bug cost two full diagnoses instead of one. Independent of the capture fix, every auto-captured result (empty or not) should report the absolute directory the git command ran in, e.g. `captured_from: /Users/.../c2t-design`, and the empty-result summary should say \"No staged changes found in <dir>\". When a caller-supplied cwd exists and differs from the server cwd, say so explicitly. This is self-diagnosing and also protects against the next variant of the same class. Suggested as the FIRST change, ahead of the full cwd plumbing, since it is ~10 lines and no behavior change.",
   "location": [
@@ -17,8 +18,8 @@
   ],
   "phase": null,
   "relatedTickets": [],
-  "resolution": null,
-  "resolvedDate": null,
+  "resolution": "Fixed in 19c1836 on branch fix/capture-dir-disclosure (stacked on feat/astra-tiers).\n\nContract: code and precommit results carry an optional top-level `captured_from` — the absolute directory git actually ran in — emitted ONLY when git captured a diff (empty captures included) and omitted entirely for an explicit diff. Empty captures name the directory inline (\"No staged changes found in <dir>\", \"No changes found to review in <dir>.\"), git failures keep their GIT_ERROR prefix and append `capture attempted from \"<dir>\"`, and the human CLI prints \"Captured from: <dir>\".\n\nInvariant enforced: src/utils/resolve-diff.ts takes ONE process.cwd() snapshot per capture branch and hands that same value to every child git command — the HEAD probe and the unborn-HEAD staged+unstaged fallback included (src/utils/git.ts now threads an optional cwd through execAsync and all five helpers). Response metadata is derived from that snapshot; nothing re-reads the cwd while formatting. A cwd that cannot be read returns GIT_ERROR before git is invoked, and fabricates no location.\n\nHost-only by construction: `captured_from` is omitted from the model-facing schemas in orchestrator.ts (so a reviewer can neither read nor forge it, and ISS-019's all-properties-required rule still holds), stamped at the MCP and CLI response boundaries AFTER lifecycle persistence / tracker recording, discarded if a backend supplies its own (withCapturedFrom drops it first), absent from PlanReviewResultSchema, and stripped by ReviewHistoryEntrySchema. Paths stay raw as data and are control-escaped wherever rendered into a message.\n\nInput behavior preserved unchanged: nonblank MCP code diffs explicit; blank/whitespace-only code diffs follow auto_diff; any defined precommit diff (including empty) explicit; disabled auto-capture keeps its prior error; explicit and disabled branches never read the cwd.\n\nVerification: 1001 tests pass (up from 946), typecheck clean, lint clean, build clean, git diff --check clean. New coverage: resolver capture reporting incl. cwd-lookup failure and terminal-control escaping; cwd forwarding to every git child command incl. the unborn-HEAD fallback; tool-level stamping on BOTH the lifecycle and no-lifecycle paths; backend-forged captured_from removal; model-schema exclusion; history-entry stripping; CLI rendering and escaping; and five MCP integration regressions asserting captured_from equals the directory actually passed to capture.\n\nDocs: README documents the field, corrects review_code.diff to optional, documents auto_diff, and adds a \"Where the diff came from\" section; server instructions and both tool descriptions warn that the server captures in its own cwd.\n\nSelecting the caller's worktree remains ISS-027.",
+  "resolvedDate": "2026-09-05",
   "severity": "medium",
   "sourceRefs": [
     {
@@ -30,6 +31,6 @@
       "startLine": 61
     }
   ],
-  "status": "open",
+  "status": "resolved",
   "title": "Empty auto-capture results are silent: name the directory the capture ran in and flag when it is not the caller's cwd"
 }

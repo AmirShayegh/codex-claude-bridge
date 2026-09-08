@@ -1,0 +1,31 @@
+{
+  "components": [
+    "config",
+    "tools"
+  ],
+  "createdBy": "PR #7 (paymantorkiyan) — design and tests; deferred out of ISS-027 by plan",
+  "dedupeKey": "pr7-2026-09-06:per-request-config-discovery",
+  "discoveredDate": "2026-09-06",
+  "id": "ISS-036",
+  "impact": "Since ISS-027 a request may name any repository via `cwd`, and its `.github/copilot-instructions.md` is read from THAT repository's root. But `.reviewbridge.json` is still loaded once at startup (src/server.ts:93) from the server's launch directory, and src/tools/review-precommit.ts:71 reads `review_standards.precommit.auto_diff` from that boot object regardless of `args.cwd`. The two repository-scoped inputs are now inconsistent: the reviewed repo's instructions apply, its config does not.\n\nPR #7 solved this with `discoverProjectConfig(startDir)` — walk up to find `.reviewbridge.json`, `ok(null)` on a total miss — and a fall-back-to-BOOT-config-not-schema-defaults policy, so a user who set `precommit.auto_diff:false` via RB_CONFIG_PATH or $HOME is not silently reset to `true` when they pass a `cwd` whose tree has no config. Their test \"no config found ANYWHERE up the tree preserves a non-default BOOT config value\" pins that trap. Their `${path}:${mtimeMs}` warning memo is the necessary companion so per-call discovery does not re-warn about the same file every request.\n\nPort plan against current code (do not copy verbatim — theirs is sync, unescaped, and climbs past the repo root):\n- loader.ts: async `discoverProjectConfig(startDir, boundary)` using fs/promises; stop at our already-resolved `repositoryRoot` instead of probing for `.git`; when repositoryRoot is null, probe workingDirectory only, do not climb; keep our escapeTerminalControls on the warning path (theirs interpolates a caller-influenced path raw into console.error).\n- request-prep.ts: let `prepareDiffReview` accept a source resolver `(w: ResolvedWorkspace) => Promise<Result<DiffSource>>`, evaluated after resolveWorkspace inside the permit — precommit currently decides the diff source BEFORE the workspace exists.\n- review-precommit.ts and cli/commands.ts: a FIELD ALLOWLIST, never a config swap. ReviewBridgeConfigSchema carries `codex_path`, which names a binary to spawn; letting a hostile checkout's config become the process config is code execution. Read exactly one boolean: `discovered?.review_standards.precommit.auto_diff ?? boot`.\n\nDecide explicitly before implementing: (1) precedence — at boot RB_CONFIG_PATH is a hard override, but per-call discovery would let a target repo override it; (2) the partial-config hole — a target config that omits `precommit.auto_diff` gets Zod's schema default `true`, silently discarding $HOME's `false` (PR #7 fixes the total-miss case but not this one).",
+  "location": [
+    "src/tools/review-precommit.ts:71",
+    "src/server.ts:93",
+    "src/config/loader.ts"
+  ],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": null,
+  "resolvedDate": null,
+  "severity": "medium",
+  "sourceRefs": [
+    {
+      "contentHash": "58bc9e98a49fed5c4a5b3f25225f494e72fec49749d809fa545e4af36b29f42d",
+      "path": "src/tools/review-precommit.ts",
+      "revision": "33a5992314588062c4646b36e2e3b60c9b7bd7ae",
+      "startLine": 71
+    }
+  ],
+  "status": "open",
+  "title": "Per-request .reviewbridge.json discovery: precommit auto_diff reads the server's boot config while instructions are read from the caller's repository"
+}

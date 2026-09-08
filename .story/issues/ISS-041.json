@@ -1,0 +1,30 @@
+{
+  "components": [
+    "review-lenses"
+  ],
+  "createdBy": "review-lenses:test-quality",
+  "dedupeKey": "review-lenses:77282274a1e8e11802f3905616e6defdc1e5b762e52fbe4af7670c6a86c53b78",
+  "discoveredDate": "2026-09-07",
+  "displayId": "ISS-041",
+  "id": "ISS-041",
+  "impact": "The new observer test helper leaves the production 100ms real-clock deadline active in filesystem/content/cache tests. If a CI worker or filesystem pauses for over 100ms between observe() starting and its asynchronous realpath/lstat/open/read steps, the implementation correctly returns undefined while tests such as 'reads the latest valid turn-context model' require a model, producing a false CI failure. Read the full test file and observer deadline implementation and checked all maxDurationMs/now/scheduleTimeout overrides: only the sparse-read and explicit deadline cases override some timing; ordinary positive cases still use Date.now and a real 100ms timer. The manual-deadline test also overrides scheduling without freezing the elapsed-time clock, so it can expire before reaching its open gate.",
+  "location": [
+    "src/backends/codex-session-observer.test.ts:87"
+  ],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": "Observer functional test helper now supplies a frozen clock and inert scheduler, with per-test overrides last. Explicit deadline cleanup, elapsed-budget and TTL tests remain active. All 17 observer tests and focused ESLint pass.",
+  "resolvedDate": "2026-09-07",
+  "severity": "high",
+  "sourceRefs": [
+    {
+      "contentHash": "807e59d016954189f3959e299bd51c5908822149eaf78057dc09dd727f6f6cf0",
+      "path": "src/backends/codex-session-observer.test.ts",
+      "reviewId": "lens-mtrzvjpw",
+      "revision": "e7e77ea5741da197c2ce5586570dc1e578e6f1b6",
+      "startLine": 87
+    }
+  ],
+  "status": "resolved",
+  "title": "[pre-existing] [flaky-test] The new observer test helper leaves the production 100ms rea"
+}

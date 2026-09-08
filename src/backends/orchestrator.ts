@@ -27,7 +27,6 @@ import {
 import type { ReviewBridgeConfig } from '../config/types.js';
 import { chunkDiff, estimateTokens } from '../utils/chunking.js';
 import { filterByFiles, formatForPrompt } from '../config/copilot-instructions.js';
-import type { CopilotInstructions } from '../config/copilot-instructions.js';
 import { extractFilesFromDiff } from '../utils/diff-files.js';
 import { ModelSelectorSchema } from '../utils/input-validation.js';
 import type { ReviewProvider } from '../config/types.js';
@@ -99,11 +98,18 @@ export function deduplicateFindings(findings: CodeFinding[]): CodeFinding[] {
   return [...map.values(), ...keyless];
 }
 
+// Per-chunk file lists for the result's chunk_files, only when the diff was
+// actually split — a single chunk held everything, so there is nothing to say.
+function chunkFileLists(chunks: string[]): string[][] | undefined {
+  return chunks.length > 1 ? chunks.map(extractFilesFromDiff) : undefined;
+}
+
 const codeVerdictRank: Record<string, number> = { approve: 0, request_changes: 1, reject: 2 };
 
 export function mergeCodeResults(
-  results: Omit<CodeReviewResult, 'chunks_reviewed'>[],
+  results: Omit<CodeReviewResult, 'chunks_reviewed' | 'chunk_files'>[],
   sessionId: string,
+  chunkFiles?: string[][],
 ): CodeReviewResult {
   let worstVerdict = results[0].verdict;
   for (const r of results) {
@@ -118,12 +124,14 @@ export function mergeCodeResults(
     findings: deduplicateFindings(results.flatMap((r) => r.findings)),
     session_id: sessionId,
     chunks_reviewed: results.length,
+    ...(chunkFiles ? { chunk_files: chunkFiles } : {}),
   };
 }
 
 export function mergePrecommitResults(
-  results: Omit<PrecommitResult, 'chunks_reviewed'>[],
+  results: Omit<PrecommitResult, 'chunks_reviewed' | 'chunk_files'>[],
   sessionId: string,
+  chunkFiles?: string[][],
 ): PrecommitResult {
   return {
     ready_to_commit: results.every((r) => r.ready_to_commit),
@@ -134,6 +142,7 @@ export function mergePrecommitResults(
     warnings: [...new Set(results.flatMap((r) => r.warnings))],
     session_id: sessionId,
     chunks_reviewed: results.length,
+    ...(chunkFiles ? { chunk_files: chunkFiles } : {}),
   };
 }
 
@@ -158,6 +167,10 @@ const PlanReviewResponseSchema = PlanReviewResultSchema.omit({
 const CodeReviewResponseSchema = CodeReviewResultSchema.omit({
   session_id: true,
   chunks_reviewed: true,
+  chunk_files: true,
+  // Where the bridge captured the diff is host knowledge, not a review finding:
+  // omitted so the reviewer can neither read it nor forge it (ISS-028).
+  captured_from: true,
   provider: true,
   review_mode: true,
   deliberation: true,
@@ -167,6 +180,9 @@ const CodeReviewResponseSchema = CodeReviewResultSchema.omit({
 const PrecommitResponseSchema = PrecommitResultSchema.omit({
   session_id: true,
   chunks_reviewed: true,
+  chunk_files: true,
+  // See CodeReviewResponseSchema.
+  captured_from: true,
   provider: true,
   review_mode: true,
   models: true,
@@ -199,6 +215,10 @@ export function sessionModelConflictMessage(): string {
 export interface TurnParams {
   prompt: string;
   responseSchema: z.ZodType;
+  // The directory this turn's provider call runs in. REQUIRED: a turn that
+  // silently defaulted to the server's own directory would review the wrong
+  // repository, which is the failure ISS-027 exists to make impossible.
+  workingDirectory: string;
   sessionId?: string;
   // Applied only when starting a fresh session; omitted on resume.
   model?: string;
@@ -215,7 +235,6 @@ export type TurnRunner = <T extends Record<string, unknown>>(
 export interface ReviewFlowDeps {
   config: ReviewBridgeConfig;
   provider: ReviewProvider;
-  copilotInstructions?: CopilotInstructions;
   // When false (e.g. Codex, whose SDK reasserts --model on resume) the flow
   // rejects session_id + model and omits the model on resumed chunks. When true
   // (e.g. Gemini) the caller may change model on a resumed session.
@@ -362,7 +381,8 @@ export async function runPlanReview(
   deps: ReviewFlowDeps,
   turn: TurnRunner,
 ): Promise<Result<PlanReviewResult>> {
-  const { config, copilotInstructions, allowsModelOverrideOnResume } = deps;
+  const { config, allowsModelOverrideOnResume } = deps;
+  const { workingDirectory, copilotInstructions } = input.execution;
   if (!allowsModelOverrideOnResume && input.session_id && input.model) {
     return err<PlanReviewResult>(sessionModelConflictMessage());
   }
@@ -378,6 +398,7 @@ export async function runPlanReview(
   const result = await turn<Omit<PlanReviewResult, 'session_id'>>({
     prompt,
     responseSchema: PlanReviewResponseSchema,
+    workingDirectory,
     sessionId: input.session_id,
     model: perTurnModel(prepared.turnResolved, input.session_id, allowsModelOverrideOnResume),
     resolvedModel: prepared.turnResolved,
@@ -450,7 +471,8 @@ export async function runCodeReview(
   deps: ReviewFlowDeps,
   turn: TurnRunner,
 ): Promise<Result<CodeReviewResult>> {
-  const { config, copilotInstructions, allowsModelOverrideOnResume, resumesAcrossChunks } = deps;
+  const { config, allowsModelOverrideOnResume, resumesAcrossChunks } = deps;
+  const { workingDirectory, copilotInstructions } = input.execution;
   if (!allowsModelOverrideOnResume && input.session_id && input.model) {
     return err<CodeReviewResult>(sessionModelConflictMessage());
   }
@@ -506,9 +528,12 @@ export async function runCodeReview(
       criteria: config.review_standards.code_review.criteria,
       require_tests: config.review_standards.code_review.require_tests,
     });
-    const result = await turn<Omit<CodeReviewResult, 'session_id' | 'chunks_reviewed'>>({
+    const result = await turn<
+      Omit<CodeReviewResult, 'session_id' | 'chunks_reviewed' | 'chunk_files'>
+    >({
       prompt,
       responseSchema: CodeReviewResponseSchema,
+      workingDirectory,
       sessionId: input.session_id,
       model: perTurnModel(prepared.turnResolved, input.session_id, allowsModelOverrideOnResume),
       resolvedModel: prepared.turnResolved,
@@ -523,7 +548,7 @@ export async function runCodeReview(
     criteria: config.review_standards.code_review.criteria,
     require_tests: config.review_standards.code_review.require_tests,
   };
-  const chunkResults: Omit<CodeReviewResult, 'chunks_reviewed'>[] = [];
+  const chunkResults: Omit<CodeReviewResult, 'chunks_reviewed' | 'chunk_files'>[] = [];
   // `threaded` carries chunk 1's session forward only when the backend resumes
   // across chunks; `reviewSessionId` is the id reported for the whole review —
   // always chunk 1's, regardless of mode.
@@ -534,9 +559,12 @@ export async function runCodeReview(
     const chunkHeader = `Chunk ${i + 1} of ${chunks.length}: reviewing the following files only.`;
     const prompt = buildCodeReviewPrompt({ ...input, diff: chunks[i], chunkHeader }, codeConfig);
     const chunkSession = chunkSessionFor(i, resumesAcrossChunks, threaded, input.session_id);
-    const result = await turn<Omit<CodeReviewResult, 'session_id' | 'chunks_reviewed'>>({
+    const result = await turn<
+      Omit<CodeReviewResult, 'session_id' | 'chunks_reviewed' | 'chunk_files'>
+    >({
       prompt,
       responseSchema: CodeReviewResponseSchema,
+      workingDirectory,
       sessionId: chunkSession,
       model: perTurnModel(prepared.turnResolved, chunkSession, allowsModelOverrideOnResume),
       resolvedModel: prepared.turnResolved,
@@ -561,7 +589,7 @@ export async function runCodeReview(
 
   const finalSessionId = resumesAcrossChunks ? threaded : reviewSessionId;
   return enrichModelIdentity(
-    ok(mergeCodeResults(chunkResults, finalSessionId!)),
+    ok(mergeCodeResults(chunkResults, finalSessionId!, chunkFileLists(chunks))),
     deps,
     prepared,
     'review',
@@ -573,7 +601,8 @@ export async function runPrecommitReview(
   deps: ReviewFlowDeps,
   turn: TurnRunner,
 ): Promise<Result<PrecommitResult>> {
-  const { config, copilotInstructions, allowsModelOverrideOnResume, resumesAcrossChunks } = deps;
+  const { config, allowsModelOverrideOnResume, resumesAcrossChunks } = deps;
+  const { workingDirectory, copilotInstructions } = input.execution;
   if (!allowsModelOverrideOnResume && input.session_id && input.model) {
     return err<PrecommitResult>(sessionModelConflictMessage());
   }
@@ -623,9 +652,12 @@ export async function runPrecommitReview(
       copilot_instructions: precommitInstrText,
       block_on: config.review_standards.precommit.block_on,
     });
-    const result = await turn<Omit<PrecommitResult, 'session_id' | 'chunks_reviewed'>>({
+    const result = await turn<
+      Omit<PrecommitResult, 'session_id' | 'chunks_reviewed' | 'chunk_files'>
+    >({
       prompt,
       responseSchema: PrecommitResponseSchema,
+      workingDirectory,
       sessionId: input.session_id,
       model: perTurnModel(prepared.turnResolved, input.session_id, allowsModelOverrideOnResume),
       resolvedModel: prepared.turnResolved,
@@ -639,7 +671,7 @@ export async function runPrecommitReview(
     copilot_instructions: precommitInstrText,
     block_on: config.review_standards.precommit.block_on,
   };
-  const chunkResults: Omit<PrecommitResult, 'chunks_reviewed'>[] = [];
+  const chunkResults: Omit<PrecommitResult, 'chunks_reviewed' | 'chunk_files'>[] = [];
   let threaded = input.session_id;
   let reviewSessionId: string | undefined;
 
@@ -650,9 +682,12 @@ export async function runPrecommitReview(
       precommitConfig,
     );
     const chunkSession = chunkSessionFor(i, resumesAcrossChunks, threaded, input.session_id);
-    const result = await turn<Omit<PrecommitResult, 'session_id' | 'chunks_reviewed'>>({
+    const result = await turn<
+      Omit<PrecommitResult, 'session_id' | 'chunks_reviewed' | 'chunk_files'>
+    >({
       prompt,
       responseSchema: PrecommitResponseSchema,
+      workingDirectory,
       sessionId: chunkSession,
       model: perTurnModel(prepared.turnResolved, chunkSession, allowsModelOverrideOnResume),
       resolvedModel: prepared.turnResolved,
@@ -675,7 +710,7 @@ export async function runPrecommitReview(
 
   const finalSessionId = resumesAcrossChunks ? threaded : reviewSessionId;
   return enrichModelIdentity(
-    ok(mergePrecommitResults(chunkResults, finalSessionId!)),
+    ok(mergePrecommitResults(chunkResults, finalSessionId!, chunkFileLists(chunks))),
     deps,
     prepared,
     'review',
@@ -696,8 +731,17 @@ export async function runCrossReview(
   if (!preparedResult.ok) return preparedResult;
   const prepared = preparedResult.data;
   const result = await turn<{ adjudications: CrossReviewResult['adjudications'] }>({
-    prompt: buildCrossReviewPrompt(input),
+    prompt: buildCrossReviewPrompt(input, {
+      // Match what the primary review of the same subject saw: code is scoped
+      // to the diff's files, a plan gets everything (it has no files to scope by).
+      copilot_instructions: formatForPrompt(
+        input.subject === 'code'
+          ? filterByFiles(input.execution.copilotInstructions, extractFilesFromDiff(input.content))
+          : input.execution.copilotInstructions,
+      ),
+    }),
     responseSchema: CrossReviewResponseSchema,
+    workingDirectory: input.execution.workingDirectory,
     model: perTurnModel(prepared.turnResolved, undefined, deps.allowsModelOverrideOnResume),
     resolvedModel: prepared.turnResolved,
   });

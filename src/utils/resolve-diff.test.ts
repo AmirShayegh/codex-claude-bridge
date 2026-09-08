@@ -1,5 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { resolvePrecommitDiff, resolveCodeDiff, NO_STAGED_CHANGES, NO_WORKING_CHANGES } from './resolve-diff.js';
+import {
+  normalizeCodeDiffSource,
+  normalizePrecommitDiffSource,
+  captureDiff,
+  stampCapture,
+  withCapturedFrom,
+  NO_STAGED_CHANGES,
+  NO_WORKING_CHANGES,
+} from './resolve-diff.js';
+import { ok, err } from './errors.js';
+import type { ResolvedWorkspace } from './workspace.js';
 
 vi.mock('./git.js', () => ({
   getStagedDiff: vi.fn(),
@@ -10,6 +20,18 @@ import { getStagedDiff, getWorkingDiff } from './git.js';
 
 const mockGetStagedDiff = vi.mocked(getStagedDiff);
 const mockGetWorkingDiff = vi.mocked(getWorkingDiff);
+
+// A caller standing in a SUBDIRECTORY of the repository: capture must be
+// anchored at the root, and the root is what gets reported back.
+const WORKSPACE: ResolvedWorkspace = {
+  workingDirectory: '/work/repo-b/src/nested',
+  repositoryRoot: '/work/repo-b',
+};
+
+const NOT_A_REPO: ResolvedWorkspace = {
+  workingDirectory: '/tmp/plain',
+  repositoryRoot: null,
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -22,149 +44,225 @@ const sampleDiff = `diff --git a/src/index.ts b/src/index.ts
 +import { foo } from "./foo";
  export default app;`;
 
-describe('resolvePrecommitDiff', () => {
-  describe('explicit diff precedence', () => {
-    it('returns explicit diff when provided', async () => {
-      const result = await resolvePrecommitDiff({ diff: sampleDiff });
-      expect(result).toEqual({ ok: true, data: sampleDiff });
-      expect(mockGetStagedDiff).not.toHaveBeenCalled();
-    });
-
-    it('uses explicit diff even when auto_diff is true', async () => {
-      const result = await resolvePrecommitDiff({ diff: sampleDiff, auto_diff: true });
-      expect(result).toEqual({ ok: true, data: sampleDiff });
-      expect(mockGetStagedDiff).not.toHaveBeenCalled();
-    });
-
-    it('uses explicit diff even when auto_diff is false', async () => {
-      const result = await resolvePrecommitDiff({ diff: sampleDiff, auto_diff: false });
-      expect(result).toEqual({ ok: true, data: sampleDiff });
-      expect(mockGetStagedDiff).not.toHaveBeenCalled();
+describe('normalizeCodeDiffSource', () => {
+  it('treats a defined non-blank diff as explicit', () => {
+    expect(normalizeCodeDiffSource({ diff: sampleDiff })).toEqual({
+      ok: true,
+      data: { kind: 'explicit', diff: sampleDiff },
     });
   });
 
-  describe('auto_diff capture', () => {
-    it('auto-captures staged diff when no explicit diff and auto_diff is true', async () => {
-      mockGetStagedDiff.mockResolvedValue({ ok: true, data: sampleDiff });
-      const result = await resolvePrecommitDiff({ auto_diff: true });
+  it('keeps explicit precedence even when auto_diff is true', () => {
+    expect(normalizeCodeDiffSource({ diff: sampleDiff, auto_diff: true })).toEqual({
+      ok: true,
+      data: { kind: 'explicit', diff: sampleDiff },
+    });
+  });
+
+  it.each([
+    ['an empty string', ''],
+    ['whitespace only', '   '],
+    ['a newline', '\n'],
+  ])('falls through to capture for %s', (_label, diff) => {
+    expect(normalizeCodeDiffSource({ diff })).toEqual({
+      ok: true,
+      data: { kind: 'capture', target: 'working' },
+    });
+  });
+
+  it('captures the working tree when no diff is given', () => {
+    expect(normalizeCodeDiffSource({})).toEqual({
+      ok: true,
+      data: { kind: 'capture', target: 'working' },
+    });
+  });
+
+  it('errors when auto-capture is disabled and no usable diff is given', () => {
+    for (const args of [{ auto_diff: false }, { diff: '', auto_diff: false }]) {
+      const result = normalizeCodeDiffSource(args);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toBe('auto_diff disabled and no diff provided');
+    }
+  });
+});
+
+describe('normalizePrecommitDiffSource', () => {
+  it('treats ANY defined diff as explicit, including an empty one', () => {
+    // The two commands genuinely differ here: for precommit an empty diff means
+    // "nothing to check", not "go and find something".
+    expect(normalizePrecommitDiffSource({ diff: '' })).toEqual({
+      ok: true,
+      data: { kind: 'explicit', diff: '' },
+    });
+    expect(normalizePrecommitDiffSource({ diff: sampleDiff, auto_diff: true })).toEqual({
+      ok: true,
+      data: { kind: 'explicit', diff: sampleDiff },
+    });
+  });
+
+  it('captures the index when no diff is given', () => {
+    expect(normalizePrecommitDiffSource({})).toEqual({
+      ok: true,
+      data: { kind: 'capture', target: 'staged' },
+    });
+    expect(normalizePrecommitDiffSource({ auto_diff: true })).toEqual({
+      ok: true,
+      data: { kind: 'capture', target: 'staged' },
+    });
+  });
+
+  it('errors when auto-capture is disabled and no diff is given', () => {
+    const result = normalizePrecommitDiffSource({ auto_diff: false });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe('auto_diff disabled and no diff provided');
+  });
+});
+
+describe('captureDiff', () => {
+  describe('explicit sources never touch git', () => {
+    it('returns the diff verbatim and reports no capture location', async () => {
+      const result = await captureDiff({ kind: 'explicit', diff: sampleDiff }, WORKSPACE);
       expect(result).toEqual({ ok: true, data: sampleDiff });
-      expect(mockGetStagedDiff).toHaveBeenCalledOnce();
+      expect(result.capturedFrom).toBeUndefined();
+      expect(mockGetStagedDiff).not.toHaveBeenCalled();
+      expect(mockGetWorkingDiff).not.toHaveBeenCalled();
     });
 
-    it('auto-captures staged diff when no explicit diff and auto_diff is undefined', async () => {
-      mockGetStagedDiff.mockResolvedValue({ ok: true, data: sampleDiff });
-      const result = await resolvePrecommitDiff({});
-      expect(result).toEqual({ ok: true, data: sampleDiff });
-      expect(mockGetStagedDiff).toHaveBeenCalledOnce();
+    it('passes an explicit EMPTY diff through, even outside a repository', async () => {
+      const result = await captureDiff({ kind: 'explicit', diff: '' }, NOT_A_REPO);
+      expect(result).toEqual({ ok: true, data: '' });
+    });
+  });
+
+  describe('capture is anchored at the repository root', () => {
+    it('captures staged changes from the ROOT when the caller is in a subdirectory', async () => {
+      mockGetStagedDiff.mockResolvedValue(ok(sampleDiff));
+      const result = await captureDiff({ kind: 'capture', target: 'staged' }, WORKSPACE);
+      expect(mockGetStagedDiff).toHaveBeenCalledWith('/work/repo-b');
+      expect(result).toEqual({ ok: true, data: sampleDiff, capturedFrom: '/work/repo-b' });
     });
 
-    it('returns NO_STAGED_CHANGES error when staged diff is empty string', async () => {
-      mockGetStagedDiff.mockResolvedValue({ ok: true, data: '' });
-      const result = await resolvePrecommitDiff({});
+    it('captures working changes from the ROOT when the caller is in a subdirectory', async () => {
+      mockGetWorkingDiff.mockResolvedValue(ok(sampleDiff));
+      const result = await captureDiff({ kind: 'capture', target: 'working' }, WORKSPACE);
+      expect(mockGetWorkingDiff).toHaveBeenCalledWith('/work/repo-b');
+      expect(result.capturedFrom).toBe('/work/repo-b');
+    });
+
+    it('reports exactly the directory it handed to git', async () => {
+      mockGetStagedDiff.mockResolvedValue(ok(sampleDiff));
+      const result = await captureDiff({ kind: 'capture', target: 'staged' }, WORKSPACE);
+      expect(result.capturedFrom).toBe(mockGetStagedDiff.mock.calls[0][0]);
+    });
+  });
+
+  describe('auto-capture outside a work tree', () => {
+    it.each([['staged'], ['working']] as const)(
+      'rejects a %s capture with INVALID_INPUT and never calls git',
+      async (target) => {
+        const result = await captureDiff({ kind: 'capture', target }, NOT_A_REPO);
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.error).toMatch(/^INVALID_INPUT:/);
+          expect(result.error).toContain('not inside a git work tree');
+          expect(result.error).toContain('/tmp/plain');
+        }
+        expect(mockGetStagedDiff).not.toHaveBeenCalled();
+        expect(mockGetWorkingDiff).not.toHaveBeenCalled();
+      },
+    );
+
+  });
+
+  describe('empty captures name where they looked', () => {
+    it('reports NO_STAGED_CHANGES with the directory', async () => {
+      mockGetStagedDiff.mockResolvedValue(ok(''));
+      const result = await captureDiff({ kind: 'capture', target: 'staged' }, WORKSPACE);
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error).toMatch(new RegExp(`^${NO_STAGED_CHANGES}:`));
+        expect(result.error).toContain('No staged changes found in /work/repo-b');
         expect(result.error).toContain('Stage files with git add first');
       }
+      expect(result.capturedFrom).toBe('/work/repo-b');
     });
 
-    it('propagates git errors from getStagedDiff', async () => {
-      mockGetStagedDiff.mockResolvedValue({ ok: false, error: 'GIT_ERROR: fatal: not a git repository' });
-      const result = await resolvePrecommitDiff({});
-      expect(result).toEqual({ ok: false, error: 'GIT_ERROR: fatal: not a git repository' });
+    it('reports NO_WORKING_CHANGES with the directory', async () => {
+      mockGetWorkingDiff.mockResolvedValue(ok(''));
+      const result = await captureDiff({ kind: 'capture', target: 'working' }, WORKSPACE);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toMatch(new RegExp(`^${NO_WORKING_CHANGES}:`));
+        expect(result.error).toContain('No changes found vs HEAD in /work/repo-b');
+      }
+      expect(result.capturedFrom).toBe('/work/repo-b');
     });
   });
 
-  describe('auto_diff disabled', () => {
-    it('returns error when auto_diff is false and no diff provided', async () => {
-      const result = await resolvePrecommitDiff({ auto_diff: false });
+  describe('git failures', () => {
+    it('keeps the GIT_ERROR prefix and appends where the capture was attempted', async () => {
+      mockGetStagedDiff.mockResolvedValue(err('GIT_ERROR: fatal: index is corrupt'));
+      const result = await captureDiff({ kind: 'capture', target: 'staged' }, WORKSPACE);
+      expect(result).toEqual({
+        ok: false,
+        error: 'GIT_ERROR: fatal: index is corrupt (capture attempted from "/work/repo-b")',
+        capturedFrom: '/work/repo-b',
+      });
+    });
+
+    it('escapes controls in the appended location but keeps the field raw', async () => {
+      const hostile = '/work/repo';
+      mockGetWorkingDiff.mockResolvedValue(err('GIT_ERROR: boom'));
+      const result = await captureDiff(
+        { kind: 'capture', target: 'working' },
+        { workingDirectory: hostile, repositoryRoot: hostile },
+      );
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.error).toBe('auto_diff disabled and no diff provided');
+        expect(result.error).toContain('\\x1B');
+        expect(result.error).not.toContain('');
       }
-      expect(mockGetStagedDiff).not.toHaveBeenCalled();
+      expect(result.capturedFrom).toBe(hostile);
     });
   });
 });
 
-describe('resolveCodeDiff', () => {
-  describe('explicit diff precedence', () => {
-    it('returns explicit non-empty diff when provided', async () => {
-      const result = await resolveCodeDiff({ diff: sampleDiff });
-      expect(result).toEqual({ ok: true, data: sampleDiff });
-      expect(mockGetWorkingDiff).not.toHaveBeenCalled();
-    });
-
-    it('uses explicit diff even when auto_diff is true', async () => {
-      const result = await resolveCodeDiff({ diff: sampleDiff, auto_diff: true });
-      expect(result).toEqual({ ok: true, data: sampleDiff });
-      expect(mockGetWorkingDiff).not.toHaveBeenCalled();
-    });
-
-    it('treats empty string as no diff (triggers auto-capture)', async () => {
-      mockGetWorkingDiff.mockResolvedValue({ ok: true, data: sampleDiff });
-      const result = await resolveCodeDiff({ diff: '' });
-      expect(result).toEqual({ ok: true, data: sampleDiff });
-      expect(mockGetWorkingDiff).toHaveBeenCalledOnce();
-    });
-
-    it('treats whitespace-only string as no diff (triggers auto-capture)', async () => {
-      mockGetWorkingDiff.mockResolvedValue({ ok: true, data: sampleDiff });
-      const result = await resolveCodeDiff({ diff: '   ' });
-      expect(result).toEqual({ ok: true, data: sampleDiff });
-      expect(mockGetWorkingDiff).toHaveBeenCalledOnce();
+describe('withCapturedFrom', () => {
+  it('stamps the resolver value onto a result', () => {
+    expect(withCapturedFrom({ verdict: 'approve' }, '/repo')).toEqual({
+      verdict: 'approve',
+      captured_from: '/repo',
     });
   });
 
-  describe('auto_diff capture', () => {
-    it('auto-captures working diff when no explicit diff and auto_diff is true', async () => {
-      mockGetWorkingDiff.mockResolvedValue({ ok: true, data: sampleDiff });
-      const result = await resolveCodeDiff({ auto_diff: true });
-      expect(result).toEqual({ ok: true, data: sampleDiff });
-      expect(mockGetWorkingDiff).toHaveBeenCalledOnce();
-    });
-
-    it('auto-captures working diff when no explicit diff and auto_diff is undefined', async () => {
-      mockGetWorkingDiff.mockResolvedValue({ ok: true, data: sampleDiff });
-      const result = await resolveCodeDiff({});
-      expect(result).toEqual({ ok: true, data: sampleDiff });
-      expect(mockGetWorkingDiff).toHaveBeenCalledOnce();
-    });
-
-    it('returns NO_WORKING_CHANGES error when working diff is empty', async () => {
-      mockGetWorkingDiff.mockResolvedValue({ ok: true, data: '' });
-      const result = await resolveCodeDiff({});
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error).toMatch(new RegExp(`^${NO_WORKING_CHANGES}:`));
-        expect(result.error).toContain('No changes found vs HEAD');
-      }
-    });
-
-    it('propagates git errors from getWorkingDiff', async () => {
-      mockGetWorkingDiff.mockResolvedValue({ ok: false, error: 'GIT_ERROR: fatal: not a git repository' });
-      const result = await resolveCodeDiff({});
-      expect(result).toEqual({ ok: false, error: 'GIT_ERROR: fatal: not a git repository' });
+  it('drops a backend-supplied captured_from when the resolver has none', () => {
+    expect(withCapturedFrom({ verdict: 'approve', captured_from: '/forged' }, undefined)).toEqual({
+      verdict: 'approve',
     });
   });
 
-  describe('auto_diff disabled', () => {
-    it('returns error when auto_diff is false and no diff provided', async () => {
-      const result = await resolveCodeDiff({ auto_diff: false });
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error).toBe('auto_diff disabled and no diff provided');
-      }
-      expect(mockGetWorkingDiff).not.toHaveBeenCalled();
+  it('overwrites a backend-supplied captured_from with the resolver value', () => {
+    expect(withCapturedFrom({ verdict: 'approve', captured_from: '/forged' }, '/real')).toEqual({
+      verdict: 'approve',
+      captured_from: '/real',
     });
+  });
 
-    it('returns error when auto_diff is false and empty diff provided', async () => {
-      const result = await resolveCodeDiff({ diff: '', auto_diff: false });
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error).toBe('auto_diff disabled and no diff provided');
-      }
-      expect(mockGetWorkingDiff).not.toHaveBeenCalled();
+  it('leaves an undecorated result untouched when there is nothing to stamp', () => {
+    expect(withCapturedFrom({ verdict: 'approve' }, undefined)).toEqual({ verdict: 'approve' });
+  });
+});
+
+describe('stampCapture', () => {
+  it('decorates a successful result', () => {
+    expect(stampCapture(ok({ session_id: 's' }), '/repo')).toEqual({
+      ok: true,
+      data: { session_id: 's', captured_from: '/repo' },
     });
+  });
+
+  it('passes a failure through untouched', () => {
+    const failure = err<{ session_id: string }>('GIT_ERROR: nope');
+    expect(stampCapture(failure, '/repo')).toBe(failure);
   });
 });

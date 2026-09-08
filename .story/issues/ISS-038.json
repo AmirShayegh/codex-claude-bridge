@@ -1,0 +1,28 @@
+{
+  "components": [
+    "backends/gemini"
+  ],
+  "createdBy": "release error-handling lens",
+  "dedupeKey": "lens-mtrzvjpw:gemini-non-string-error",
+  "discoveredDate": "2026-09-07",
+  "displayId": "ISS-038",
+  "id": "ISS-038",
+  "impact": "Release review confirmed isAgyResultEvent validates status/response but not result.error. A truthy non-string error reaches classifyAgyError().trim() from the child close callback, throwing outside promise catches and crashing the MCP process. Narrow the field at the provider boundary and add regression tests for object, array, number, and boolean errors.",
+  "location": [],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": "Release review fix: result.error is unknown at the stream boundary and narrowed to string before classification. Object, numeric, boolean, and array regression inputs first reproduced the uncaught TypeError; all 92 Gemini tests pass after the fix.",
+  "resolvedDate": "2026-09-07",
+  "severity": "high",
+  "sourceRefs": [
+    {
+      "contentHash": "7f007b626b0be437d3ea9d92f88fb4156640b2d2af688deda13b80219246d3ef",
+      "path": "src/backends/gemini.ts",
+      "reviewId": "lens-mtrzvjpw",
+      "revision": "e7e77ea5741da197c2ce5586570dc1e578e6f1b6",
+      "startLine": 267
+    }
+  ],
+  "status": "resolved",
+  "title": "Malformed Gemini stream error can crash the MCP server"
+}

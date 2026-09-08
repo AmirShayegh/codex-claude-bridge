@@ -84,7 +84,14 @@ function threadSettings(model: string): string {
 }
 
 function observer(home: string, options: Partial<CodexSessionObserverOptions> = {}) {
-  return createCodexSessionObserver({ codexHome: home, ...options });
+  // Functional assertions should not depend on filesystem work finishing within
+  // the production 100ms deadline. Timing tests supply their own controls below.
+  return createCodexSessionObserver({
+    codexHome: home,
+    now: () => 0,
+    scheduleTimeout: () => ({ cancel: () => undefined }),
+    ...options,
+  });
 }
 
 afterEach(async () => {

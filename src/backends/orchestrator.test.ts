@@ -18,6 +18,10 @@ import {
 } from './orchestrator.js';
 import type { ModelIdentity } from '../review/types.js';
 
+// Every backend call now carries WHERE it runs (ISS-027). Tests that don't care
+// about the directory share this one fixture; tests that do build their own.
+const EXEC = { workingDirectory: '/work/repo-b' };
+
 // A fake TurnRunner that records every call and returns a canned valid result.
 // Lets us assert how the flow drives the backend (sessionId/model per turn)
 // without any SDK or subprocess.
@@ -123,7 +127,7 @@ describe('orchestrator — allowsModelOverrideOnResume capability', () => {
   it('capability=false: session_id + model is rejected as a conflict; turn not called', async () => {
     const { turn, calls } = makeFakeTurn(CANNED_PLAN);
     const res = await runPlanReview(
-      { plan: 'do a thing', session_id: 's1', model: 'm' },
+      { execution: EXEC, plan: 'do a thing', session_id: 's1', model: 'm' },
       deps(false),
       turn,
     );
@@ -135,7 +139,7 @@ describe('orchestrator — allowsModelOverrideOnResume capability', () => {
   it('capability=true: session_id + model is allowed and the model is forwarded to the turn', async () => {
     const { turn, calls } = makeFakeTurn(CANNED_PLAN);
     const res = await runPlanReview(
-      { plan: 'do a thing', session_id: 's1', model: 'm' },
+      { execution: EXEC, plan: 'do a thing', session_id: 's1', model: 'm' },
       deps(true),
       turn,
     );
@@ -148,7 +152,7 @@ describe('orchestrator — allowsModelOverrideOnResume capability', () => {
   it('capability=true single-chunk code review: forwards both session_id and model', async () => {
     const { turn, calls } = makeFakeTurn(CANNED_CODE);
     const res = await runCodeReview(
-      { diff: SMALL_DIFF, session_id: 's1', model: 'm' },
+      { execution: EXEC, diff: SMALL_DIFF, session_id: 's1', model: 'm' },
       deps(true),
       turn,
     );
@@ -162,7 +166,7 @@ describe('orchestrator — allowsModelOverrideOnResume capability', () => {
     const { turn, calls } = makeFakeTurn(CANNED_CODE);
     // Tiny budget forces the diff to split into several chunks.
     const res = await runCodeReview(
-      { diff: bigDiff(3, 30), model: 'm' },
+      { execution: EXEC, diff: bigDiff(3, 30), model: 'm' },
       deps(true, { max_chunk_tokens: 2500 }),
       turn,
     );
@@ -175,7 +179,7 @@ describe('orchestrator — allowsModelOverrideOnResume capability', () => {
   it('capability=false multi-chunk: model applies on chunk 1 only, omitted on resumed chunks', async () => {
     const { turn, calls } = makeFakeTurn(CANNED_CODE);
     const res = await runCodeReview(
-      { diff: bigDiff(3, 30), model: 'm' },
+      { execution: EXEC, diff: bigDiff(3, 30), model: 'm' },
       deps(false, { max_chunk_tokens: 2500 }),
       turn,
     );
@@ -203,7 +207,7 @@ describe('orchestrator — model resolution wiring', () => {
   it('uses the resolved id for both model and resolvedModel on a fresh session', async () => {
     const { turn, calls } = makeFakeTurn(CANNED_PLAN);
     await runPlanReview(
-      { plan: 'x' },
+      { execution: EXEC, plan: 'x' },
       resolverDeps(false, async () => 'RESOLVED-X'),
       turn,
     );
@@ -214,7 +218,7 @@ describe('orchestrator — model resolution wiring', () => {
   it('normalizes surrounding whitespace in resolver output before use and reporting', async () => {
     const { turn, calls } = makeFakeTurn(CANNED_PLAN);
     const res = await runPlanReview(
-      { plan: 'x' },
+      { execution: EXEC, plan: 'x' },
       resolverDeps(false, async () => '  RESOLVED-X  '),
       turn,
     );
@@ -241,11 +245,15 @@ describe('orchestrator — model resolution wiring', () => {
     };
 
     const results = await Promise.all([
-      runPlanReview({ plan: 'x' }, resolverDeps(false, resolveModel), turn),
-      runCodeReview({ diff: SMALL_DIFF }, resolverDeps(true, resolveModel), turn),
-      runPrecommitReview({ diff: SMALL_DIFF }, resolverDeps(false, resolveModel), turn),
+      runPlanReview({ execution: EXEC, plan: 'x' }, resolverDeps(false, resolveModel), turn),
+      runCodeReview({ execution: EXEC, diff: SMALL_DIFF }, resolverDeps(true, resolveModel), turn),
+      runPrecommitReview(
+        { execution: EXEC, diff: SMALL_DIFF },
+        resolverDeps(false, resolveModel),
+        turn,
+      ),
       runCrossReview(
-        { content: SMALL_DIFF, findings: [finding] },
+        { execution: EXEC, subject: 'code', content: SMALL_DIFF, findings: [finding] },
         resolverDeps(true, resolveModel),
         turn,
       ),
@@ -269,7 +277,7 @@ describe('orchestrator — model resolution wiring', () => {
     const d = resolverDeps(true, resolveModel);
     d.config = { ...d.config, max_chunk_tokens: 2500 };
 
-    const res = await runCodeReview({ diff: bigDiff(3, 30) }, d, turn);
+    const res = await runCodeReview({ execution: EXEC, diff: bigDiff(3, 30) }, d, turn);
 
     expect(res.ok).toBe(false);
     expect(resolveModel).toHaveBeenCalledTimes(1);
@@ -288,7 +296,7 @@ describe('orchestrator — model resolution wiring', () => {
       observed: 'gpt-5.5',
       evidence: 'runtime_session_record',
     });
-    const res = await runPlanReview({ plan: 'x', session_id: 's1' }, d, turn);
+    const res = await runPlanReview({ execution: EXEC, plan: 'x', session_id: 's1' }, d, turn);
     expect(calls[0].sessionId).toBe('s1');
     expect(calls[0].model).toBeUndefined();
     expect(calls[0].resolvedModel).toBe('gpt-5.5');
@@ -313,7 +321,7 @@ describe('orchestrator — model resolution wiring', () => {
     });
     d.observeSessionModel = vi.fn().mockResolvedValue('gpt-5.6-sol');
 
-    const result = await runPlanReview({ plan: 'x', session_id: 's1' }, d, turn);
+    const result = await runPlanReview({ execution: EXEC, plan: 'x', session_id: 's1' }, d, turn);
 
     expect(result.ok && result.data.models?.[0]).toEqual({
       provider: 'codex',
@@ -331,7 +339,11 @@ describe('orchestrator — model resolution wiring', () => {
     const { turn, calls } = makeFakeTurn(CANNED_PLAN);
     const d = resolverDeps(false, vi.fn().mockResolvedValue('CURRENT-DEFAULT'));
 
-    const result = await runPlanReview({ plan: 'x', session_id: 'legacy-session' }, d, turn);
+    const result = await runPlanReview(
+      { execution: EXEC, plan: 'x', session_id: 'legacy-session' },
+      d,
+      turn,
+    );
 
     expect(calls[0].model).toBeUndefined();
     expect(calls[0].resolvedModel).toBeUndefined();
@@ -350,7 +362,7 @@ describe('orchestrator — model resolution wiring', () => {
   it('forwards the resolved model on resume when the backend allows it (Gemini-style)', async () => {
     const { turn, calls } = makeFakeTurn(CANNED_PLAN);
     await runPlanReview(
-      { plan: 'x', session_id: 's1' },
+      { execution: EXEC, plan: 'x', session_id: 's1' },
       resolverDeps(true, async () => 'RESOLVED-X'),
       turn,
     );
@@ -361,7 +373,7 @@ describe('orchestrator — model resolution wiring', () => {
   it('narrates the resolved model on stderr for an unpinned (latest/unset) request', async () => {
     const { turn } = makeFakeTurn(CANNED_PLAN);
     await runPlanReview(
-      { plan: 'x' },
+      { execution: EXEC, plan: 'x' },
       resolverDeps(false, async () => 'RESOLVED-X'),
       turn,
     );
@@ -371,7 +383,7 @@ describe('orchestrator — model resolution wiring', () => {
   it('stays quiet when an explicit model is pinned', async () => {
     const { turn } = makeFakeTurn(CANNED_PLAN);
     await runPlanReview(
-      { plan: 'x', model: 'pinned-1' },
+      { execution: EXEC, plan: 'x', model: 'pinned-1' },
       resolverDeps(true, async (r) => r ?? 'x'),
       turn,
     );
@@ -385,8 +397,12 @@ describe('orchestrator — model resolution wiring', () => {
       seen.push(req);
       return req ?? 'fallback';
     };
-    await runPlanReview({ plan: 'x', model: 'pinned-1' }, resolverDeps(true, resolve), turn);
-    await runPlanReview({ plan: 'x' }, resolverDeps(true, resolve), turn);
+    await runPlanReview(
+      { execution: EXEC, plan: 'x', model: 'pinned-1' },
+      resolverDeps(true, resolve),
+      turn,
+    );
+    await runPlanReview({ execution: EXEC, plan: 'x' }, resolverDeps(true, resolve), turn);
     expect(seen).toEqual(['pinned-1', undefined]);
   });
 
@@ -403,7 +419,7 @@ describe('orchestrator — model resolution wiring', () => {
       },
       resumesAcrossChunks: false,
     };
-    const res = await runCodeReview({ diff: bigDiff(3, 30) }, d, turn);
+    const res = await runCodeReview({ execution: EXEC, diff: bigDiff(3, 30) }, d, turn);
     expect(res.ok).toBe(true);
     expect(calls.length).toBeGreaterThanOrEqual(2);
     expect(resolveCount).toBe(1); // resolved once per review, not per chunk
@@ -417,7 +433,7 @@ describe('orchestrator — resumesAcrossChunks capability (chunked reviews)', ()
   it('resumesAcrossChunks=true (Codex): chunks 2..N resume the prior chunk session', async () => {
     const { turn, calls } = makeCountingTurn(CANNED_CODE);
     const res = await runCodeReview(
-      { diff: bigDiff(3, 30) },
+      { execution: EXEC, diff: bigDiff(3, 30) },
       deps(false, { max_chunk_tokens: 2500 }, true),
       turn,
     );
@@ -432,7 +448,7 @@ describe('orchestrator — resumesAcrossChunks capability (chunked reviews)', ()
   it('resumesAcrossChunks=false (Gemini): chunks 2..N run independently; review id is chunk 1', async () => {
     const { turn, calls } = makeCountingTurn(CANNED_CODE);
     const res = await runCodeReview(
-      { diff: bigDiff(3, 30) },
+      { execution: EXEC, diff: bigDiff(3, 30) },
       deps(true, { max_chunk_tokens: 2500 }, false),
       turn,
     );
@@ -447,7 +463,7 @@ describe('orchestrator — resumesAcrossChunks capability (chunked reviews)', ()
   it('resumesAcrossChunks=false: chunk 1 resumes a cross-phase input session, later chunks do not', async () => {
     const { turn, calls } = makeCountingTurn(CANNED_CODE);
     const res = await runCodeReview(
-      { diff: bigDiff(3, 30), session_id: 'prior-phase' },
+      { execution: EXEC, diff: bigDiff(3, 30), session_id: 'prior-phase' },
       deps(true, { max_chunk_tokens: 2500 }, false),
       turn,
     );
@@ -468,10 +484,55 @@ describe('orchestrator — runCrossReview (deliberate-deep)', () => {
     description: 'off-by-one',
   };
 
+  // The adjudicator must see the same rules the primary reviewer saw. Code is
+  // scoped to the diff's files; plan prose has no files, so filtering it by
+  // "files in the diff" would strip every scoped rule the findings rest on.
+  const SCOPED_INSTRUCTIONS = {
+    repoWide: 'REPO-WIDE-RULE',
+    scoped: [
+      { filename: 'ts.instructions.md', applyTo: '**/*.ts', body: 'TS-ONLY-RULE' },
+      { filename: 'go.instructions.md', applyTo: '**/*.go', body: 'GO-ONLY-RULE' },
+    ],
+  };
+
+  it('a PLAN cross-review keeps every scoped instruction, matching the plan review', async () => {
+    const { turn, calls } = makeFakeTurn(CANNED_CROSS);
+    await runCrossReview(
+      {
+        execution: { workingDirectory: '/work/repo-b', copilotInstructions: SCOPED_INSTRUCTIONS },
+        subject: 'plan',
+        content: 'Plan: add a widget service.',
+        findings: [finding],
+      },
+      deps(false),
+      turn,
+    );
+    expect(calls[0].prompt).toContain('REPO-WIDE-RULE');
+    expect(calls[0].prompt).toContain('TS-ONLY-RULE');
+    expect(calls[0].prompt).toContain('GO-ONLY-RULE');
+  });
+
+  it('a CODE cross-review scopes instructions to the files in the diff', async () => {
+    const { turn, calls } = makeFakeTurn(CANNED_CROSS);
+    await runCrossReview(
+      {
+        execution: { workingDirectory: '/work/repo-b', copilotInstructions: SCOPED_INSTRUCTIONS },
+        subject: 'code',
+        content: SMALL_DIFF,
+        findings: [finding],
+      },
+      deps(false),
+      turn,
+    );
+    expect(calls[0].prompt).toContain('REPO-WIDE-RULE');
+    expect(calls[0].prompt).toContain('TS-ONLY-RULE');
+    expect(calls[0].prompt).not.toContain('GO-ONLY-RULE');
+  });
+
   it('runs a single turn and returns adjudications with the session_id stripped', async () => {
     const { turn, calls } = makeFakeTurn(CANNED_CROSS);
     const res = await runCrossReview(
-      { content: SMALL_DIFF, findings: [finding] },
+      { execution: EXEC, subject: 'code', content: SMALL_DIFF, findings: [finding] },
       deps(false),
       turn,
     );
@@ -497,7 +558,7 @@ describe('orchestrator — runCrossReview (deliberate-deep)', () => {
   it('forwards an explicit model pin to the turn', async () => {
     const { turn, calls } = makeFakeTurn(CANNED_CROSS);
     await runCrossReview(
-      { content: 'x', findings: [finding], model: 'gpt-5.5' },
+      { execution: EXEC, subject: 'code', content: 'x', findings: [finding], model: 'gpt-5.5' },
       deps(false),
       turn,
     );
@@ -506,7 +567,11 @@ describe('orchestrator — runCrossReview (deliberate-deep)', () => {
 
   it('resolves the model quietly — no stderr narration even for an unpinned request', async () => {
     const { turn } = makeFakeTurn(CANNED_CROSS);
-    await runCrossReview({ content: 'x', findings: [finding] }, deps(false), turn);
+    await runCrossReview(
+      { execution: EXEC, subject: 'code', content: 'x', findings: [finding] },
+      deps(false),
+      turn,
+    );
     expect(consoleSpy).not.toHaveBeenCalled();
   });
 });
@@ -516,7 +581,7 @@ describe('orchestrator — evidence-aware model identity', () => {
     const { turn } = makeFakeTurn(CANNED_PLAN);
     const d = deps(false);
     d.observeSessionModel = vi.fn().mockResolvedValue('gpt-5.6-sol');
-    const res = await runPlanReview({ plan: 'x' }, d, turn);
+    const res = await runPlanReview({ execution: EXEC, plan: 'x' }, d, turn);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.data.models).toEqual([
@@ -535,7 +600,11 @@ describe('orchestrator — evidence-aware model identity', () => {
     const { turn } = makeFakeTurn(CANNED_PLAN);
     const d = deps(true);
     d.provider = 'gemini';
-    const res = await runPlanReview({ plan: 'x', model: 'Gemini 3.5 Flash (High)' }, d, turn);
+    const res = await runPlanReview(
+      { execution: EXEC, plan: 'x', model: 'Gemini 3.5 Flash (High)' },
+      d,
+      turn,
+    );
     expect(res.ok && res.data.models).toEqual([
       {
         provider: 'gemini',
@@ -552,7 +621,7 @@ describe('orchestrator — evidence-aware model identity', () => {
     const { turn } = makeFakeTurn(CANNED_PLAN);
     const d = deps(false);
     d.observeSessionModel = vi.fn().mockResolvedValue('gpt-5.5');
-    const res = await runPlanReview({ plan: 'x', model: 'gpt-5.6-sol' }, d, turn);
+    const res = await runPlanReview({ execution: EXEC, plan: 'x', model: 'gpt-5.6-sol' }, d, turn);
     expect(res.ok && res.data.models?.[0]).toMatchObject({
       resolved: 'gpt-5.6-sol',
       observed: 'gpt-5.5',
@@ -565,7 +634,7 @@ describe('orchestrator — evidence-aware model identity', () => {
     const { turn } = makeCountingTurn(CANNED_CODE);
     const d = deps(false, { max_chunk_tokens: 2500 }, true);
     d.observeSessionModel = vi.fn().mockResolvedValue('gpt-5.6-sol');
-    const res = await runCodeReview({ diff: bigDiff(3, 30) }, d, turn);
+    const res = await runCodeReview({ execution: EXEC, diff: bigDiff(3, 30) }, d, turn);
     expect(res.ok).toBe(true);
     expect(d.observeSessionModel).toHaveBeenCalledTimes(1);
     expect(res.ok && res.data.models).toHaveLength(1);
@@ -574,8 +643,8 @@ describe('orchestrator — evidence-aware model identity', () => {
   it('emits empty model arrays for synthetic code and precommit results', async () => {
     const { turn, calls } = makeFakeTurn(CANNED_CODE);
     const d = deps(false);
-    const code = await runCodeReview({ diff: '' }, d, turn);
-    const precommit = await runPrecommitReview({ diff: '' }, d, turn);
+    const code = await runCodeReview({ execution: EXEC, diff: '' }, d, turn);
+    const precommit = await runPrecommitReview({ execution: EXEC, diff: '' }, d, turn);
     expect(code.ok && code.data.models).toEqual([]);
     expect(precommit.ok && precommit.data.models).toEqual([]);
     expect(calls).toHaveLength(0);
@@ -657,6 +726,13 @@ describe('merge helpers', () => {
       expect(merged.chunks_reviewed).toBe(2);
       expect(merged.session_id).toBe('sid');
     });
+
+    it('records the files each chunk held when given, and omits chunk_files otherwise', () => {
+      const parts = [cr('approve', 'a.', []), cr('approve', 'b.', [])];
+      const withFiles = mergeCodeResults(parts, 'sid', [['a.ts', 'b.ts'], ['c.ts']]);
+      expect(withFiles.chunk_files).toEqual([['a.ts', 'b.ts'], ['c.ts']]);
+      expect(mergeCodeResults(parts, 'sid')).not.toHaveProperty('chunk_files');
+    });
   });
 
   describe('mergePrecommitResults', () => {
@@ -687,6 +763,15 @@ describe('merge helpers', () => {
       expect(merged.blockers).toEqual(['secret in config', 'debug log']); // 'secret in config' not repeated
       expect(merged.warnings).toEqual(['slow test', 'todo left']);
       expect(merged.chunks_reviewed).toBe(2);
+    });
+
+    it('records the files each chunk held when given, and omits chunk_files otherwise', () => {
+      const parts = [pr(true, [], []), pr(true, [], [])];
+      expect(mergePrecommitResults(parts, 'sid', [['a.ts'], ['b.ts']]).chunk_files).toEqual([
+        ['a.ts'],
+        ['b.ts'],
+      ]);
+      expect(mergePrecommitResults(parts, 'sid')).not.toHaveProperty('chunk_files');
     });
   });
 
@@ -730,5 +815,27 @@ describe('merge helpers', () => {
         assertRequiredCoversProps(json, name);
       });
     }
+  });
+});
+
+// ISS-028 + ISS-019: capture location is host knowledge stamped at the response
+// boundary. Leaving it in a model-facing schema would both let a reviewer forge
+// it and make toJSONSchema emit a non-required property, which OpenAI structured
+// outputs reject outright.
+describe('capture metadata is never model-facing (ISS-028)', () => {
+  it('omits captured_from from the code and precommit response schemas', () => {
+    expect(Object.keys(RESPONSE_SCHEMAS.code.shape)).not.toContain('captured_from');
+    expect(Object.keys(RESPONSE_SCHEMAS.precommit.shape)).not.toContain('captured_from');
+  });
+
+  it('drops a captured_from a model tried to emit', () => {
+    const forged = {
+      verdict: 'approve',
+      summary: 'ok',
+      findings: [],
+      captured_from: '/forged/by/model',
+    };
+    const parsed = RESPONSE_SCHEMAS.code.parse(forged);
+    expect(parsed).not.toHaveProperty('captured_from');
   });
 });

@@ -24,13 +24,13 @@ vi.mock('../config/loader.js', () => ({
   formatConfigSource: vi.fn(() => 'default'),
 }));
 
-// Mock copilot-instructions so it doesn't hit the real filesystem
-vi.mock('../config/copilot-instructions.js', () => ({
-  loadCopilotInstructions: vi.fn(() => ({
-    ok: true,
-    data: { repoWide: null, scoped: [] },
-  })),
-}));
+// Mock request preparation: it owns workspace resolution, diff capture, and the
+// instruction read, so stubbing it keeps these tests off the real filesystem
+// (ISS-027). request-prep.test.ts covers the real flow.
+vi.mock('../review/request-prep.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../review/request-prep.js')>();
+  return { ...actual, preparePlanReview: vi.fn(), prepareDiffReview: vi.fn() };
+});
 
 // Mock stdin reader
 vi.mock('./stdin.js', () => ({
@@ -38,24 +38,35 @@ vi.mock('./stdin.js', () => ({
   resetStdinGuard: vi.fn(),
 }));
 
-// Mock resolve-diff
-vi.mock('../utils/resolve-diff.js', () => ({
-  NO_STAGED_CHANGES: 'NO_STAGED_CHANGES:',
-  resolvePrecommitDiff: vi.fn(),
-}));
-
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { rmSync } from 'node:fs';
+import { rmSync, realpathSync } from 'node:fs';
 import { createBackend } from '../backends/index.js';
 import { openReviewDb } from '../storage/db.js';
 import { getOrCreateSession } from '../storage/sessions.js';
 import { readInput } from './stdin.js';
-import { resolvePrecommitDiff } from '../utils/resolve-diff.js';
+import { preparePlanReview, prepareDiffReview } from '../review/request-prep.js';
+import type { PreparedDiffReview } from '../review/request-prep.js';
+import { ok } from '../utils/errors.js';
 
 const mockCreateClient = vi.mocked(createBackend);
 const mockReadInput = vi.mocked(readInput);
-const mockResolveDiff = vi.mocked(resolvePrecommitDiff);
+const mockPreparePlan = vi.mocked(preparePlanReview);
+const mockPrepareDiff = vi.mocked(prepareDiffReview);
+
+const EXEC = { workingDirectory: '/work/repo-b' };
+
+// Shorthands mirroring what prepareDiffReview really returns, so each test says
+// what the preparation phase found rather than restating its shape.
+function ready(diff: string, capturedFrom?: string) {
+  return Promise.resolve(
+    ok<PreparedDiffReview>({ kind: 'ready', execution: EXEC, diff, capturedFrom }),
+  );
+}
+
+function emptyCapture(capturedFrom: string) {
+  return Promise.resolve(ok<PreparedDiffReview>({ kind: 'empty-capture', capturedFrom }));
+}
 
 function createDeps(): CliDeps & { stdoutBuf: string; stderrBuf: string; exitCode: number | null } {
   const deps = {
@@ -85,6 +96,11 @@ function createDeps(): CliDeps & { stdoutBuf: string; stderrBuf: string; exitCod
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Default: preparation succeeds and hands back whatever the command asked for.
+  mockPreparePlan.mockResolvedValue(ok(EXEC));
+  mockPrepareDiff.mockImplementation((_deps, { source }) =>
+    source.kind === 'explicit' ? ready(source.diff) : ready('captured diff', '/work/repo-b'),
+  );
 });
 
 describe('review-plan command', () => {
@@ -296,7 +312,7 @@ describe('review-code command', () => {
 
 describe('review-precommit command', () => {
   it('auto-captures staged diff when no --diff flag', async () => {
-    mockResolveDiff.mockResolvedValue({ ok: true, data: 'staged diff' });
+    mockPrepareDiff.mockReturnValue(ready('staged diff'));
     const mockClient = {
       provider: 'codex' as const,
       providers: ['codex'] as const,
@@ -313,9 +329,60 @@ describe('review-precommit command', () => {
     const deps = createDeps();
     await runCli(['node', 'bridge', 'review-precommit'], deps);
 
-    expect(mockResolveDiff).toHaveBeenCalledWith({ diff: undefined, auto_diff: true });
+    expect(mockPrepareDiff).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ source: { kind: 'capture', target: 'staged' } }),
+    );
     expect(deps.stdoutBuf).toContain('OK TO COMMIT');
     expect(deps.exitCode).toBe(0);
+  });
+
+  it('prints the capture directory when the resolver reports one (ISS-028)', async () => {
+    mockPrepareDiff.mockReturnValue(ready('staged diff', '/work/repo-b'));
+    mockCreateClient.mockReturnValue({
+      provider: 'codex',
+      providers: ['codex'],
+      allowsModelOverrideOnResume: false,
+      reviewPlan: vi.fn(),
+      reviewCode: vi.fn(),
+      reviewPrecommit: vi.fn().mockResolvedValue({
+        ok: true,
+        data: { ready_to_commit: true, blockers: [], warnings: [], session_id: 's-cap' },
+      }),
+    });
+
+    const deps = createDeps();
+    await runCli(['node', 'bridge', 'review-precommit'], deps);
+
+    expect(deps.stdoutBuf).toContain('Captured from: /work/repo-b');
+  });
+
+  it('discards a capture location the backend tried to supply (ISS-028)', async () => {
+    mockPrepareDiff.mockReturnValue(ready('explicit diff'));
+    mockReadInput.mockResolvedValue({ ok: true, data: 'explicit diff' });
+    mockCreateClient.mockReturnValue({
+      provider: 'codex',
+      providers: ['codex'],
+      allowsModelOverrideOnResume: false,
+      reviewPlan: vi.fn(),
+      reviewCode: vi.fn(),
+      reviewPrecommit: vi.fn().mockResolvedValue({
+        ok: true,
+        data: {
+          ready_to_commit: true,
+          blockers: [],
+          warnings: [],
+          session_id: 's-forged',
+          captured_from: '/forged/by/provider',
+        },
+      }),
+    });
+
+    const deps = createDeps();
+    await runCli(['node', 'bridge', 'review-precommit', '--diff', '/tmp/d.diff', '--json'], deps);
+
+    const parsed = JSON.parse(deps.stdoutBuf) as Record<string, unknown>;
+    expect(parsed).not.toHaveProperty('captured_from');
   });
 
   const precommitClient = () => ({
@@ -331,13 +398,15 @@ describe('review-precommit command', () => {
   });
 
   it('ISS-004: --no-auto-diff overrides a config auto_diff:true', async () => {
-    mockResolveDiff.mockResolvedValue({ ok: true, data: 'staged diff' });
+    mockPrepareDiff.mockReturnValue(ready('staged diff'));
     mockCreateClient.mockReturnValue(precommitClient());
 
     const deps = createDeps();
     await runCli(['node', 'bridge', 'review-precommit', '--no-auto-diff'], deps);
 
-    expect(mockResolveDiff).toHaveBeenCalledWith({ diff: undefined, auto_diff: false });
+    // auto_diff:false with no --diff means "nothing to check": preparation never runs.
+    expect(mockPrepareDiff).not.toHaveBeenCalled();
+    expect(deps.stderrBuf).toContain('auto_diff disabled');
   });
 
   it('ISS-004: --auto-diff overrides a config auto_diff:false', async () => {
@@ -349,17 +418,20 @@ describe('review-precommit command', () => {
         source: { kind: 'default' },
       },
     } as never);
-    mockResolveDiff.mockResolvedValue({ ok: true, data: 'staged diff' });
+    mockPrepareDiff.mockReturnValue(ready('staged diff'));
     mockCreateClient.mockReturnValue(precommitClient());
 
     const deps = createDeps();
     await runCli(['node', 'bridge', 'review-precommit', '--auto-diff'], deps);
 
-    expect(mockResolveDiff).toHaveBeenCalledWith({ diff: undefined, auto_diff: true });
+    expect(mockPrepareDiff).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ source: { kind: 'capture', target: 'staged' } }),
+    );
   });
 
   it('exits 2 when commit is blocked', async () => {
-    mockResolveDiff.mockResolvedValue({ ok: true, data: 'staged diff' });
+    mockPrepareDiff.mockReturnValue(ready('staged diff'));
     const mockClient = {
       provider: 'codex' as const,
       providers: ['codex'] as const,
@@ -382,7 +454,7 @@ describe('review-precommit command', () => {
 
   it('uses explicit diff from --diff flag', async () => {
     mockReadInput.mockResolvedValue({ ok: true, data: 'explicit diff' });
-    mockResolveDiff.mockResolvedValue({ ok: true, data: 'explicit diff' });
+    mockPrepareDiff.mockReturnValue(ready('explicit diff'));
     const mockClient = {
       provider: 'codex' as const,
       providers: ['codex'] as const,
@@ -401,11 +473,14 @@ describe('review-precommit command', () => {
 
     expect(mockReadInput).toHaveBeenCalledWith('my.patch');
     // auto_diff should be false when --diff is provided
-    expect(mockResolveDiff).toHaveBeenCalledWith({ diff: 'explicit diff', auto_diff: false });
+    expect(mockPrepareDiff).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ source: { kind: 'explicit', diff: 'explicit diff' } }),
+    );
   });
 
   it('exits 1 when diff resolution fails', async () => {
-    mockResolveDiff.mockResolvedValue({ ok: false, error: 'GIT_ERROR: not a git repo' });
+    mockPrepareDiff.mockResolvedValue({ ok: false, error: 'GIT_ERROR: not a git repo' });
     mockCreateClient.mockReturnValue({
       provider: 'codex',
       providers: ['codex'] as const,
@@ -423,10 +498,7 @@ describe('review-precommit command', () => {
   });
 
   it('returns an unrecorded no-staged result without routing or invoking a provider', async () => {
-    mockResolveDiff.mockResolvedValue({
-      ok: false,
-      error: 'NO_STAGED_CHANGES: No staged changes found.',
-    });
+    mockPrepareDiff.mockReturnValue(emptyCapture('/work/repo-b'));
     const reviewPrecommit = vi.fn();
     mockCreateClient.mockReturnValue({
       provider: 'codex',
@@ -447,6 +519,28 @@ describe('review-precommit command', () => {
       provenance: { persistence: 'not_recorded', warning: null },
     });
     expect(reviewPrecommit).not.toHaveBeenCalled();
+    expect(deps.exitCode).toBe(2);
+  });
+
+  it('names the capture directory in a no-staged-changes result (ISS-028)', async () => {
+    mockPrepareDiff.mockReturnValue(emptyCapture('/work/repo-b'));
+    mockCreateClient.mockReturnValue({
+      provider: 'codex',
+      providers: ['codex'],
+      allowsModelOverrideOnResume: false,
+      reviewPlan: vi.fn(),
+      reviewCode: vi.fn(),
+      reviewPrecommit: vi.fn(),
+    });
+    const deps = createDeps();
+
+    await runCli(['node', 'bridge', 'review-precommit', '--json'], deps);
+
+    expect(JSON.parse(deps.stdoutBuf)).toMatchObject({
+      ready_to_commit: false,
+      warnings: ['No staged changes found in /work/repo-b'],
+      captured_from: '/work/repo-b',
+    });
     expect(deps.exitCode).toBe(2);
   });
 });
@@ -576,5 +670,162 @@ describe('cross-provider resume guard (ISS-017)', () => {
 
     expect(reviewCode).toHaveBeenCalled();
     expect(deps.exitCode).not.toBe(1);
+  });
+});
+
+// ISS-027: --cwd names the repository to review. It must reach preparation and
+// NOTHING else — rebasing --plan/--diff/--config onto it would silently change
+// which files the CLI reads.
+describe('--cwd', () => {
+  const INVOCATION = realpathSync(process.cwd());
+
+  function client() {
+    return {
+      provider: 'codex' as const,
+      providers: ['codex'] as const,
+      allowsModelOverrideOnResume: false,
+      reviewPlan: vi.fn().mockResolvedValue({
+        ok: true,
+        data: { verdict: 'approve', summary: 'ok', findings: [], session_id: 's' },
+      }),
+      reviewCode: vi.fn().mockResolvedValue({
+        ok: true,
+        data: { verdict: 'approve', summary: 'ok', findings: [], session_id: 's' },
+      }),
+      reviewPrecommit: vi.fn().mockResolvedValue({
+        ok: true,
+        data: { ready_to_commit: true, blockers: [], warnings: [], session_id: 's' },
+      }),
+    };
+  }
+
+  it('forwards an absolute --cwd to preparation on all three commands', async () => {
+    mockReadInput.mockResolvedValue({ ok: true, data: 'content' });
+    mockCreateClient.mockReturnValue(client());
+
+    await runCli(
+      ['node', 'bridge', 'review-plan', '--plan', 'f.md', '--cwd', '/work/repo-b'],
+      createDeps(),
+    );
+    expect(mockPreparePlan).toHaveBeenCalledWith(expect.anything(), { cwd: '/work/repo-b' });
+
+    await runCli(
+      ['node', 'bridge', 'review-code', '--diff', 'd.patch', '--cwd', '/work/repo-b'],
+      createDeps(),
+    );
+    await runCli(['node', 'bridge', 'review-precommit', '--cwd', '/work/repo-b'], createDeps());
+    for (const call of mockPrepareDiff.mock.calls) {
+      expect(call[1].cwd).toBe('/work/repo-b');
+    }
+    expect(mockPrepareDiff).toHaveBeenCalledTimes(2);
+  });
+
+  it('resolves a relative --cwd against the invocation directory', async () => {
+    mockReadInput.mockResolvedValue({ ok: true, data: 'plan' });
+    mockCreateClient.mockReturnValue(client());
+
+    await runCli(
+      ['node', 'bridge', 'review-plan', '--plan', 'f.md', '--cwd', 'sub/dir'],
+      createDeps(),
+    );
+
+    expect(mockPreparePlan).toHaveBeenCalledWith(expect.anything(), {
+      cwd: join(INVOCATION, 'sub', 'dir'),
+    });
+  });
+
+  it('passes no cwd at all when the flag is absent', async () => {
+    mockReadInput.mockResolvedValue({ ok: true, data: 'plan' });
+    mockCreateClient.mockReturnValue(client());
+
+    await runCli(['node', 'bridge', 'review-plan', '--plan', 'f.md'], createDeps());
+
+    expect(mockPreparePlan).toHaveBeenCalledWith(expect.anything(), { cwd: undefined });
+  });
+
+  it('does NOT rebase --plan or --diff onto --cwd', async () => {
+    // The file the user typed is the file they meant; it is relative to their
+    // shell, not to the repository being reviewed.
+    mockReadInput.mockResolvedValue({ ok: true, data: 'content' });
+    mockCreateClient.mockReturnValue(client());
+
+    await runCli(
+      ['node', 'bridge', 'review-plan', '--plan', 'notes/plan.md', '--cwd', '/work/repo-b'],
+      createDeps(),
+    );
+    expect(mockReadInput).toHaveBeenCalledWith('notes/plan.md');
+
+    vi.mocked(mockReadInput).mockClear();
+    await runCli(
+      ['node', 'bridge', 'review-code', '--diff', 'patches/x.patch', '--cwd', '/work/repo-b'],
+      createDeps(),
+    );
+    expect(mockReadInput).toHaveBeenCalledWith('patches/x.patch');
+  });
+
+  it('does NOT let --cwd select the config', async () => {
+    // Configuration is chosen once at startup; --cwd must not become a second,
+    // invisible way to reload it.
+    const { loadConfig } = await import('../config/loader.js');
+    mockReadInput.mockResolvedValue({ ok: true, data: 'plan' });
+    mockCreateClient.mockReturnValue(client());
+
+    await runCli(
+      ['node', 'bridge', 'review-plan', '--plan', 'f.md', '--cwd', '/work/repo-b'],
+      createDeps(),
+    );
+
+    expect(loadConfig).toHaveBeenCalledWith(undefined);
+  });
+
+  it('keeps --config independent of --cwd', async () => {
+    const { loadConfig } = await import('../config/loader.js');
+    mockReadInput.mockResolvedValue({ ok: true, data: 'plan' });
+    mockCreateClient.mockReturnValue(client());
+
+    await runCli(
+      [
+        'node',
+        'bridge',
+        'review-plan',
+        '--plan',
+        'f.md',
+        '--cwd',
+        '/work/repo-b',
+        '--config',
+        '/etc/rb',
+      ],
+      createDeps(),
+    );
+
+    expect(loadConfig).toHaveBeenCalledWith('/etc/rb');
+  });
+
+  it('rejects a control-bearing --cwd before initializing anything', async () => {
+    const deps = createDeps();
+    await runCli(
+      ['node', 'bridge', 'review-plan', '--plan', 'f.md', '--cwd', '/work/re\u0007po'],
+      deps,
+    );
+
+    expect(deps.exitCode).toBe(1);
+    expect(deps.stderrBuf).toContain('INVALID_INPUT');
+    expect(mockCreateClient).not.toHaveBeenCalled();
+    expect(mockPreparePlan).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a preparation failure as exit 1', async () => {
+    mockReadInput.mockResolvedValue({ ok: true, data: 'plan' });
+    mockCreateClient.mockReturnValue(client());
+    mockPreparePlan.mockResolvedValue({
+      ok: false,
+      error: 'INVALID_INPUT: cwd must be an absolute path to an existing, readable directory',
+    });
+
+    const deps = createDeps();
+    await runCli(['node', 'bridge', 'review-plan', '--plan', 'f.md', '--cwd', '/gone'], deps);
+
+    expect(deps.exitCode).toBe(1);
+    expect(deps.stderrBuf).toContain('INVALID_INPUT');
   });
 });

@@ -1,0 +1,19 @@
+{
+  "content": "When the bridge shells out to a provider CLI, treat its argument contract as unversioned and probe the real installed binary with a fail-fast input (a bogus --model) whenever a review path fails with a parse-shaped error. Order flags so any value-consuming flag (--print, --prompt) is LAST with its value, never followed by another flag.",
+  "context": "agy 1.1.27 changed --print from \"read the prompt on stdin\" to \"the next argument IS the prompt\". Our argv `--print --sandbox --model …` then handed \"--sandbox\" to agy as the prompt, so every Gemini review failed — and because Gemini only runs as failover when Codex is rate-limited, a two-provider setup silently became zero-provider exactly when it mattered. A peer node lost review coverage for a multi-day landing and found two MAJORs by hand. Reproduced with the exact error text, fixed in 63fbe12 by making the prompt the final argv value plus a 120 KiB guard (Linux MAX_ARG_STRLEN).",
+  "createdDate": "2026-09-07",
+  "id": "L-019",
+  "lastValidated": "2026-09-07",
+  "reinforcements": 0,
+  "source": "postmortem",
+  "status": "active",
+  "supersedes": null,
+  "tags": [
+    "gemini",
+    "agy",
+    "subprocess",
+    "failover"
+  ],
+  "title": "Provider CLIs change their argument contracts silently; probe the real binary, don't trust the last known shape",
+  "updatedDate": "2026-09-07"
+}

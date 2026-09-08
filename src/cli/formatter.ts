@@ -94,6 +94,8 @@ function formatFindings(
 interface ReviewMetadata {
   models?: ModelIdentity[];
   provenance?: ReviewProvenance;
+  // Present only on an auto-captured result: the absolute directory git ran in.
+  captured_from?: string;
 }
 
 function modelValue(value: string | null): string {
@@ -101,6 +103,11 @@ function modelValue(value: string | null): string {
 }
 
 function appendReviewMetadata(lines: string[], result: ReviewMetadata): void {
+  // Name the capture directory so an empty or surprising result is
+  // self-diagnosing rather than silent (ISS-028).
+  if (result.captured_from !== undefined) {
+    lines.push(`Captured from: ${escapeTerminalControls(result.captured_from)}`);
+  }
   for (const model of result.models ?? []) {
     lines.push(
       `Model: role=${escapeTerminalControls(model.role)} ` +

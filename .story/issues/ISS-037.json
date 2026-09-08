@@ -1,0 +1,28 @@
+{
+  "components": [
+    "backends"
+  ],
+  "createdBy": "follow-up to 7759fae (stream-json prompt delivery)",
+  "dedupeKey": "gemini-2026-09-06:conversation-id-from-result-event",
+  "discoveredDate": "2026-09-07",
+  "id": "ISS-037",
+  "impact": "A fresh Gemini review learns its conversation id by reading ~/.gemini/antigravity-cli/cache/last_conversations.json keyed by cwd after the run (readConversationId), which is why every run+capture must go through the process-global runSerialized chain — two concurrent fresh reviews would otherwise read each other's id. Since 7759fae every agy turn runs in stream-json mode, and its `init` and `result` events carry `conversation_id` directly. Returning it from runAgyPrint (e.g. Result<{ response, conversationId }>) makes the id per-process-output rather than per-shared-file: no cache scrape, no cwd-keyed lookup to get wrong, and the serialization requirement shrinks to whatever agy itself needs. Keep the cache read as a fallback only for a result event without an id. The runSerialized concurrency tests should be re-derived from the new source of truth rather than deleted.",
+  "location": [
+    "src/backends/gemini.ts"
+  ],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": null,
+  "resolvedDate": null,
+  "severity": "low",
+  "sourceRefs": [
+    {
+      "contentHash": "ecb3ab763f00631fa730b8fdc8a9c67eca97e7fe5047e5ed1d1d89e08fcfffcd",
+      "path": "src/backends/gemini.ts",
+      "revision": "7759fae6c619cfd1e95b7b3eaad4f13d8a8050a4",
+      "startLine": 257
+    }
+  ],
+  "status": "open",
+  "title": "Gemini: take the conversation id from the stream-json result event instead of scraping agy's cache file"
+}

@@ -4,6 +4,10 @@ import { ok, err, ErrorCode } from '../utils/errors.js';
 import type { ReviewBackend } from './backend.js';
 import type { ReviewProvider } from '../config/types.js';
 
+// Every backend call now carries WHERE it runs (ISS-027). Tests that don't care
+// about the directory share this one fixture; tests that do build their own.
+const EXEC = { workingDirectory: '/work/repo-b' };
+
 type Methods = Partial<Pick<ReviewBackend, 'reviewPlan' | 'reviewCode' | 'reviewPrecommit'>>;
 
 function backend(provider: ReviewProvider, methods: Methods = {}): ReviewBackend {
@@ -56,7 +60,10 @@ describe('createFailoverBackend', () => {
     });
     const secondary = backend('gemini', { reviewCode: secReview });
 
-    const res = await createFailoverBackend(primary, secondary).reviewCode({ diff: DIFF });
+    const res = await createFailoverBackend(primary, secondary).reviewCode({
+      execution: EXEC,
+      diff: DIFF,
+    });
 
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.data.provider).toBe('gemini');
@@ -73,9 +80,7 @@ describe('createFailoverBackend', () => {
     const res = await createFailoverBackend(
       primary,
       backend('gemini', { reviewCode: secReview }),
-    ).reviewCode({
-      diff: DIFF,
-    });
+    ).reviewCode({ execution: EXEC, diff: DIFF });
 
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.data.provider).toBe('gemini'); // degraded to the working provider
@@ -90,9 +95,7 @@ describe('createFailoverBackend', () => {
     const res = await createFailoverBackend(
       primary,
       backend('gemini', { reviewCode: secReview }),
-    ).reviewCode({
-      diff: DIFF,
-    });
+    ).reviewCode({ execution: EXEC, diff: DIFF });
 
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toContain(ErrorCode.INVALID_INPUT);
@@ -107,9 +110,7 @@ describe('createFailoverBackend', () => {
     const res = await createFailoverBackend(
       primary,
       backend('gemini', { reviewCode: secReview }),
-    ).reviewCode({
-      diff: DIFF,
-    });
+    ).reviewCode({ execution: EXEC, diff: DIFF });
 
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.data.provider).toBe('codex');
@@ -124,7 +125,10 @@ describe('createFailoverBackend', () => {
       reviewCode: vi.fn().mockResolvedValue(err(`${ErrorCode.AUTH_ERROR}: not signed in`)),
     });
 
-    const res = await createFailoverBackend(primary, secondary).reviewCode({ diff: DIFF });
+    const res = await createFailoverBackend(primary, secondary).reviewCode({
+      execution: EXEC,
+      diff: DIFF,
+    });
 
     expect(res.ok).toBe(false);
     if (!res.ok) {
@@ -142,10 +146,7 @@ describe('createFailoverBackend', () => {
     const res = await createFailoverBackend(
       primary,
       backend('gemini', { reviewCode: secReview }),
-    ).reviewCode({
-      diff: DIFF,
-      session_id: 'codex-sess',
-    });
+    ).reviewCode({ execution: EXEC, diff: DIFF, session_id: 'codex-sess' });
 
     expect(res.ok).toBe(false);
     expect(secReview).not.toHaveBeenCalled();
@@ -157,6 +158,7 @@ describe('createFailoverBackend', () => {
       reviewCode: vi.fn().mockResolvedValue(err(`${ErrorCode.MODEL_ERROR}: not supported`)),
     });
     await createFailoverBackend(primary, backend('gemini', { reviewCode: secReview })).reviewCode({
+      execution: EXEC,
       diff: DIFF,
       model: 'gpt-5.4',
     });
@@ -170,6 +172,7 @@ describe('createFailoverBackend', () => {
       reviewCode: vi.fn().mockResolvedValue(err(`${ErrorCode.MODEL_ERROR}: not supported`)),
     });
     await createFailoverBackend(primary, backend('gemini', { reviewCode: secReview })).reviewCode({
+      execution: EXEC,
       diff: DIFF,
       model: 'fast',
     });
@@ -184,7 +187,7 @@ describe('createFailoverBackend', () => {
     });
     const secondary = backend('gemini', { reviewCode: vi.fn().mockResolvedValue(ok(CODE_OK)) });
 
-    await createFailoverBackend(primary, secondary).reviewCode({ diff: DIFF });
+    await createFailoverBackend(primary, secondary).reviewCode({ execution: EXEC, diff: DIFF });
 
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('falling back to gemini'));
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('RATE_LIMITED'));
@@ -209,8 +212,8 @@ describe('createFailoverBackend', () => {
     });
     const fb = createFailoverBackend(primary, secondary);
 
-    const p = await fb.reviewPlan({ plan: 'x' });
-    const c = await fb.reviewPrecommit({ diff: DIFF });
+    const p = await fb.reviewPlan({ execution: EXEC, plan: 'x' });
+    const c = await fb.reviewPrecommit({ execution: EXEC, diff: DIFF });
 
     expect(p.ok && p.data.provider).toBe('gemini');
     expect(c.ok && c.data.provider).toBe('gemini');
@@ -220,7 +223,7 @@ describe('createFailoverBackend', () => {
 // ISS-011: a resumed session must route to the leaf that OWNS it, not always the
 // primary. A session degraded to the secondary belongs to the secondary.
 describe('createFailoverBackend — resume ownership routing', () => {
-  const RESUME = { diff: DIFF, session_id: 'sess-1' };
+  const RESUME = { execution: EXEC, diff: DIFF, session_id: 'sess-1' };
 
   it('routes a secondary-owned resume to the secondary (not the primary)', async () => {
     const priReview = vi.fn().mockResolvedValue(ok({ ...CODE_OK, session_id: 'pri' }));

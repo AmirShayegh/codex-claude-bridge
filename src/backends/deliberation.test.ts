@@ -4,6 +4,10 @@ import { ok, err, ErrorCode } from '../utils/errors.js';
 import type { ReviewBackend } from './backend.js';
 import type { ReviewProvider } from '../config/types.js';
 
+// Every backend call now carries WHERE it runs (ISS-027). Tests that don't care
+// about the directory share this one fixture; tests that do build their own.
+const EXEC = { workingDirectory: '/work/repo-b' };
+
 type Methods = Partial<
   Pick<ReviewBackend, 'reviewPlan' | 'reviewCode' | 'reviewPrecommit' | 'crossReview'>
 >;
@@ -228,7 +232,10 @@ describe('createDeliberationBackend', () => {
       reviewCode: vi.fn().mockResolvedValue(ok(secondaryResult)),
     });
 
-    const res = await createDeliberationBackend(primary, secondary).reviewCode({ diff: DIFF });
+    const res = await createDeliberationBackend(primary, secondary).reviewCode({
+      execution: EXEC,
+      diff: DIFF,
+    });
 
     expect(res.ok && res.data.models).toEqual([model('codex'), model('gemini')]);
   });
@@ -243,7 +250,10 @@ describe('createDeliberationBackend', () => {
         .mockResolvedValue(ok(codeResult('approve', [f('a.ts', 1, 'security', 'major')], 'gem'))),
     });
 
-    const res = await createDeliberationBackend(primary, secondary).reviewCode({ diff: DIFF });
+    const res = await createDeliberationBackend(primary, secondary).reviewCode({
+      execution: EXEC,
+      diff: DIFF,
+    });
 
     expect(res.ok).toBe(true);
     if (res.ok) {
@@ -284,7 +294,10 @@ describe('createDeliberationBackend', () => {
         ),
     });
 
-    const res = await createDeliberationBackend(primary, secondary).reviewCode({ diff: DIFF });
+    const res = await createDeliberationBackend(primary, secondary).reviewCode({
+      execution: EXEC,
+      diff: DIFF,
+    });
 
     expect(res.ok).toBe(true);
     if (res.ok) {
@@ -304,7 +317,10 @@ describe('createDeliberationBackend', () => {
       reviewCode: vi.fn().mockResolvedValue(ok(codeResult('reject', []))),
     });
 
-    const res = await createDeliberationBackend(primary, secondary).reviewCode({ diff: DIFF });
+    const res = await createDeliberationBackend(primary, secondary).reviewCode({
+      execution: EXEC,
+      diff: DIFF,
+    });
 
     expect(res.ok).toBe(true);
     if (res.ok) {
@@ -319,7 +335,7 @@ describe('createDeliberationBackend', () => {
     await createDeliberationBackend(
       backend('codex', { reviewCode: pReview }),
       backend('gemini', { reviewCode: sReview }),
-    ).reviewCode({ diff: DIFF });
+    ).reviewCode({ execution: EXEC, diff: DIFF });
     expect(pReview).toHaveBeenCalledOnce();
     expect(sReview).toHaveBeenCalledOnce();
     expect(sReview).toHaveBeenCalledWith(expect.objectContaining({ model: undefined })); // secondary model cleared
@@ -335,7 +351,10 @@ describe('createDeliberationBackend', () => {
         .mockResolvedValue(ok(codeResult('reject', [f('a.ts', 1, 'security', 'critical')], 'gem'))),
     });
 
-    const res = await createDeliberationBackend(primary, secondary).reviewCode({ diff: DIFF });
+    const res = await createDeliberationBackend(primary, secondary).reviewCode({
+      execution: EXEC,
+      diff: DIFF,
+    });
 
     expect(res.ok).toBe(true);
     if (res.ok) {
@@ -363,7 +382,10 @@ describe('createDeliberationBackend', () => {
       reviewCode: vi.fn().mockRejectedValue(PRIVATE_REJECTION),
     });
 
-    const result = await createDeliberationBackend(primary, secondary).reviewCode({ diff: DIFF });
+    const result = await createDeliberationBackend(primary, secondary).reviewCode({
+      execution: EXEC,
+      diff: DIFF,
+    });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -390,6 +412,7 @@ describe('createDeliberationBackend', () => {
     });
 
     const result = await createDeliberationBackend(primary, secondary).reviewCode({
+      execution: EXEC,
       diff: DIFF,
       session_id: 'codex-resumed',
     });
@@ -421,7 +444,10 @@ describe('createDeliberationBackend', () => {
       reviewPlan: vi.fn().mockResolvedValue(ok(survivor)),
     });
 
-    const result = await createDeliberationBackend(primary, secondary).reviewPlan({ plan: 'plan' });
+    const result = await createDeliberationBackend(primary, secondary).reviewPlan({
+      execution: EXEC,
+      plan: 'plan',
+    });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -452,6 +478,7 @@ describe('createDeliberationBackend', () => {
     const lookup = vi.fn().mockReturnValue({ status: 'found', value: 'gemini' });
 
     const result = await createDeliberationBackend(primary, secondary, { lookup }).reviewPlan({
+      execution: EXEC,
       plan: 'plan',
       session_id: 'gemini-resumed',
     });
@@ -476,7 +503,10 @@ describe('createDeliberationBackend', () => {
       reviewCode: vi.fn().mockResolvedValue(err(`${ErrorCode.AUTH_ERROR}: not signed in`)),
     });
 
-    const res = await createDeliberationBackend(primary, secondary).reviewCode({ diff: DIFF });
+    const res = await createDeliberationBackend(primary, secondary).reviewCode({
+      execution: EXEC,
+      diff: DIFF,
+    });
 
     expect(res.ok).toBe(false);
     if (!res.ok) {
@@ -495,6 +525,7 @@ describe('createDeliberationBackend', () => {
     const secondary = backend('gemini', { reviewCode: sReview });
 
     const res = await createDeliberationBackend(primary, secondary).reviewCode({
+      execution: EXEC,
       diff: DIFF,
       session_id: 'codex-sess',
     });
@@ -519,6 +550,7 @@ describe('createDeliberationBackend', () => {
     const lookup = vi.fn().mockReturnValue({ status: 'found', value: 'gemini' });
 
     const res = await createDeliberationBackend(primary, secondary, { lookup }).reviewCode({
+      execution: EXEC,
       diff: DIFF,
       session_id: 'gemini-sess',
       model: 'Gemini 3.1 Pro (High)',
@@ -563,6 +595,7 @@ describe('createDeliberationBackend', () => {
       backend('gemini', { reviewPlan: secondaryReview }),
       { lookup },
     ).reviewPlan({
+      execution: EXEC,
       plan: 'plan',
       session_id: 'gemini-sess',
       model: 'Gemini 3.1 Pro (High)',
@@ -588,7 +621,7 @@ describe('createDeliberationBackend', () => {
       backend('codex', { reviewCode: primaryReview }),
       backend('gemini', { reviewCode: secondaryReview }),
       { lookup },
-    ).reviewCode({ diff: DIFF, session_id: 'codex-session', model: 'gpt-5.5' });
+    ).reviewCode({ execution: EXEC, diff: DIFF, session_id: 'codex-session', model: 'gpt-5.5' });
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain('Cannot change model on a resumed session');
@@ -605,7 +638,7 @@ describe('createDeliberationBackend', () => {
       backend('codex', { reviewCode: pReview }),
       backend('gemini', { reviewCode: sReview }),
       { lookup },
-    ).reviewCode({ diff: DIFF, session_id: 'unknown-owner' });
+    ).reviewCode({ execution: EXEC, diff: DIFF, session_id: 'unknown-owner' });
 
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toMatch(/^SESSION_ROUTING_UNAVAILABLE:/);
@@ -623,6 +656,7 @@ describe('createDeliberationBackend', () => {
     const secondary = backend('gemini', { reviewCode: sReview });
 
     const res = await createDeliberationBackend(primary, secondary).reviewCode({
+      execution: EXEC,
       diff: DIFF,
       session_id: 'codex-sess',
     });
@@ -651,6 +685,7 @@ describe('createDeliberationBackend', () => {
     const lookup = vi.fn().mockReturnValue({ status: 'found', value: 'gemini' });
 
     const res = await createDeliberationBackend(primary, secondary, { lookup }).reviewCode({
+      execution: EXEC,
       diff: DIFF,
       session_id: 'gemini-sess',
     });
@@ -670,7 +705,7 @@ describe('createDeliberationBackend', () => {
     const res = await createDeliberationBackend(
       primary,
       backend('gemini', { reviewPrecommit: sPre }),
-    ).reviewPrecommit({ diff: DIFF });
+    ).reviewPrecommit({ execution: EXEC, diff: DIFF });
     expect(res.ok).toBe(true);
     expect(sPre).not.toHaveBeenCalled(); // primary succeeded → no second call (failover semantics)
   });
@@ -686,7 +721,7 @@ describe('createDeliberationBackend', () => {
     const res = await createDeliberationBackend(
       backend('codex', { reviewPlan: vi.fn().mockResolvedValue(ok(planA)) }),
       backend('gemini', { reviewPlan: vi.fn().mockResolvedValue(ok(planB)) }),
-    ).reviewPlan({ plan: 'do a thing' });
+    ).reviewPlan({ execution: EXEC, plan: 'do a thing' });
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(res.data.verdict).toBe('revise'); // worst of revise/approve
@@ -761,7 +796,7 @@ describe('createDeliberationBackend — deliberate-deep (cross-review round)', (
 
     const res = await createDeliberationBackend(primary, secondary, {
       crossReview: true,
-    }).reviewCode({ diff: DIFF });
+    }).reviewCode({ execution: EXEC, diff: DIFF });
 
     expect(res.ok && res.data.models).toEqual([
       model('codex'),
@@ -781,7 +816,7 @@ describe('createDeliberationBackend — deliberate-deep (cross-review round)', (
 
     const res = await createDeliberationBackend(primary, secondary, {
       crossReview: true,
-    }).reviewCode({ diff: DIFF });
+    }).reviewCode({ execution: EXEC, diff: DIFF });
 
     expect(res.ok).toBe(true);
     if (!res.ok) return;
@@ -821,6 +856,7 @@ describe('createDeliberationBackend — deliberate-deep (cross-review round)', (
     );
 
     await createDeliberationBackend(primary, secondary, { crossReview: true }).reviewCode({
+      execution: EXEC,
       diff: DIFF,
       model: 'gpt-5.4',
     });
@@ -843,6 +879,7 @@ describe('createDeliberationBackend — deliberate-deep (cross-review round)', (
       crossReview: true,
       lookup,
     }).reviewCode({
+      execution: EXEC,
       diff: DIFF,
       session_id: 'sid',
       model: 'Gemini 3.1 Pro (High)',
@@ -870,6 +907,7 @@ describe('createDeliberationBackend — deliberate-deep (cross-review round)', (
     );
 
     await createDeliberationBackend(primary, secondary, { crossReview: true }).reviewCode({
+      execution: EXEC,
       diff: twoFile,
     });
 
@@ -895,7 +933,7 @@ describe('createDeliberationBackend — deliberate-deep (cross-review round)', (
     const res = await createDeliberationBackend(primary, secondary, {
       crossReview: true,
       maxChunkTokens: 1,
-    }).reviewCode({ diff: DIFF });
+    }).reviewCode({ execution: EXEC, diff: DIFF });
 
     expect(res.ok).toBe(true);
     if (!res.ok) return;
@@ -914,7 +952,10 @@ describe('createDeliberationBackend — deliberate-deep (cross-review round)', (
       { crossReview: secReview },
     );
 
-    const res = await createDeliberationBackend(primary, secondary).reviewCode({ diff: DIFF });
+    const res = await createDeliberationBackend(primary, secondary).reviewCode({
+      execution: EXEC,
+      diff: DIFF,
+    });
 
     expect(res.ok).toBe(true);
     if (!res.ok) return;
@@ -931,7 +972,7 @@ describe('createDeliberationBackend — deliberate-deep (cross-review round)', (
 
     const res = await createDeliberationBackend(primary, secondary, {
       crossReview: true,
-    }).reviewCode({ diff: DIFF });
+    }).reviewCode({ execution: EXEC, diff: DIFF });
 
     expect(res.ok).toBe(true);
     if (!res.ok) return;
@@ -950,7 +991,7 @@ describe('createDeliberationBackend — deliberate-deep (cross-review round)', (
 
     const res = await createDeliberationBackend(primary, secondary, {
       crossReview: true,
-    }).reviewCode({ diff: DIFF });
+    }).reviewCode({ execution: EXEC, diff: DIFF });
 
     expect(res.ok).toBe(true);
     if (!res.ok) return;
@@ -990,7 +1031,7 @@ describe('createDeliberationBackend — deliberate-deep (cross-review round)', (
 
     const result = await createDeliberationBackend(primary, secondary, {
       crossReview: true,
-    }).reviewCode({ diff: DIFF });
+    }).reviewCode({ execution: EXEC, diff: DIFF });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -1030,7 +1071,7 @@ describe('createDeliberationBackend — deliberate-deep (cross-review round)', (
 
     const res = await createDeliberationBackend(primary, secondary, {
       crossReview: true,
-    }).reviewCode({ diff: DIFF });
+    }).reviewCode({ execution: EXEC, diff: DIFF });
 
     expect(res.ok).toBe(true);
     if (!res.ok) return;
@@ -1065,7 +1106,7 @@ describe('createDeliberationBackend — deliberate-deep (cross-review round)', (
 
     const res = await createDeliberationBackend(primary, secondary, {
       crossReview: true,
-    }).reviewPlan({ plan: 'do a thing' });
+    }).reviewPlan({ execution: EXEC, plan: 'do a thing' });
 
     expect(res.ok).toBe(true);
     if (!res.ok) return;
@@ -1102,6 +1143,7 @@ describe('createDeliberationBackend — deliberate-deep (cross-review round)', (
     });
 
     await createDeliberationBackend(primary, secondary, { crossReview: true }).reviewPlan({
+      execution: EXEC,
       plan: 'do a thing',
       model: 'gpt-5.4',
     });
@@ -1121,6 +1163,7 @@ describe('createDeliberationBackend — provider-neutral tiers', () => {
     const { primary, secondary } = mixedPair({ crossReview: priCross }, { crossReview: secCross });
 
     await createDeliberationBackend(primary, secondary, { crossReview: true }).reviewCode({
+      execution: EXEC,
       diff: DIFF,
       model: 'max',
     });
@@ -1135,6 +1178,7 @@ describe('createDeliberationBackend — provider-neutral tiers', () => {
     const { primary, secondary } = mixedPair();
 
     await createDeliberationBackend(primary, secondary).reviewCode({
+      execution: EXEC,
       diff: DIFF,
       model: 'gpt-6-astra',
     });
@@ -1152,7 +1196,7 @@ describe('createDeliberationBackend — provider-neutral tiers', () => {
 
     await createDeliberationBackend(primary, secondary, {
       lookup: () => ({ status: 'found', value: 'gemini' }),
-    }).reviewCode({ diff: DIFF, session_id: 'gem-owned', model: 'fast' });
+    }).reviewCode({ execution: EXEC, diff: DIFF, session_id: 'gem-owned', model: 'fast' });
 
     // gemini owns the session and gets the tier as the caller's override;
     // codex reviews fresh and must get the same tier, not undefined.

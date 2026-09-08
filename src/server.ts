@@ -1,10 +1,10 @@
-import { dirname } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { loadConfig, formatConfigSource } from './config/loader.js';
 import { createBackend } from './backends/index.js';
-import { loadCopilotInstructions } from './config/copilot-instructions.js';
-import type { CopilotInstructions } from './config/copilot-instructions.js';
+import { canonicalizeStartupDirectory } from './utils/workspace.js';
+import { createPreparationLimiter } from './review/preparation.js';
+import type { RequestPreparationDeps } from './review/request-prep.js';
 import {
   makeSessionModelLookup,
   makeSessionProviderLookup,
@@ -51,6 +51,17 @@ ACTING ON RESULTS:
 TIPS:
 - review_code auto-captures working changes (git diff HEAD) — pass diff explicitly only for PR or branch diffs.
 - review_precommit auto-captures staged changes — no need to pass a diff manually.
+- WHERE a review runs is per call. review_plan/review_code/review_precommit accept 'cwd': an absolute
+  path to the repository or git worktree being reviewed. It decides where git captures from, which
+  repository instruction files apply, and where the reviewer subprocess runs. Omit it and the bridge
+  uses the directory the server was launched in — which is often NOT where you are working. Pass 'cwd'
+  whenever you are in a worktree, a second checkout, or another repository. It is not remembered
+  across calls: send it again on every call, including when resuming a session_id.
+- Auto-captured results carry 'captured_from': the absolute directory the bridge actually ran git in.
+  Check it when a result surprises you — an empty result means "nothing there", not "nothing at all".
+  If it is not the repository you meant, pass 'cwd' (or supply the diff explicitly).
+- Auto-capture requires a git work tree. Pointing 'cwd' at a plain directory returns INVALID_INPUT
+  rather than silently reviewing nothing; review_plan and explicit diffs work anywhere readable.
 - You do not need to review every change. Use your judgement on when a review adds value.
 - review_plan and review_code accept a 'deliberate' boolean that overrides the configured mode for
   one call: true = both providers review (deliberation), false = single provider with failover.
@@ -91,18 +102,15 @@ export function createServer(): McpServer {
     `[codex-bridge] config source: ${escapeTerminalControls(formatConfigSource(source))}`,
   );
 
-  let copilotInstr: CopilotInstructions | undefined;
-  if (config.copilot_instructions) {
-    const instrCwd = source.kind === 'project' ? dirname(source.path) : undefined;
-    const instrResult = loadCopilotInstructions(instrCwd);
-    if (instrResult.ok) {
-      copilotInstr = instrResult.data;
-    } else {
-      console.error(
-        `Copilot instructions load failed, skipping: ${escapeTerminalControls(instrResult.error)}`,
-      );
-    }
-  }
+  // Where a request that names no `cwd` runs. Captured and canonicalized ONCE at
+  // startup: reading process.cwd() per request would let a later change move
+  // every default silently, and an uncanonicalized value would not match the
+  // paths git and the providers report back.
+  const prep: RequestPreparationDeps = {
+    limiter: createPreparationLimiter(),
+    defaultWorkingDirectory: canonicalizeStartupDirectory(process.cwd()),
+    loadInstructions: config.copilot_instructions,
+  };
 
   // Open the db before building the backend so resume routing can consult session
   // ownership. The read-write open always returns a usable db (in-memory on
@@ -115,7 +123,7 @@ export function createServer(): McpServer {
     providerLookup: makeSessionProviderLookup(storage.db),
     modelLookup: makeSessionModelLookup(storage.db),
   });
-  const client = createBackend(config, copilotInstr, routing.lookupProvider, routing.lookupModel);
+  const client = createBackend(config, routing.lookupProvider, routing.lookupModel);
   const lifecycle = createReviewLifecycle({
     backend: client,
     registry,
@@ -132,9 +140,9 @@ export function createServer(): McpServer {
       { instructions: SERVER_INSTRUCTIONS },
     );
 
-    registerReviewPlanTool(server, client, storage.db, lifecycle);
-    registerReviewCodeTool(server, client, storage.db, lifecycle);
-    registerReviewPrecommitTool(server, client, storage.db, config, lifecycle);
+    registerReviewPlanTool(server, client, prep, storage.db, lifecycle);
+    registerReviewCodeTool(server, client, prep, storage.db, lifecycle);
+    registerReviewPrecommitTool(server, client, prep, storage.db, config, lifecycle);
     registerReviewHistoryTool(server, storage.db);
     registerReviewStatusTool(server, storage.db, registry);
 

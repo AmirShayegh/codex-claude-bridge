@@ -1,0 +1,18 @@
+{
+  "content": "When product code does `import { fn } from 'node:fs/promises'` (or any module), `vi.spyOn(module, 'fn')` in the test does NOT intercept the call — the binding was resolved at import time. Put the test in a separate `*.test.ts` file with a module-level `vi.mock('node:fs/promises', async (importOriginal) => ({ ...actual, fn: ... }))`, so the mock cannot leak into the real-filesystem tests beside it.",
+  "context": "Hit three times during ISS-027: the canonical-revalidation test (moved to workspace.canonical.test.ts), the preparation-timeout test (request-prep.timeout.test.ts), and the instruction-file-growth test (copilot-instructions.growth.test.ts). Each time the spy silently did nothing and the assertion failed for the wrong reason.",
+  "createdDate": "2026-09-06",
+  "id": "L-018",
+  "lastValidated": "2026-09-06",
+  "reinforcements": 0,
+  "source": "postmortem",
+  "status": "active",
+  "supersedes": null,
+  "tags": [
+    "testing",
+    "vitest",
+    "esm"
+  ],
+  "title": "vi.spyOn cannot intercept a static ESM named import; mock the module in its own test file",
+  "updatedDate": "2026-09-06"
+}

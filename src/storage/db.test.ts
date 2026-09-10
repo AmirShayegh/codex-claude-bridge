@@ -142,6 +142,94 @@ describe('openReviewDb', () => {
     opened.db.close();
   });
 
+  it.each([
+    new Error('Could not locate the bindings file. Tried:\n /tmp/better_sqlite3.node'),
+    Object.assign(new Error('/tmp/better_sqlite3.node: wrong architecture'), {
+      code: 'ERR_DLOPEN_FAILED',
+    }),
+    new Error('better_sqlite3.node was compiled against a different NODE_MODULE_VERSION'),
+  ])('diagnoses native load failures without attempting fallback: %s', (cause) => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const memory = vi.fn(() => new Database(':memory:'));
+    try {
+      expect(() =>
+        openReviewDbWithMetadata({
+          openPersistentDatabase: () => {
+            throw cause;
+          },
+          openMemoryDatabase: memory,
+        }),
+      ).toThrow(
+        expect.objectContaining({
+          message: expect.stringMatching(
+            /both persistent and in-memory.*npm rebuild better-sqlite3/s,
+          ),
+          cause,
+        }),
+      );
+      expect(memory).not.toHaveBeenCalled();
+      expect(log).not.toHaveBeenCalled();
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('diagnoses native failure for intentional memory storage', () => {
+    process.env.REVIEW_BRIDGE_DB = ':memory:';
+    const cause = new Error('Could not locate the bindings file. Tried: better_sqlite3.node');
+    expect(() =>
+      openReviewDbWithMetadata({
+        openMemoryDatabase: () => {
+          throw cause;
+        },
+      }),
+    ).toThrow(expect.objectContaining({ cause, message: expect.stringContaining('native addon') }));
+  });
+
+  it('reports both failure stages and closes a failed memory fallback without logging success', () => {
+    const memory = new Database(':memory:');
+    memory.exec('CREATE VIEW sessions AS SELECT 1 AS session_id');
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(() =>
+        openReviewDbWithMetadata({
+          openPersistentDatabase: () => {
+            throw new Error('permission denied');
+          },
+          openMemoryDatabase: () => memory,
+        }),
+      ).toThrow(
+        /Database open failed.*permission denied.*in-memory storage initialization failed/s,
+      );
+      expect(memory.open).toBe(false);
+      expect(log).not.toHaveBeenCalled();
+    } finally {
+      log.mockRestore();
+      if (memory.open) memory.close();
+    }
+  });
+
+  it('announces fallback exactly once after memory initialization succeeds', () => {
+    const memory = new Database(':memory:');
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {
+      expect(
+        memory.prepare("SELECT name FROM sqlite_master WHERE name = 'sessions'").get(),
+      ).toBeDefined();
+    });
+    try {
+      const opened = openReviewDbWithMetadata({
+        openPersistentDatabase: () => {
+          throw new Error('permission denied');
+        },
+        openMemoryDatabase: () => memory,
+      });
+      expect(log).toHaveBeenCalledExactlyOnceWith(opened.warning);
+    } finally {
+      log.mockRestore();
+      memory.close();
+    }
+  });
+
   it('best-effort closes a persistent handle when startup configuration throws', () => {
     const close = vi.fn(() => {
       throw new Error('injected close failure');

@@ -494,6 +494,19 @@ Error codes are provider-neutral. With `fallback` on (default), many of these au
 | `SESSION_ROUTING_UNAVAILABLE`                             | Resume ownership could not be read safely. Restore durable storage or start a fresh review without `session_id`; the bridge will not guess a provider.                                                                                                                                                                                                                      |
 | `REVIEW_TIMEOUT: review timed out`                        | Increase `"timeout_seconds"` in `.reviewbridge.json` (default: 300).                                                                                                                                                                                                                                                                                                        |
 
+### SQLite native addon cannot load
+
+Both disk-backed and in-memory review storage require `better-sqlite3`'s native addon. If it is missing or incompatible with the MCP host's Node.js version or architecture, startup exits with recovery guidance. Switching `REVIEW_BRIDGE_DB` to `:memory:` cannot fix this. Ordinary database-file failures still fall back to memory after it successfully initializes.
+
+A missing addon can follow an incomplete installation or disabled install scripts; the error alone does not identify the cause. ABI errors can also occur after changing Node.js versions.
+
+1. Stop the bridge and use a terminal with the **same Node.js version and architecture as the MCP host**.
+2. For an npx installation, locate the affected install root from the binding paths in the error: the directory immediately above `node_modules` (typically `~/.npm/_npx/<id>`). For a local installation, use the project containing that `node_modules` directory.
+3. In that directory, run `npm rebuild better-sqlite3 --ignore-scripts=false` and let it finish outside the MCP startup timeout. If it fails, resolve the reported prebuilt-binary download or native build prerequisite error before retrying. A fresh installation must also complete with install scripts enabled.
+4. Restart the MCP connection after the rebuild succeeds.
+
+The bridge does not rebuild dependencies or remove npm caches automatically. Reconnecting alone may reuse an incomplete npx installation.
+
 ## Architecture
 
 ```

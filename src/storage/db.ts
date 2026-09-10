@@ -22,6 +22,7 @@ export interface OpenReviewDbMetadata {
 
 export interface OpenReviewDbDependencies {
   openPersistentDatabase?: (path: string, timeoutMs: number) => Database.Database;
+  openMemoryDatabase?: () => Database.Database;
   configureStartup?: (db: Database.Database) => void;
 }
 
@@ -101,27 +102,83 @@ function openConfiguredPersistentDatabase(
   }
 }
 
-function openInitializedMemory(warning: string | null): OpenReviewDbMetadata {
-  const db = new Database(':memory:', { timeout: BUSY_TIMEOUT_MS });
-  configureConnection(db);
-  initializeStorageSchema(db);
-  return { db, durability: 'memory_only', warning };
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function diagnoseNativeAddon(error: unknown): Error | undefined {
+  const message = errorMessage(error);
+  if (!/better[_-]sqlite3(?:\.node)?/i.test(message)) return undefined;
+  const loadFailure =
+    /Could not locate the bindings file|NODE_MODULE_VERSION|wrong architecture|invalid ELF|not a valid Win32/i.test(
+      message,
+    ) ||
+    (error instanceof Error && 'code' in error && error.code === 'ERR_DLOPEN_FAILED');
+  if (!loadFailure) return undefined;
+  return new Error(
+    'SQLite native addon could not load; both persistent and in-memory storage require better-sqlite3. ' +
+      'Complete installation in a terminal outside the MCP startup timeout with install scripts enabled, ' +
+      'or run npm rebuild better-sqlite3 in the affected installation directory using the same Node.js version as the MCP host. ' +
+      'See README Troubleshooting for npx recovery. Original error: ' +
+      message,
+    { cause: error },
+  );
+}
+
+function openInitializedMemory(
+  warning: string | null,
+  dependencies: OpenReviewDbDependencies,
+): OpenReviewDbMetadata {
+  let db: Database.Database;
+  try {
+    db =
+      dependencies.openMemoryDatabase?.() ?? new Database(':memory:', { timeout: BUSY_TIMEOUT_MS });
+  } catch (error) {
+    throw diagnoseNativeAddon(error) ?? error;
+  }
+  try {
+    configureConnection(db);
+    initializeStorageSchema(db);
+    return { db, durability: 'memory_only', warning };
+  } catch (error) {
+    closeBestEffort(db);
+    throw error;
+  }
+}
+
+function fallbackToMemory(
+  failure: string,
+  error: unknown,
+  dependencies: OpenReviewDbDependencies,
+): OpenReviewDbMetadata {
+  const nativeError = diagnoseNativeAddon(error);
+  if (nativeError) throw nativeError;
+  const warning = `${failure}; using in-memory storage: ${errorMessage(error)}`;
+  let opened: OpenReviewDbMetadata;
+  try {
+    opened = openInitializedMemory(warning, dependencies);
+  } catch (memoryError) {
+    throw new AggregateError(
+      [error, memoryError],
+      `${failure}: ${errorMessage(error)}; in-memory storage initialization failed: ${errorMessage(memoryError)}`,
+      { cause: memoryError },
+    );
+  }
+  console.error(escapeTerminalControls(warning));
+  return opened;
 }
 
 export function openReviewDbWithMetadata(
   dependencies: OpenReviewDbDependencies = {},
 ): OpenReviewDbMetadata {
   const path = reviewDbPath();
-  if (path === ':memory:') return openInitializedMemory(null);
+  if (path === ':memory:') return openInitializedMemory(null, dependencies);
 
   let db: Database.Database;
   try {
     db = openConfiguredPersistentDatabase(path, dependencies);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const warning = `Database open failed (${path}); using in-memory storage: ${message}`;
-    console.error(escapeTerminalControls(warning));
-    return openInitializedMemory(warning);
+    return fallbackToMemory(`Database open failed (${path})`, error, dependencies);
   }
 
   try {
@@ -130,11 +187,8 @@ export function openReviewDbWithMetadata(
     configureConnection(db);
     return { db, durability: 'durable', warning: null };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
     closeBestEffort(db);
-    const warning = `Database initialization failed (${path}); using in-memory storage: ${message}`;
-    console.error(escapeTerminalControls(warning));
-    return openInitializedMemory(warning);
+    return fallbackToMemory(`Database initialization failed (${path})`, error, dependencies);
   }
 }
 

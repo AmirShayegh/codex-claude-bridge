@@ -10,6 +10,7 @@ import {
   makeSessionProviderLookup,
   openReviewDbWithMetadata,
 } from './storage/db.js';
+import type { OpenReviewDbMetadata } from './storage/db.js';
 import { createSessionRegistry } from './storage/session-registry.js';
 import { createSessionRouting } from './storage/session-routing.js';
 import { createReviewLifecycle } from './review/lifecycle.js';
@@ -49,14 +50,17 @@ ACTING ON RESULTS:
 - reject → Rethink the approach. Consider a new plan and start a fresh session.
 
 TIPS:
-- review_code auto-captures working changes (git diff HEAD) — pass diff explicitly only for PR or branch diffs.
+- review_code auto-captures working changes (git diff HEAD). To review a branch or landed commits,
+  pass 'base' (and optionally 'head', default HEAD) and the bridge runs git diff base head in cwd —
+  no need to paste a diff or stage it into a scratch worktree.
 - review_precommit auto-captures staged changes — no need to pass a diff manually.
 - WHERE a review runs is per call. review_plan/review_code/review_precommit accept 'cwd': an absolute
   path to the repository or git worktree being reviewed. It decides where git captures from, which
-  repository instruction files apply, and where the reviewer subprocess runs. Omit it and the bridge
-  uses the directory the server was launched in — which is often NOT where you are working. Pass 'cwd'
-  whenever you are in a worktree, a second checkout, or another repository. It is not remembered
-  across calls: send it again on every call, including when resuming a session_id.
+  repository instruction files apply, and where the reviewer subprocess runs. ALWAYS pass 'cwd':
+  by default an auto-capturing review_code/review_precommit call without it is refused with
+  INVALID_INPUT, because the alternative — capturing from the directory the server was launched in —
+  is often NOT where you are working. It is not remembered across calls: send it again on every
+  call, including when resuming a session_id.
 - Auto-captured results carry 'captured_from': the absolute directory the bridge actually ran git in.
   Check it when a result surprises you — an empty result means "nothing there", not "nothing at all".
   If it is not the repository you meant, pass 'cwd' (or supply the diff explicitly).
@@ -67,8 +71,12 @@ TIPS:
   one call: true = both providers review (deliberation), false = single provider with failover.
   Requires a two-provider setup. review_precommit is always failover.
 - Every result carries a 'review_mode' field (single/failover/deliberate/deliberate-deep) naming the
-  composition that ran, so you can tell whether deliberation actually happened even without a
-  'deliberation' block.
+  composition that was CONFIGURED for the call. A result also carries a 'failover' block ONLY when
+  the primary provider failed and the other one served: it names the failed provider, its error,
+  the model you asked for, and what the other provider was handed. No 'failover' block means the
+  primary served. Treat a failed-over result as a different reviewer's opinion, not the one you
+  requested, and consider whether its 'carried_model' (null = the secondary's default) is
+  adequate for the change.
 - Every successful review also carries 'models' (successful reviewer/adjudicator contributions with
   requested/resolved/observed identity evidence) and 'provenance' (durable, memory_only, or
   not_recorded). Runtime labels are control-plane evidence, not proof of underlying weights.
@@ -88,6 +96,29 @@ const PACKAGE_VERSION = (
     version: string;
   }
 ).version;
+
+// Storage is optional at runtime (ISS-042). When even the in-memory database
+// cannot open — the SQLite native addon failed to load — the server still comes
+// up: reviews run with in-process session state only, and history/status
+// answer STORAGE_UNAVAILABLE with the diagnosis. Exiting here used to close the
+// MCP connection, which hid the cause behind CONNECTION_CLOSED and forced a
+// manual reconnect after the rebuild.
+interface StartupStorage {
+  opened: OpenReviewDbMetadata | undefined;
+  unavailableReason: string | undefined;
+}
+
+function openStorageOrDegrade(): StartupStorage {
+  try {
+    return { opened: openReviewDbWithMetadata(), unavailableReason: undefined };
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : String(e);
+    console.error(
+      `[codex-bridge] review storage unavailable; reviews will run without history: ${escapeTerminalControls(reason)}`,
+    );
+    return { opened: undefined, unavailableReason: reason };
+  }
+}
 
 export function createServer(): McpServer {
   const configResult = loadConfig();
@@ -110,18 +141,19 @@ export function createServer(): McpServer {
     limiter: createPreparationLimiter(),
     defaultWorkingDirectory: canonicalizeStartupDirectory(process.cwd()),
     loadInstructions: config.copilot_instructions,
+    requireCwdForCapture: config.require_cwd,
   };
 
   // Open the db before building the backend so resume routing can consult session
-  // ownership. The read-write open always returns a usable db (in-memory on
-  // failure); the tools and lookup accept an optional db regardless.
-  const storage = openReviewDbWithMetadata();
+  // ownership. Ordinary file failures fall back to in-memory inside the open;
+  // only a native-addon failure leaves no database at all.
+  const storage = openStorageOrDegrade();
   const registry = createSessionRegistry();
   const routing = createSessionRouting({
     registry,
-    durability: storage.durability,
-    providerLookup: makeSessionProviderLookup(storage.db),
-    modelLookup: makeSessionModelLookup(storage.db),
+    durability: storage.opened?.durability ?? 'memory_only',
+    providerLookup: makeSessionProviderLookup(storage.opened?.db),
+    modelLookup: makeSessionModelLookup(storage.opened?.db),
   });
   const client = createBackend(config, routing.lookupProvider, routing.lookupModel);
   const lifecycle = createReviewLifecycle({
@@ -129,7 +161,8 @@ export function createServer(): McpServer {
     registry,
     lookupSessionProvider: routing.lookupProvider,
     lookupResultSession: routing.lookupResultSession,
-    storage,
+    storage: storage.opened,
+    storageWarning: storage.unavailableReason,
     onOutcomePersistenceFailure: routing.markOutcomePersistenceFailure,
     onOutcomePersisted: routing.markOutcomePersisted,
   });
@@ -140,11 +173,12 @@ export function createServer(): McpServer {
       { instructions: SERVER_INSTRUCTIONS },
     );
 
-    registerReviewPlanTool(server, client, prep, storage.db, lifecycle);
-    registerReviewCodeTool(server, client, prep, storage.db, lifecycle);
-    registerReviewPrecommitTool(server, client, prep, storage.db, config, lifecycle);
-    registerReviewHistoryTool(server, storage.db);
-    registerReviewStatusTool(server, storage.db, registry);
+    const db = storage.opened?.db;
+    registerReviewPlanTool(server, client, prep, db, lifecycle);
+    registerReviewCodeTool(server, client, prep, db, lifecycle);
+    registerReviewPrecommitTool(server, client, prep, db, config, lifecycle);
+    registerReviewHistoryTool(server, db, storage.unavailableReason);
+    registerReviewStatusTool(server, db, registry, storage.unavailableReason);
 
     return server;
   } catch (e) {

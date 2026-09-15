@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { runCli } from './commands.js';
 import type { CliDeps } from './commands.js';
+import type { ReviewBackend } from '../backends/backend.js';
 
 // Mock the codex client
 vi.mock('../backends/index.js', () => ({
@@ -307,6 +308,103 @@ describe('review-code command', () => {
       provenance: { persistence: 'not_recorded', warning: null },
     });
     expect(reviewCode).not.toHaveBeenCalled();
+  });
+});
+
+describe('review-code --base/--head (ISS-049)', () => {
+  function clientWith(reviewCode: ReviewBackend['reviewCode']) {
+    mockCreateClient.mockReturnValue({
+      provider: 'codex',
+      providers: ['codex'],
+      allowsModelOverrideOnResume: false,
+      reviewPlan: vi.fn(),
+      reviewCode,
+      reviewPrecommit: vi.fn(),
+    });
+  }
+
+  it('captures the range in the review directory and reports where', async () => {
+    mockPrepareDiff.mockReturnValue(ready('range diff', '/work/repo-b'));
+    const reviewCode = vi.fn<ReviewBackend['reviewCode']>().mockResolvedValue({
+      ok: true,
+      data: { verdict: 'approve', summary: 'Clean', findings: [], session_id: 's9', models: [] },
+    });
+    clientWith(reviewCode);
+    const deps = createDeps();
+
+    await runCli(
+      ['node', 'bridge', 'review-code', '--base', 'main', '--head', 'feature', '--json'],
+      deps,
+    );
+
+    expect(mockReadInput).not.toHaveBeenCalled();
+    expect(mockPrepareDiff).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        source: { kind: 'capture', target: 'range', base: 'main', head: 'feature' },
+      }),
+    );
+    expect(reviewCode).toHaveBeenCalledWith(expect.objectContaining({ diff: 'range diff' }));
+    expect(JSON.parse(deps.stdoutBuf).captured_from).toBe('/work/repo-b');
+    expect(deps.exitCode).toBe(0);
+  });
+
+  it('defaults --head to HEAD', async () => {
+    mockPrepareDiff.mockReturnValue(ready('range diff', '/work/repo-b'));
+    clientWith(
+      vi.fn<ReviewBackend['reviewCode']>().mockResolvedValue({
+        ok: true,
+        data: { verdict: 'approve', summary: 'Clean', findings: [], session_id: 's9', models: [] },
+      }),
+    );
+
+    await runCli(['node', 'bridge', 'review-code', '--base', 'main'], createDeps());
+
+    expect(mockPrepareDiff).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        source: { kind: 'capture', target: 'range', base: 'main', head: 'HEAD' },
+      }),
+    );
+  });
+
+  it('answers an empty range without a reviewer', async () => {
+    mockPrepareDiff.mockReturnValue(emptyCapture('/work/repo-b'));
+    const reviewCode = vi.fn<ReviewBackend['reviewCode']>();
+    clientWith(reviewCode);
+    const deps = createDeps();
+
+    await runCli(['node', 'bridge', 'review-code', '--base', 'main', '--json'], deps);
+
+    expect(reviewCode).not.toHaveBeenCalled();
+    expect(JSON.parse(deps.stdoutBuf)).toMatchObject({
+      verdict: 'approve',
+      summary: 'No changes between main and HEAD in /work/repo-b.',
+      captured_from: '/work/repo-b',
+    });
+    expect(deps.exitCode).toBe(0);
+  });
+
+  it('rejects a ref git would read as an option before anything runs', async () => {
+    clientWith(vi.fn<ReviewBackend['reviewCode']>());
+    const deps = createDeps();
+
+    await runCli(['node', 'bridge', 'review-code', '--base', '--upload-pack=evil'], deps);
+
+    expect(deps.exitCode).toBe(1);
+    expect(mockPrepareDiff).not.toHaveBeenCalled();
+  });
+
+  it('requires either --diff or --base', async () => {
+    clientWith(vi.fn<ReviewBackend['reviewCode']>());
+    const deps = createDeps();
+
+    await runCli(['node', 'bridge', 'review-code'], deps);
+
+    expect(deps.exitCode).toBe(1);
+    expect(deps.stderrBuf).toContain('--diff');
+    expect(deps.stderrBuf).toContain('--base');
+    expect(mockCreateClient).not.toHaveBeenCalled();
   });
 });
 

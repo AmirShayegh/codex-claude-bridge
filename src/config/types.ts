@@ -51,6 +51,17 @@ export const TIER_MODELS: Record<ReviewProvider, Record<ReviewTier, string>> = {
   },
 };
 
+// Reverse lookup: the tier a provider-specific model id stands for, if it is one
+// of that provider's tier models. Lets a failover carry `gpt-6-astra` to Gemini
+// as `max` instead of dropping it and letting Gemini pick its default (ISS-048).
+export function tierForModel(provider: ReviewProvider, model: string): ReviewTier | undefined {
+  const wanted = model.trim().toLowerCase();
+  for (const tier of REVIEW_TIERS) {
+    if (TIER_MODELS[provider][tier].toLowerCase() === wanted) return tier;
+  }
+  return undefined;
+}
+
 // Shared one-liner for tool/CLI help so every surface explains tiers the same way.
 export const TIER_HELP =
   'Or pick a tier instead of a model id: "max" (hardest problems — architecture, concurrency, ' +
@@ -94,10 +105,22 @@ export const ReviewBridgeConfigSchema = z.object({
   codex_path: z.string().optional(),
   reasoning_effort: z.enum(['low', 'medium', 'high']).default('medium'),
   timeout_seconds: z.number().int().positive().default(300),
+  // Optional wall-clock ceiling for ONE WHOLE review call, across every chunk
+  // and retry. `timeout_seconds` bounds a single provider turn, so a chunked
+  // review could legitimately run N times that long; this bounds the caller's
+  // total wait instead (ISS-046). Unset = no whole-review ceiling.
+  review_deadline_seconds: z.number().int().positive().optional(),
   max_chunk_tokens: z.number().int().positive().default(8000),
   review_standards: ReviewStandardsSchema.default(() => ReviewStandardsSchema.parse({})),
   project_context: z.string().default(''),
   copilot_instructions: z.boolean().default(true),
+  // Over MCP, a review that auto-captures a diff must say WHERE with `cwd`.
+  // Without it the bridge captured from its launch directory, which for a
+  // caller in a worktree or a second checkout is silently the wrong repository
+  // (ISS-047). Set false to restore the launch-directory default for a server
+  // that only ever serves the repository it was started in. Explicit diffs and
+  // the CLI (whose default is the caller's own directory) are unaffected.
+  require_cwd: z.boolean().default(true),
   // When a review fails because the configured provider is out of usage /
   // unavailable, automatically retry through the other provider. On by default;
   // set false for strict single-provider behavior (CI determinism, or to avoid

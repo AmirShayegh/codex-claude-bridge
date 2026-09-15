@@ -16,6 +16,9 @@ export enum ErrorCode {
   PROVIDER_UNAVAILABLE = 'PROVIDER_UNAVAILABLE',
   REVIEW_BUSY = 'REVIEW_BUSY',
   SESSION_ROUTING_UNAVAILABLE = 'SESSION_ROUTING_UNAVAILABLE',
+  // No review storage at all: the SQLite native addon failed to load at startup
+  // (ISS-042). The server keeps serving reviews; history/status answer with this.
+  STORAGE_UNAVAILABLE = 'STORAGE_UNAVAILABLE',
   INVALID_INPUT = 'INVALID_INPUT',
   UNKNOWN_ERROR = 'UNKNOWN_ERROR',
 }
@@ -30,4 +33,10 @@ export function ok<T>(data: T): Result<T> {
 // mark the orphaned Codex thread's session as failed (T-001).
 export function err<T>(error: string, session_id?: string): Result<T> {
   return session_id ? { ok: false, error, session_id } : { ok: false, error };
+}
+
+// The message every tool answers with when review storage never opened (ISS-042).
+// `reason` is the startup diagnosis, repeated so the caller can act on it.
+export function storageUnavailable(reason: string | undefined): string {
+  return `${ErrorCode.STORAGE_UNAVAILABLE}: review storage did not open at startup, so no history is kept${reason ? ` — ${reason}` : ''}`;
 }

@@ -138,6 +138,22 @@ describe('createFailoverBackend', () => {
     }
   });
 
+  it('keeps the primary partial session id on a combined failure (probe-loop, ISS-046)', async () => {
+    const primary = backend('codex', {
+      reviewCode: vi.fn().mockResolvedValue(err(`${ErrorCode.RATE_LIMITED}: usage`, 'pri-partial')),
+    });
+    const secondary = backend('gemini', {
+      reviewCode: vi.fn().mockResolvedValue(err(`${ErrorCode.AUTH_ERROR}: not signed in`)),
+    });
+
+    const res = await createFailoverBackend(primary, secondary).reviewCode({
+      execution: EXEC,
+      diff: DIFF,
+    });
+
+    expect(!res.ok && res.session_id).toBe('pri-partial');
+  });
+
   it('does NOT fail over a resumed session (delegates to primary only)', async () => {
     const secReview = vi.fn();
     const primary = backend('codex', {
@@ -152,18 +168,114 @@ describe('createFailoverBackend', () => {
     expect(secReview).not.toHaveBeenCalled();
   });
 
-  it('drops a per-call model pin when failing over (a primary model is meaningless for the secondary)', async () => {
+  it('drops a per-call model pin the secondary cannot map, but records it in the failover block', async () => {
     const secReview = vi.fn().mockResolvedValue(ok(CODE_OK));
     const primary = backend('codex', {
       reviewCode: vi.fn().mockResolvedValue(err(`${ErrorCode.MODEL_ERROR}: not supported`)),
     });
-    await createFailoverBackend(primary, backend('gemini', { reviewCode: secReview })).reviewCode({
+    const res = await createFailoverBackend(
+      primary,
+      backend('gemini', { reviewCode: secReview }),
+    ).reviewCode({
       execution: EXEC,
       diff: DIFF,
       model: 'gpt-5.4',
     });
 
     expect(secReview).toHaveBeenCalledWith(expect.objectContaining({ model: undefined }));
+    expect(res.ok && res.data.failover).toEqual({
+      from: 'codex',
+      error: `${ErrorCode.MODEL_ERROR}: not supported`,
+      requested_model: 'gpt-5.4',
+      carried_model: null,
+    });
+  });
+
+  it("maps a primary model id to its tier for the secondary instead of letting it fall to the secondary's default (ISS-048)", async () => {
+    const secReview = vi.fn().mockResolvedValue(ok(CODE_OK));
+    const primary = backend('codex', {
+      reviewCode: vi.fn().mockResolvedValue(err(`${ErrorCode.MODEL_ERROR}: not supported`)),
+    });
+    const res = await createFailoverBackend(
+      primary,
+      backend('gemini', { reviewCode: secReview }),
+    ).reviewCode({
+      execution: EXEC,
+      diff: DIFF,
+      model: 'gpt-6-astra',
+    });
+
+    // gpt-6-astra is Codex's `max`; Gemini maps `max` to its own Pro model.
+    expect(secReview).toHaveBeenCalledWith(expect.objectContaining({ model: 'max' }));
+    expect(res.ok && res.data.failover).toMatchObject({
+      from: 'codex',
+      requested_model: 'gpt-6-astra',
+      carried_model: 'max',
+    });
+  });
+
+  it('stamps a failover block naming the failed provider and its error on the served result (ISS-044)', async () => {
+    const secReview = vi.fn().mockResolvedValue(ok(CODE_OK));
+    const primary = backend('codex', {
+      reviewCode: vi
+        .fn()
+        .mockResolvedValue(err(`${ErrorCode.RATE_LIMITED}: usage limit reached until Monday`)),
+    });
+    const res = await createFailoverBackend(
+      primary,
+      backend('gemini', { reviewCode: secReview }),
+    ).reviewCode({ execution: EXEC, diff: DIFF });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.data.provider).toBe('gemini');
+      expect(res.data.failover).toEqual({
+        from: 'codex',
+        error: `${ErrorCode.RATE_LIMITED}: usage limit reached until Monday`,
+        requested_model: null,
+        carried_model: null,
+      });
+    }
+  });
+
+  it("restores the caller's requested model on the serving identity after a dropped pin (ISS-044)", async () => {
+    const secReview = vi.fn().mockResolvedValue(
+      ok({
+        ...CODE_OK,
+        models: [
+          {
+            provider: 'gemini' as const,
+            role: 'review' as const,
+            requested: null,
+            resolved: 'Gemini 3.8 Flash (Medium)',
+            observed: null,
+            evidence: 'bridge_selection' as const,
+          },
+        ],
+      }),
+    );
+    const primary = backend('codex', {
+      reviewCode: vi.fn().mockResolvedValue(err(`${ErrorCode.MODEL_ERROR}: not supported`)),
+    });
+    const res = await createFailoverBackend(
+      primary,
+      backend('gemini', { reviewCode: secReview }),
+    ).reviewCode({ execution: EXEC, diff: DIFF, model: 'gpt-5.4' });
+
+    expect(res.ok && res.data.models?.[0]).toMatchObject({
+      provider: 'gemini',
+      requested: 'gpt-5.4',
+      resolved: 'Gemini 3.8 Flash (Medium)',
+    });
+  });
+
+  it('carries no failover block when the primary served', async () => {
+    const primary = backend('codex', { reviewCode: vi.fn().mockResolvedValue(ok(CODE_OK)) });
+    const res = await createFailoverBackend(primary, backend('gemini')).reviewCode({
+      execution: EXEC,
+      diff: DIFF,
+    });
+    expect(res.ok && res.data.failover).toBeUndefined();
   });
 
   it('carries a provider-neutral tier across failover so the secondary maps it itself', async () => {

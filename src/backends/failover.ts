@@ -1,7 +1,8 @@
-import { isReviewTier } from '../config/types.js';
+import { isReviewTier, tierForModel } from '../config/types.js';
 import { ok, err, ErrorCode } from '../utils/errors.js';
 import type { Result } from '../utils/errors.js';
 import type { ReviewProvider } from '../config/types.js';
+import type { ModelIdentity, ReviewFailover } from '../review/types.js';
 import type {
   ReviewBackend,
   PlanReviewInput,
@@ -57,6 +58,43 @@ function tag<R extends { provider?: ReviewProvider }>(
 }
 
 type FailoverInput = { session_id?: string; model?: string };
+type FailoverResult = {
+  provider?: ReviewProvider;
+  models?: ModelIdentity[];
+  failover?: ReviewFailover;
+};
+
+// What the secondary is handed in place of the caller's model. A tier is
+// provider-neutral and carries as-is. A primary model ID that IS one of the
+// primary's tier models carries as that tier, so `gpt-6-astra` reaches Gemini as
+// `max` rather than as nothing (which made Gemini resolve its Flash default and
+// review a `max` request at the cheapest tier — ISS-048). Anything else cannot be
+// mapped and is dropped; the failover block records that it was.
+export function carriedModelForFailover(
+  primaryProvider: ReviewProvider,
+  model: string | undefined,
+): string | undefined {
+  if (model === undefined) return undefined;
+  if (isReviewTier(model)) return model;
+  return tierForModel(primaryProvider, model);
+}
+
+// Stamp the served result with what happened: which provider failed, why, and
+// what the secondary was handed. The review-role identity's `requested` is
+// restored to the caller's original selector when the pin was dropped, so the
+// models array still says what was ASKED for, not `null`.
+function stampFailover<R extends FailoverResult>(
+  result: Result<R>,
+  block: ReviewFailover,
+): Result<R> {
+  if (!result.ok) return result;
+  const models = result.data.models?.map((identity) =>
+    identity.role === 'review' && identity.requested === null && block.requested_model !== null
+      ? { ...identity, requested: block.requested_model }
+      : identity,
+  );
+  return ok({ ...result.data, ...(models ? { models } : {}), failover: block });
+}
 
 export type SessionProviderLookupResult =
   | { status: 'found'; value: ReviewProvider | null }
@@ -90,10 +128,7 @@ export function lookupSessionOwner(
 
 // Exported for reuse by the deliberation composite, whose precommit path (and
 // resumed-session path) is plain failover, not deliberation.
-export async function withFailover<
-  I extends FailoverInput,
-  R extends { provider?: ReviewProvider },
->(
+export async function withFailover<I extends FailoverInput, R extends FailoverResult>(
   primary: ReviewBackend,
   secondary: ReviewBackend,
   input: I,
@@ -120,19 +155,30 @@ export async function withFailover<
   console.error(
     `[codex-bridge] ${primary.provider} unavailable (${code}); falling back to ${secondary.provider}`,
   );
-  // Drop any per-call model override — a model chosen for the primary is
-  // meaningless for the secondary, which resolves its own default. A tier
-  // ('max' / 'balanced' / 'fast') is provider-neutral, so it carries over and
-  // the secondary maps it to its own model.
-  const second = await run(secondary, {
-    ...input,
-    model: isReviewTier(input.model) ? input.model : undefined,
-  });
-  if (second.ok) return tag(secondary.provider, second);
+  // A model chosen for the primary is meaningless to the secondary by name, so
+  // it is carried as a provider-neutral tier when it maps to one and dropped
+  // otherwise (see carriedModelForFailover). Either way the served result says
+  // what happened, so a Gemini answer to a Codex request is never mistaken for
+  // the primary having served (ISS-044).
+  const carried = carriedModelForFailover(primary.provider, input.model);
+  const second = await run(secondary, { ...input, model: carried });
+  if (second.ok) {
+    return stampFailover(tag(secondary.provider, second), {
+      from: primary.provider,
+      error: first.error,
+      requested_model: input.model ?? null,
+      carried_model: carried ?? null,
+    });
+  }
 
   // Both failed: lead with the primary's error (its code/prefix), note the
   // fallback outcome so the failure is diagnosable.
-  return err<R>(`${first.error} (fallback to ${secondary.provider} also failed: ${second.error})`);
+  // The primary's partial session (a thread that started and then failed) is
+  // the one the caller can still inspect; keep it on the combined failure.
+  return err<R>(
+    `${first.error} (fallback to ${secondary.provider} also failed: ${second.error})`,
+    first.session_id ?? second.session_id,
+  );
 }
 
 export function createFailoverBackend(

@@ -263,7 +263,10 @@ describe('MCP integration — review_precommit', () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPrecommitResponse) });
     client = await startServer();
 
-    const result = await client.callTool({ name: 'review_precommit', arguments: {} });
+    const result = await client.callTool({
+      name: 'review_precommit',
+      arguments: { cwd: SERVER_DIR },
+    });
 
     // The directory reported back must be the one git was actually handed.
     expect(getStagedDiff).toHaveBeenCalledWith(SERVER_DIR);
@@ -293,7 +296,10 @@ describe('MCP integration — review_precommit', () => {
     vi.mocked(getStagedDiff).mockResolvedValue({ ok: true, data: '' });
     client = await startServer();
 
-    const result = await client.callTool({ name: 'review_precommit', arguments: {} });
+    const result = await client.callTool({
+      name: 'review_precommit',
+      arguments: { cwd: SERVER_DIR },
+    });
 
     const parsed = parseToolResult(result) as Record<string, unknown>;
     // ISS-028: an empty capture names where it looked, so a capture that ran in
@@ -578,6 +584,23 @@ describe('MCP integration — concurrent reviews in different repositories', () 
 });
 
 describe('MCP integration — review_code auto-capture (ISS-028)', () => {
+  // The default deployment refuses to guess the repository (ISS-047): a capture
+  // that names no cwd is answered with INVALID_INPUT before git runs.
+  it.each(['review_code', 'review_precommit'])(
+    '%s refuses to auto-capture without cwd',
+    async (name) => {
+      client = await startServer();
+
+      const result = await client.callTool({ name, arguments: {} });
+
+      expect(result.isError).toBe(true);
+      expect(getErrorText(result)).toMatch(/^INVALID_INPUT: auto-capture needs cwd/);
+      expect(getErrorText(result)).toContain(SERVER_DIR);
+      expect(getWorkingDiff).not.toHaveBeenCalled();
+      expect(getStagedDiff).not.toHaveBeenCalled();
+    },
+  );
+
   it('reports the capture directory on an auto-captured review', async () => {
     vi.mocked(getWorkingDiff).mockResolvedValue({
       ok: true,
@@ -586,7 +609,7 @@ describe('MCP integration — review_code auto-capture (ISS-028)', () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validCodeResponse) });
     client = await startServer();
 
-    const result = await client.callTool({ name: 'review_code', arguments: {} });
+    const result = await client.callTool({ name: 'review_code', arguments: { cwd: SERVER_DIR } });
 
     expect(getWorkingDiff).toHaveBeenCalledWith(SERVER_DIR);
     const parsed = parseToolResult(result) as Record<string, unknown>;
@@ -597,7 +620,7 @@ describe('MCP integration — review_code auto-capture (ISS-028)', () => {
     vi.mocked(getWorkingDiff).mockResolvedValue({ ok: true, data: '' });
     client = await startServer();
 
-    const result = await client.callTool({ name: 'review_code', arguments: {} });
+    const result = await client.callTool({ name: 'review_code', arguments: { cwd: SERVER_DIR } });
 
     const parsed = parseToolResult(result) as Record<string, unknown>;
     expect(parsed.verdict).toBe('approve');
@@ -808,13 +831,27 @@ describe('MCP integration — session lifecycle', () => {
       .mockResolvedValueOnce({ finalResponse: JSON.stringify(validPlanResponse) });
     client = await startServer();
 
+    // Codex had started a thread before the turn failed. Real Codex never hands
+    // a second review the same thread id, so the failed one gets its own.
+    mockThreadId = 'thread_integ_failed';
     const failResult = await client.callTool({
       name: 'review_plan',
       arguments: { plan: 'Plan A' },
     });
     const failText = getErrorText(failResult);
     expect(failText).toContain('transient failure');
+    // Locked probe (probe-loop, ISS-046): the failure names the thread it left
+    // behind, and review_status can find it as failed.
+    expect(failText).toContain('session_id: thread_integ_failed');
+    const status = parseToolResult(
+      await client.callTool({
+        name: 'review_status',
+        arguments: { session_id: 'thread_integ_failed' },
+      }),
+    ) as Record<string, unknown>;
+    expect(status.status).toBe('failed');
 
+    mockThreadId = 'thread_integ_001';
     const okResult = await client.callTool({ name: 'review_plan', arguments: { plan: 'Plan B' } });
     const parsed = parseToolResult(okResult) as Record<string, unknown>;
     expect(parsed.verdict).toBe('approve');

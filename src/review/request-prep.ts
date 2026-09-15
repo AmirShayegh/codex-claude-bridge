@@ -6,7 +6,12 @@ import {
   instructionsRootFor,
 } from '../utils/workspace.js';
 import type { ResolvedWorkspace } from '../utils/workspace.js';
-import { captureDiff, NO_STAGED_CHANGES, NO_WORKING_CHANGES } from '../utils/resolve-diff.js';
+import {
+  captureDiff,
+  NO_RANGE_CHANGES,
+  NO_STAGED_CHANGES,
+  NO_WORKING_CHANGES,
+} from '../utils/resolve-diff.js';
 import type { DiffSource } from '../utils/resolve-diff.js';
 import { loadCopilotInstructions } from '../config/copilot-instructions.js';
 import type { CopilotInstructions } from '../config/copilot-instructions.js';
@@ -24,6 +29,10 @@ export interface RequestPreparationDeps {
   defaultWorkingDirectory: string;
   // config.copilot_instructions. When false, no instruction file is ever read.
   loadInstructions: boolean;
+  // config.require_cwd (ISS-047). When true, a request that would auto-capture
+  // a diff must name `cwd`; it is refused before any git runs otherwise. The
+  // CLI leaves this unset — its default directory is the caller's own.
+  requireCwdForCapture?: boolean;
 }
 
 // A diff review that is ready to go to a provider, or one that ended before any
@@ -160,7 +169,9 @@ async function runPrepared<T>(
 }
 
 function isEmptyCapture(error: string): boolean {
-  return error.startsWith(`${NO_STAGED_CHANGES}:`) || error.startsWith(`${NO_WORKING_CHANGES}:`);
+  return [NO_STAGED_CHANGES, NO_WORKING_CHANGES, NO_RANGE_CHANGES].some((sentinel) =>
+    error.startsWith(`${sentinel}:`),
+  );
 }
 
 /**
@@ -174,6 +185,17 @@ export function prepareDiffReview(
   deps: RequestPreparationDeps,
   args: { cwd?: string; source: DiffSource },
 ): Promise<Result<PreparedDiffReview>> {
+  if (args.source.kind === 'capture' && args.cwd === undefined && deps.requireCwdForCapture) {
+    return Promise.resolve(
+      err(
+        `${ErrorCode.INVALID_INPUT}: auto-capture needs cwd — the absolute path of the repository ` +
+          `or worktree to capture from. Without it the bridge would capture from its own launch ` +
+          `directory, "${escapeTerminalControls(deps.defaultWorkingDirectory)}", which may not be ` +
+          `where you are working. Pass cwd, pass the diff explicitly, or set "require_cwd": false ` +
+          `in .reviewbridge.json to accept the launch directory.`,
+      ),
+    );
+  }
   const requested = validateRequestedDirectory(deps, args.cwd);
   if (!requested.ok) return Promise.resolve(err(requested.error));
 

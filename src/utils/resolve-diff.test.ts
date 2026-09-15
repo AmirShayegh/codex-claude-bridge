@@ -7,6 +7,7 @@ import {
   withCapturedFrom,
   NO_STAGED_CHANGES,
   NO_WORKING_CHANGES,
+  NO_RANGE_CHANGES,
 } from './resolve-diff.js';
 import { ok, err } from './errors.js';
 import type { ResolvedWorkspace } from './workspace.js';
@@ -14,12 +15,14 @@ import type { ResolvedWorkspace } from './workspace.js';
 vi.mock('./git.js', () => ({
   getStagedDiff: vi.fn(),
   getWorkingDiff: vi.fn(),
+  getDiffBetween: vi.fn(),
 }));
 
-import { getStagedDiff, getWorkingDiff } from './git.js';
+import { getStagedDiff, getWorkingDiff, getDiffBetween } from './git.js';
 
 const mockGetStagedDiff = vi.mocked(getStagedDiff);
 const mockGetWorkingDiff = vi.mocked(getWorkingDiff);
+const mockGetDiffBetween = vi.mocked(getDiffBetween);
 
 // A caller standing in a SUBDIRECTORY of the repository: capture must be
 // anchored at the root, and the root is what gets reported back.
@@ -83,6 +86,43 @@ describe('normalizeCodeDiffSource', () => {
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error).toBe('auto_diff disabled and no diff provided');
     }
+  });
+
+  describe('committed ranges (ISS-049)', () => {
+    it('captures base..head as a range', () => {
+      expect(normalizeCodeDiffSource({ base: 'main', head: 'feature' })).toEqual({
+        ok: true,
+        data: { kind: 'capture', target: 'range', base: 'main', head: 'feature' },
+      });
+    });
+
+    it('defaults head to HEAD', () => {
+      expect(normalizeCodeDiffSource({ base: 'main' })).toEqual({
+        ok: true,
+        data: { kind: 'capture', target: 'range', base: 'main', head: 'HEAD' },
+      });
+    });
+
+    it('is a deliberate request, so auto_diff:false does not block it', () => {
+      expect(normalizeCodeDiffSource({ base: 'main', auto_diff: false }).ok).toBe(true);
+    });
+
+    it('refuses head without base', () => {
+      const result = normalizeCodeDiffSource({ head: 'feature' });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toMatch(/^INVALID_INPUT: head requires base/);
+    });
+
+    it('refuses a range alongside an explicit diff instead of picking one', () => {
+      const result = normalizeCodeDiffSource({ diff: sampleDiff, base: 'main' });
+      expect(result.ok).toBe(false);
+      if (!result.ok)
+        expect(result.error).toMatch(/^INVALID_INPUT: pass either diff or base\/head/);
+    });
+
+    it('lets a blank diff fall through to the range', () => {
+      expect(normalizeCodeDiffSource({ diff: '  ', base: 'main' }).ok).toBe(true);
+    });
   });
 });
 
@@ -171,7 +211,44 @@ describe('captureDiff', () => {
         expect(mockGetWorkingDiff).not.toHaveBeenCalled();
       },
     );
+  });
 
+  describe('committed ranges (ISS-049)', () => {
+    const RANGE = { kind: 'capture', target: 'range', base: 'main', head: 'feature' } as const;
+
+    it('diffs base..head at the repository root and reports it', async () => {
+      mockGetDiffBetween.mockResolvedValue(ok(sampleDiff));
+      const result = await captureDiff(RANGE, WORKSPACE);
+      expect(mockGetDiffBetween).toHaveBeenCalledWith('main', 'feature', '/work/repo-b');
+      expect(result).toEqual({ ok: true, data: sampleDiff, capturedFrom: '/work/repo-b' });
+    });
+
+    it('reports NO_RANGE_CHANGES naming both refs and the directory', async () => {
+      mockGetDiffBetween.mockResolvedValue(ok(''));
+      const result = await captureDiff(RANGE, WORKSPACE);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toMatch(new RegExp(`^${NO_RANGE_CHANGES}:`));
+        expect(result.error).toContain('No changes between main and feature in /work/repo-b');
+      }
+      expect(result.capturedFrom).toBe('/work/repo-b');
+    });
+
+    it('refuses a range outside a work tree without calling git', async () => {
+      const result = await captureDiff(RANGE, NOT_A_REPO);
+      expect(result.ok).toBe(false);
+      expect(mockGetDiffBetween).not.toHaveBeenCalled();
+    });
+
+    it('passes a git ref failure through with the capture location', async () => {
+      mockGetDiffBetween.mockResolvedValue(err('GIT_ERROR: fatal: bad revision'));
+      const result = await captureDiff(RANGE, WORKSPACE);
+      expect(result).toEqual({
+        ok: false,
+        error: 'GIT_ERROR: fatal: bad revision (capture attempted from "/work/repo-b")',
+        capturedFrom: '/work/repo-b',
+      });
+    });
   });
 
   describe('empty captures name where they looked', () => {

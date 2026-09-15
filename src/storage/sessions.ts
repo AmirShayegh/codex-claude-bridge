@@ -92,11 +92,21 @@ export function initSessionsDb(db: Database.Database): void {
 const SELECT_SESSION =
   'SELECT session_id, status, created_at, completed_at, provider, model_identity_json FROM sessions WHERE session_id = ?';
 
+// SQLite's own `datetime('now')` shape, so a caller-supplied start compares
+// with the rows the database stamps itself.
+export function toSessionTimestamp(epochMs: number): string {
+  return new Date(epochMs).toISOString().slice(0, 19).replace('T', ' ');
+}
+
 export function getOrCreateSession(
   db: Database.Database,
   sessionId: string,
   provider?: string,
   modelIdentityJson?: string | null,
+  // When the row is created after the fact — a fresh review that failed, whose
+  // id only became known mid-turn — the caller supplies when the review really
+  // began so elapsed time reads as wall clock, not zero (probe-loop, ISS-046).
+  createdAt?: string,
 ): Result<SessionInfo> {
   try {
     const existing = db.prepare(SELECT_SESSION).get(sessionId) as SessionInfo | undefined;
@@ -107,9 +117,15 @@ export function getOrCreateSession(
       return ok(existing);
     }
 
-    db.prepare(
-      'INSERT INTO sessions (session_id, provider, model_identity_json) VALUES (?, ?, ?)',
-    ).run(sessionId, provider ?? null, modelIdentityJson ?? null);
+    if (createdAt === undefined) {
+      db.prepare(
+        'INSERT INTO sessions (session_id, provider, model_identity_json) VALUES (?, ?, ?)',
+      ).run(sessionId, provider ?? null, modelIdentityJson ?? null);
+    } else {
+      db.prepare(
+        'INSERT INTO sessions (session_id, provider, model_identity_json, created_at) VALUES (?, ?, ?, ?)',
+      ).run(sessionId, provider ?? null, modelIdentityJson ?? null, createdAt);
+    }
 
     const created = db.prepare(SELECT_SESSION).get(sessionId) as SessionInfo;
 

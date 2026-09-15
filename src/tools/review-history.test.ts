@@ -21,6 +21,24 @@ beforeEach(() => {
   handler = mockServer.registerTool.mock.calls[0][2] as HandlerFn;
 });
 
+describe('registerReviewHistoryTool without storage (ISS-042)', () => {
+  it('answers STORAGE_UNAVAILABLE with the startup diagnosis instead of crashing', async () => {
+    const server = { registerTool: vi.fn() };
+    registerReviewHistoryTool(
+      server as unknown as McpServer,
+      undefined,
+      'SQLite native addon could not load; run npm rebuild better-sqlite3',
+    );
+    const run = server.registerTool.mock.calls[0][2] as HandlerFn;
+
+    const result = await run({ last_n: 5 }, {});
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/^STORAGE_UNAVAILABLE: /);
+    expect(result.content[0].text).toContain('npm rebuild better-sqlite3');
+  });
+});
+
 describe('registerReviewHistoryTool', () => {
   it('registers tool with name review_history', () => {
     expect(mockServer.registerTool).toHaveBeenCalledTimes(1);
@@ -57,6 +75,29 @@ describe('registerReviewHistoryTool', () => {
     expect(parsed.reviews).toHaveLength(1);
     expect(parsed.reviews[0].summary).toBe('Good plan');
     expect(parsed.next_cursor).toBeNull();
+  });
+
+  it('reports the session state alongside a session query so a failed or stalled review leaves evidence (ISS-046)', async () => {
+    db.prepare(
+      "INSERT INTO sessions (session_id, status, created_at, completed_at, provider) VALUES (?, 'failed', '2026-01-01 00:00:00', '2026-01-01 00:30:00', 'codex')",
+    ).run('thread_stalled');
+
+    const parsed = JSON.parse(
+      (await handler({ session_id: 'thread_stalled' }, {})).content[0].text,
+    );
+    expect(parsed.reviews).toEqual([]);
+    expect(parsed.session).toEqual({
+      status: 'failed',
+      provider: 'codex',
+      created_at: '2026-01-01T00:00:00.000Z',
+      completed_at: '2026-01-01T00:30:00.000Z',
+    });
+  });
+
+  it('reports session: null for a session id it has never seen', async () => {
+    const parsed = JSON.parse((await handler({ session_id: 'never' }, {})).content[0].text);
+    expect(parsed.reviews).toEqual([]);
+    expect(parsed.session).toBeNull();
   });
 
   it('returns last_n recent reviews when no session_id', async () => {

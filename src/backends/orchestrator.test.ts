@@ -176,7 +176,10 @@ describe('orchestrator — allowsModelOverrideOnResume capability', () => {
     expect(calls.every((c) => c.model === 'm')).toBe(true);
   });
 
-  it('capability=false multi-chunk: model applies on chunk 1 only, omitted on resumed chunks', async () => {
+  it('capability=false multi-chunk: every resumed chunk carries the model chunk 1 started on (ISS-045)', async () => {
+    // Omitting the model on a resumed chunk does NOT make the provider inherit
+    // chunk 1's model: the Codex CLI falls back to ~/.codex/config.toml's
+    // default, which the account may reject. The resolved model is re-sent.
     const { turn, calls } = makeFakeTurn(CANNED_CODE);
     const res = await runCodeReview(
       { execution: EXEC, diff: bigDiff(3, 30), model: 'm' },
@@ -186,7 +189,7 @@ describe('orchestrator — allowsModelOverrideOnResume capability', () => {
     expect(res.ok).toBe(true);
     expect(calls.length).toBeGreaterThanOrEqual(2);
     expect(calls[0].model).toBe('m');
-    expect(calls.slice(1).every((c) => c.model === undefined)).toBe(true);
+    expect(calls.slice(1).every((c) => c.model === 'm')).toBe(true);
   });
 });
 
@@ -284,7 +287,7 @@ describe('orchestrator — model resolution wiring', () => {
     expect(calls).toHaveLength(0);
   });
 
-  it('omits the per-turn model and does not substitute the current default on a Codex-style resume', async () => {
+  it('re-sends the retained session model on a Codex-style resume and never substitutes the current default (ISS-045)', async () => {
     const { turn, calls } = makeFakeTurn(CANNED_PLAN);
     const resolveModel = vi.fn().mockResolvedValue('CURRENT-DEFAULT');
     const d = resolverDeps(false, resolveModel);
@@ -298,7 +301,7 @@ describe('orchestrator — model resolution wiring', () => {
     });
     const res = await runPlanReview({ execution: EXEC, plan: 'x', session_id: 's1' }, d, turn);
     expect(calls[0].sessionId).toBe('s1');
-    expect(calls[0].model).toBeUndefined();
+    expect(calls[0].model).toBe('gpt-5.5');
     expect(calls[0].resolvedModel).toBe('gpt-5.5');
     expect(resolveModel).not.toHaveBeenCalled();
     expect(res.ok && res.data.models?.[0]).toMatchObject({
@@ -357,6 +360,51 @@ describe('orchestrator — model resolution wiring', () => {
         evidence: 'unavailable',
       },
     ]);
+  });
+
+  it('resolves and forwards an explicit per-call model on a retaining resume instead of the retained one (ISS-045)', async () => {
+    const { turn, calls } = makeFakeTurn(CANNED_PLAN);
+    const resolveModel = vi.fn(async (requested: string | undefined) => `RESOLVED:${requested}`);
+    const d = resolverDeps(true, resolveModel);
+    d.retainSessionModelOnResume = true;
+    d.lookupSessionModel = () => ({
+      provider: 'codex',
+      role: 'review',
+      requested: 'gpt-5.5',
+      resolved: 'gpt-5.5',
+      observed: 'gpt-5.5',
+      evidence: 'runtime_session_record',
+    });
+    const res = await runPlanReview(
+      { execution: EXEC, plan: 'x', session_id: 's1', model: 'gpt-6-astra' },
+      d,
+      turn,
+    );
+    expect(resolveModel).toHaveBeenCalledWith('gpt-6-astra');
+    expect(calls[0].sessionId).toBe('s1');
+    expect(calls[0].model).toBe('RESOLVED:gpt-6-astra');
+    expect(res.ok && res.data.models?.[0]).toMatchObject({
+      requested: 'gpt-6-astra',
+      resolved: 'RESOLVED:gpt-6-astra',
+    });
+  });
+
+  it('retains the session model on a retaining resume with no per-call model even when overrides are allowed (ISS-045)', async () => {
+    const { turn, calls } = makeFakeTurn(CANNED_PLAN);
+    const resolveModel = vi.fn().mockResolvedValue('CURRENT-DEFAULT');
+    const d = resolverDeps(true, resolveModel);
+    d.retainSessionModelOnResume = true;
+    d.lookupSessionModel = () => ({
+      provider: 'codex',
+      role: 'review',
+      requested: null,
+      resolved: 'gpt-5.5',
+      observed: null,
+      evidence: 'bridge_selection',
+    });
+    await runPlanReview({ execution: EXEC, plan: 'x', session_id: 's1' }, d, turn);
+    expect(resolveModel).not.toHaveBeenCalled();
+    expect(calls[0].model).toBe('gpt-5.5');
   });
 
   it('forwards the resolved model on resume when the backend allows it (Gemini-style)', async () => {
@@ -426,6 +474,60 @@ describe('orchestrator — model resolution wiring', () => {
     expect(calls.every((c) => c.resolvedModel === 'RESOLVED-X' && c.model === 'RESOLVED-X')).toBe(
       true,
     );
+  });
+});
+
+describe('orchestrator — whole-review deadline (ISS-046)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('hands every turn the same absolute deadline when review_deadline_seconds is set', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    const { turn, calls } = makeCountingTurn(CANNED_CODE);
+    const res = await runCodeReview(
+      { execution: EXEC, diff: bigDiff(3, 30) },
+      deps(false, { max_chunk_tokens: 2500, review_deadline_seconds: 60 }),
+      turn,
+    );
+    expect(res.ok).toBe(true);
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    const expected = new Date('2026-01-01T00:01:00Z').getTime();
+    expect(calls.every((c) => c.deadlineAt === expected)).toBe(true);
+  });
+
+  it('leaves deadlineAt undefined when no deadline is configured', async () => {
+    const { turn, calls } = makeCountingTurn(CANNED_CODE);
+    await runCodeReview({ execution: EXEC, diff: SMALL_DIFF }, deps(false), turn);
+    expect(calls[0].deadlineAt).toBeUndefined();
+  });
+
+  it('stops between chunks once the deadline has passed and reports the established session', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    const calls: TurnParams[] = [];
+    const turn: TurnRunner = <T extends Record<string, unknown>>(params: TurnParams) => {
+      calls.push(params);
+      // Chunk 1 takes longer than the whole budget.
+      vi.setSystemTime(new Date('2026-01-01T00:02:00Z'));
+      const canned: Record<string, unknown> = CANNED_CODE;
+      return Promise.resolve(
+        ok({ ...canned, session_id: 'thread-1' } as T & { session_id: string }),
+      );
+    };
+    const res = await runCodeReview(
+      { execution: EXEC, diff: bigDiff(3, 30) },
+      deps(false, { max_chunk_tokens: 2500, review_deadline_seconds: 60 }),
+      turn,
+    );
+    expect(calls).toHaveLength(1);
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error).toContain('REVIEW_TIMEOUT');
+      expect(res.error).toContain('review_deadline_seconds');
+      expect(res.session_id).toBe('thread-1');
+    }
   });
 });
 

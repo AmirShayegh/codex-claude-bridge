@@ -3,11 +3,13 @@ import type Database from 'better-sqlite3';
 import type { SessionInfo } from '../storage/sessions.js';
 import type { SessionRegistry } from '../storage/session-registry.js';
 import { SessionIdSchema } from '../utils/input-validation.js';
+import { storageUnavailable } from '../utils/errors.js';
 
 export function registerReviewStatusTool(
   server: McpServer,
-  db: Database.Database,
+  db: Database.Database | undefined,
   registry?: SessionRegistry,
+  unavailableReason?: string,
 ): void {
   server.registerTool(
     'review_status',
@@ -32,9 +34,25 @@ export function registerReviewStatusTool(
                   status: live.status,
                   session_id: live.sessionId,
                   elapsed_seconds: Math.max(0, Math.round((end - live.startedAt) / 1000)),
+                  // Where the clock comes from (ISS-046): wall time since this
+                  // process admitted the review, not provider progress.
+                  elapsed_source: 'live_registry',
+                  elapsed_basis: 'wall_clock',
+                  started_at: new Date(live.startedAt).toISOString(),
+                  completed_at:
+                    live.completedAt === null ? null : new Date(live.completedAt).toISOString(),
                 }),
               },
             ],
+          };
+        }
+        // Without storage (ISS-042) the live registry is the only source; a
+        // session it does not hold cannot be told apart from one that never
+        // existed, so say why rather than answering not_found.
+        if (!db) {
+          return {
+            content: [{ type: 'text' as const, text: storageUnavailable(unavailableReason) }],
+            isError: true,
           };
         }
         const row = db
@@ -55,13 +73,9 @@ export function registerReviewStatusTool(
         }
 
         const createdAt = new Date(row.created_at + 'Z');
-        let elapsedSeconds: number;
-        if (row.completed_at) {
-          const completedAt = new Date(row.completed_at + 'Z');
-          elapsedSeconds = Math.round((completedAt.getTime() - createdAt.getTime()) / 1000);
-        } else {
-          elapsedSeconds = Math.round((Date.now() - createdAt.getTime()) / 1000);
-        }
+        const completedAt = row.completed_at ? new Date(row.completed_at + 'Z') : null;
+        const end = completedAt ?? new Date();
+        const elapsedSeconds = Math.round((end.getTime() - createdAt.getTime()) / 1000);
 
         return {
           content: [
@@ -71,6 +85,11 @@ export function registerReviewStatusTool(
                 status: row.status,
                 session_id: row.session_id,
                 elapsed_seconds: elapsedSeconds,
+                // Wall time since the stored session row was created (ISS-046).
+                elapsed_source: 'history_db',
+                elapsed_basis: 'wall_clock',
+                started_at: createdAt.toISOString(),
+                completed_at: completedAt === null ? null : completedAt.toISOString(),
               }),
             },
           ],

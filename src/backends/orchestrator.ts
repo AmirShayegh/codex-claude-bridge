@@ -163,6 +163,7 @@ const PlanReviewResponseSchema = PlanReviewResultSchema.omit({
   deliberation: true,
   models: true,
   provenance: true,
+  failover: true,
 });
 const CodeReviewResponseSchema = CodeReviewResultSchema.omit({
   session_id: true,
@@ -176,6 +177,7 @@ const CodeReviewResponseSchema = CodeReviewResultSchema.omit({
   deliberation: true,
   models: true,
   provenance: true,
+  failover: true,
 });
 const PrecommitResponseSchema = PrecommitResultSchema.omit({
   session_id: true,
@@ -187,6 +189,7 @@ const PrecommitResponseSchema = PrecommitResultSchema.omit({
   review_mode: true,
   models: true,
   provenance: true,
+  failover: true,
 });
 
 // The exact model-facing schemas handed to the provider SDKs (via toJSONSchema in
@@ -226,6 +229,34 @@ export interface TurnParams {
   // bridge knows it. It stays undefined for an unrecorded legacy Codex resume
   // instead of substituting today's default. Used for error context otherwise.
   resolvedModel?: string;
+  // Absolute epoch-ms deadline for the WHOLE review this turn belongs to
+  // (config.review_deadline_seconds), when one is configured. A backend bounds
+  // its own turn by the smaller of its per-turn timeout and the time left to
+  // this deadline (ISS-046).
+  deadlineAt?: number;
+}
+
+// The whole-review deadline for one review call, computed once at its start.
+function reviewDeadline(config: ReviewBridgeConfig): number | undefined {
+  return config.review_deadline_seconds === undefined
+    ? undefined
+    : Date.now() + config.review_deadline_seconds * 1000;
+}
+
+// Between chunks: has the whole-review deadline already passed? Returns the
+// error to surface, or undefined to continue.
+function deadlineExceeded(
+  config: ReviewBridgeConfig,
+  deadlineAt: number | undefined,
+  done: number,
+  total: number,
+): string | undefined {
+  if (deadlineAt === undefined || Date.now() < deadlineAt) return undefined;
+  return (
+    `${ErrorCode.REVIEW_TIMEOUT}: review_deadline_seconds (${config.review_deadline_seconds}s) ` +
+    `reached after ${done} of ${total} chunks. Raise it in .reviewbridge.json, reduce the diff, ` +
+    `or review in smaller pieces.`
+  );
 }
 
 export type TurnRunner = <T extends Record<string, unknown>>(
@@ -235,10 +266,15 @@ export type TurnRunner = <T extends Record<string, unknown>>(
 export interface ReviewFlowDeps {
   config: ReviewBridgeConfig;
   provider: ReviewProvider;
-  // When false (e.g. Codex, whose SDK reasserts --model on resume) the flow
-  // rejects session_id + model and omits the model on resumed chunks. When true
-  // (e.g. Gemini) the caller may change model on a resumed session.
+  // When false the flow rejects session_id + model. When true the caller may
+  // change model on a resumed session.
   allowsModelOverrideOnResume: boolean;
+  // When true (Codex), a resume that names no per-call model retains the
+  // session's recorded identity and re-sends it, never resolving today's
+  // configured default in its place. A legacy session with no recorded identity
+  // sends no model at all. When false/unset (Gemini), a resume resolves the
+  // requested-or-configured model exactly like a fresh call.
+  retainSessionModelOnResume?: boolean;
   // Resolve a model spec to a concrete id the backend can run. `requested` is the
   // per-call override or config.model (undefined if neither set). Each backend
   // maps 'latest' (and unset) to its own newest supported model — Codex bounded
@@ -285,10 +321,12 @@ async function prepareModel(
   deps: ReviewFlowDeps,
   quiet = false,
 ): Promise<Result<PreparedModel>> {
-  // A Codex resume must retain the bridge's prior identity rather than replacing
+  // A retaining resume keeps the bridge's prior identity rather than replacing
   // it with today's configured default. Fresh runtime observation may disagree;
-  // that mismatch is reported after the successful turn.
-  if (input.session_id && !deps.allowsModelOverrideOnResume) {
+  // that mismatch is reported after the successful turn. An explicit per-call
+  // model is a deliberate change and resolves like a fresh request.
+  const retains = deps.retainSessionModelOnResume ?? !deps.allowsModelOverrideOnResume;
+  if (input.session_id && retains && !input.model) {
     const known = lookupKnownModel(deps, input.session_id);
     const resolved = safeModel(known?.resolved);
     const observed = safeModel(known?.observed);
@@ -400,8 +438,9 @@ export async function runPlanReview(
     responseSchema: PlanReviewResponseSchema,
     workingDirectory,
     sessionId: input.session_id,
-    model: perTurnModel(prepared.turnResolved, input.session_id, allowsModelOverrideOnResume),
+    model: perTurnModel(prepared.turnResolved),
     resolvedModel: prepared.turnResolved,
+    deadlineAt: reviewDeadline(config),
   });
   return enrichModelIdentity(result, deps, prepared, 'review');
 }
@@ -439,17 +478,14 @@ async function resolveModelValidated(
   return ok(resolved.data);
 }
 
-// The model to apply on a given turn. Backends that reassert model on resume
-// (Codex) must omit it when resuming an existing session — the thread keeps the
-// model it was created with. Backends that allow a mid-session model change
-// (Gemini) always send the resolved model.
-function perTurnModel(
-  resolved: string | undefined,
-  sessionId: string | undefined,
-  allowsModelOverrideOnResume: boolean,
-): string | undefined {
-  if (allowsModelOverrideOnResume) return resolved;
-  return sessionId ? undefined : resolved;
+// The model to apply on a given turn: always the resolved one, on a fresh start
+// and on a resume alike. A resumed turn that omits the model does NOT inherit
+// the session's model — the Codex CLI falls back to ~/.codex/config.toml's
+// default, which a ChatGPT-tier account can reject (ISS-045). `resolved` is
+// undefined only for a legacy resume with no recorded identity, where there is
+// nothing truthful to send.
+function perTurnModel(resolved: string | undefined): string | undefined {
+  return resolved;
 }
 
 // Session id to run a given chunk against. When resumesAcrossChunks is true
@@ -519,6 +555,7 @@ export async function runCodeReview(
   const preparedResult = await prepareModel(input, deps);
   if (!preparedResult.ok) return preparedResult;
   const prepared = preparedResult.data;
+  const deadlineAt = reviewDeadline(config);
 
   // Single chunk — standard path (no chunks_reviewed)
   if (chunks.length === 1) {
@@ -535,8 +572,9 @@ export async function runCodeReview(
       responseSchema: CodeReviewResponseSchema,
       workingDirectory,
       sessionId: input.session_id,
-      model: perTurnModel(prepared.turnResolved, input.session_id, allowsModelOverrideOnResume),
+      model: perTurnModel(prepared.turnResolved),
       resolvedModel: prepared.turnResolved,
+      deadlineAt,
     });
     return enrichModelIdentity(result, deps, prepared, 'review');
   }
@@ -556,6 +594,12 @@ export async function runCodeReview(
   let reviewSessionId: string | undefined;
 
   for (let i = 0; i < chunks.length; i++) {
+    // The session to blame on a failure: the threaded session when resuming,
+    // else chunk 1's id (or a cross-phase input session if chunk 1 itself
+    // failed). Surfaced so the tool layer can mark it failed (T-001).
+    const established = resumesAcrossChunks ? threaded : (reviewSessionId ?? input.session_id);
+    const late = deadlineExceeded(config, deadlineAt, i, chunks.length);
+    if (late !== undefined) return err<CodeReviewResult>(late, established);
     const chunkHeader = `Chunk ${i + 1} of ${chunks.length}: reviewing the following files only.`;
     const prompt = buildCodeReviewPrompt({ ...input, diff: chunks[i], chunkHeader }, codeConfig);
     const chunkSession = chunkSessionFor(i, resumesAcrossChunks, threaded, input.session_id);
@@ -566,20 +610,12 @@ export async function runCodeReview(
       responseSchema: CodeReviewResponseSchema,
       workingDirectory,
       sessionId: chunkSession,
-      model: perTurnModel(prepared.turnResolved, chunkSession, allowsModelOverrideOnResume),
+      model: perTurnModel(prepared.turnResolved),
       resolvedModel: prepared.turnResolved,
+      deadlineAt,
     });
 
     if (!result.ok) {
-      // Surface the partial session id so the tool layer can mark this session
-      // failed (T-001): the threaded session when resuming, else chunk 1's id
-      // (or a cross-phase input session if chunk 1 itself failed).
-      let established: string | undefined;
-      if (resumesAcrossChunks) {
-        established = threaded;
-      } else {
-        established = reviewSessionId ?? input.session_id;
-      }
       return established ? err<CodeReviewResult>(result.error, established) : result;
     }
     chunkResults.push(result.data);
@@ -644,6 +680,7 @@ export async function runPrecommitReview(
   const preparedResult = await prepareModel(input, deps);
   if (!preparedResult.ok) return preparedResult;
   const prepared = preparedResult.data;
+  const deadlineAt = reviewDeadline(config);
 
   // Single chunk — standard path (no chunks_reviewed)
   if (chunks.length === 1) {
@@ -659,8 +696,9 @@ export async function runPrecommitReview(
       responseSchema: PrecommitResponseSchema,
       workingDirectory,
       sessionId: input.session_id,
-      model: perTurnModel(prepared.turnResolved, input.session_id, allowsModelOverrideOnResume),
+      model: perTurnModel(prepared.turnResolved),
       resolvedModel: prepared.turnResolved,
+      deadlineAt,
     });
     return enrichModelIdentity(result, deps, prepared, 'review');
   }
@@ -676,6 +714,10 @@ export async function runPrecommitReview(
   let reviewSessionId: string | undefined;
 
   for (let i = 0; i < chunks.length; i++) {
+    // T-001: see runCodeReview chunk loop for rationale.
+    const established = resumesAcrossChunks ? threaded : (reviewSessionId ?? input.session_id);
+    const late = deadlineExceeded(config, deadlineAt, i, chunks.length);
+    if (late !== undefined) return err<PrecommitResult>(late, established);
     const chunkHeader = `Chunk ${i + 1} of ${chunks.length}: checking the following files only.`;
     const prompt = buildPrecommitPrompt(
       { ...input, diff: chunks[i], chunkHeader },
@@ -689,18 +731,12 @@ export async function runPrecommitReview(
       responseSchema: PrecommitResponseSchema,
       workingDirectory,
       sessionId: chunkSession,
-      model: perTurnModel(prepared.turnResolved, chunkSession, allowsModelOverrideOnResume),
+      model: perTurnModel(prepared.turnResolved),
       resolvedModel: prepared.turnResolved,
+      deadlineAt,
     });
 
     if (!result.ok) {
-      // T-001: see runCodeReview chunk loop for rationale.
-      let established: string | undefined;
-      if (resumesAcrossChunks) {
-        established = threaded;
-      } else {
-        established = reviewSessionId ?? input.session_id;
-      }
       return established ? err<PrecommitResult>(result.error, established) : result;
     }
     chunkResults.push(result.data);
@@ -742,7 +778,7 @@ export async function runCrossReview(
     }),
     responseSchema: CrossReviewResponseSchema,
     workingDirectory: input.execution.workingDirectory,
-    model: perTurnModel(prepared.turnResolved, undefined, deps.allowsModelOverrideOnResume),
+    model: perTurnModel(prepared.turnResolved),
     resolvedModel: prepared.turnResolved,
   });
   const enriched = await enrichModelIdentity(result, deps, prepared, 'adjudication');

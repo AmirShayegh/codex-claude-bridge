@@ -81,8 +81,10 @@ Each `models[]` entry reports:
 - `requested` is the per-call/config selector considered for the turn. It is `null` for provider
   defaults and Codex resumes where no model override is applied.
 - `resolved` is the concrete label selected or retained by the bridge.
-- `observed` is a runtime-recorded label when one is available. Codex can read this from its local
-  session record; Gemini currently reports `null` because `agy` has no equivalent observation.
+- `observed` is a runtime-recorded label when one is available. Codex reads it from its local
+  session record; Gemini reports the model `agy` named in its own `init` event for a run made by
+  this server process, and `null` for a session this process did not run. A mismatch between
+  `resolved` and `observed` is logged on stderr.
 - `role` distinguishes normal review turns from deliberate-deep adjudication turns.
 - `evidence` says whether identity came from a runtime session record, bridge selection, or was
   unavailable.
@@ -141,6 +143,13 @@ npx codex-claude-bridge@latest review-plan --plan plan.md
 git diff main | npx codex-claude-bridge@latest review-code --diff -
 ```
 
+**Review a branch or landed commits (no pasted diff, no scratch worktree):**
+
+```bash
+npx codex-claude-bridge@latest review-code --base main            # main..HEAD
+npx codex-claude-bridge@latest review-code --base v1.2.0 --head v1.3.0
+```
+
 **Review another checkout or worktree:**
 
 ```bash
@@ -160,15 +169,15 @@ Add `--json` to any command for raw JSON output. Use `--help` to see all options
 
 Send an implementation plan for architectural/feasibility review.
 
-| Parameter    | Type                      | Required | Description                                                                                                                                                                                                                                                                     |
-| ------------ | ------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `plan`       | string                    | yes      | The implementation plan to review                                                                                                                                                                                                                                               |
-| `cwd`        | string                    | no       | Absolute path to the directory this review runs in — the repository or git worktree being reviewed. Omit to use the directory the server was started in. Not expanded for `~`; applies to this call only.                                                                       |
-| `context`    | string                    | no       | Project context and constraints                                                                                                                                                                                                                                                 |
-| `focus`      | string[]                  | no       | Review focus areas (e.g. `["architecture", "security"]`)                                                                                                                                                                                                                        |
-| `depth`      | `"quick"` \| `"thorough"` | no       | Review depth                                                                                                                                                                                                                                                                    |
-| `session_id` | string                    | no       | Continue from a previous review session                                                                                                                                                                                                                                         |
-| `model`      | string                    | no       | Override the model for this call (e.g. `"gpt-5.6-sol"` or `"latest"`). With Codex this can't be combined with `session_id`; the bridge retains the prior resolved identity and reports any different runtime-observed label. Gemini allows changing model on a resumed session. |
+| Parameter    | Type                      | Required | Description                                                                                                                                                                                                                                                                                               |
+| ------------ | ------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `plan`       | string                    | yes      | The implementation plan to review                                                                                                                                                                                                                                                                         |
+| `cwd`        | string                    | no       | Absolute path to the directory this review runs in — the repository or git worktree being reviewed. Omit to use the directory the server was started in. Not expanded for `~`; applies to this call only.                                                                                                 |
+| `context`    | string                    | no       | Project context and constraints                                                                                                                                                                                                                                                                           |
+| `focus`      | string[]                  | no       | Review focus areas (e.g. `["architecture", "security"]`)                                                                                                                                                                                                                                                  |
+| `depth`      | `"quick"` \| `"thorough"` | no       | Review depth                                                                                                                                                                                                                                                                                              |
+| `session_id` | string                    | no       | Continue from a previous review session                                                                                                                                                                                                                                                                   |
+| `model`      | string                    | no       | Override the model for this call (e.g. `"gpt-5.6-sol"` or `"latest"`). May be combined with `session_id` to change model mid-session (both providers). Without it a resumed session keeps the model it was recorded with, re-sent on every turn; the bridge reports any different runtime-observed label. |
 
 Returns: `{ verdict, summary, findings[], session_id, models[], provenance }`
 
@@ -176,18 +185,20 @@ Returns: `{ verdict, summary, findings[], session_id, models[], provenance }`
 
 Send a code diff for code review.
 
-| Parameter    | Type     | Required | Description                                                                                                                                                                                                                                                   |
-| ------------ | -------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `diff`       | string   | no       | Git diff to review. Omit to auto-capture `git diff HEAD`.                                                                                                                                                                                                     |
-| `cwd`        | string   | no       | Absolute path to the directory this review runs in — the repository or git worktree being reviewed. Auto-capture, repository instruction files, and the reviewer subprocess all use it. Omit to use the server's launch directory. Applies to this call only. |
-| `auto_diff`  | boolean  | no       | Auto-capture working-tree changes via `git diff HEAD` when `diff` is omitted or blank (default: `true`)                                                                                                                                                       |
-| `context`    | string   | no       | Intent of the changes                                                                                                                                                                                                                                         |
-| `session_id` | string   | no       | Continue from previous review (e.g. plan review session)                                                                                                                                                                                                      |
-| `criteria`   | string[] | no       | Review criteria (e.g. `["bugs", "security", "performance"]`)                                                                                                                                                                                                  |
-| `model`      | string   | no       | Override the model for this call (e.g. `"gpt-5.6-sol"` or `"latest"`). With Codex this can't be combined with `session_id`; compare `resolved` and `observed` to see what the runtime recorded. Gemini allows changing model on a resumed session.            |
+| Parameter    | Type     | Required | Description                                                                                                                                                                                                                                                                                                                                 |
+| ------------ | -------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `diff`       | string   | no       | Git diff to review. Omit to auto-capture `git diff HEAD`.                                                                                                                                                                                                                                                                                   |
+| `base`       | string   | no       | Review a committed range instead: the ref to diff from (e.g. `"main"`, `"origin/main"`, `"HEAD~1"`, a commit). Runs `git diff <base> <head>` in `cwd`. Cannot be combined with `diff`.                                                                                                                                                      |
+| `head`       | string   | no       | The ref to diff to when `base` is given (default: `"HEAD"`). Requires `base`.                                                                                                                                                                                                                                                               |
+| `cwd`        | string   | no       | Absolute path to the directory this review runs in — the repository or git worktree being reviewed. Auto-capture, repository instruction files, and the reviewer subprocess all use it. Required for auto-capture unless `require_cwd` is `false`, in which case omitting it uses the server's launch directory. Applies to this call only. |
+| `auto_diff`  | boolean  | no       | Auto-capture working-tree changes via `git diff HEAD` when `diff` is omitted or blank (default: `true`)                                                                                                                                                                                                                                     |
+| `context`    | string   | no       | Intent of the changes                                                                                                                                                                                                                                                                                                                       |
+| `session_id` | string   | no       | Continue from previous review (e.g. plan review session)                                                                                                                                                                                                                                                                                    |
+| `criteria`   | string[] | no       | Review criteria (e.g. `["bugs", "security", "performance"]`)                                                                                                                                                                                                                                                                                |
+| `model`      | string   | no       | Override the model for this call (e.g. `"gpt-5.6-sol"` or `"latest"`). May be combined with `session_id` to change model mid-session. Without it a resumed session keeps its recorded model; compare `resolved` and `observed` to see what the runtime recorded.                                                                            |
 
 Returns: `{ verdict, summary, findings[], session_id, models[], provenance }`, plus `captured_from`
-when the diff was auto-captured.
+when the diff was auto-captured or taken from a `base`/`head` range.
 
 Findings include `file` and `line` references when available.
 
@@ -195,14 +206,14 @@ Findings include `file` and `line` references when available.
 
 Quick pre-commit sanity check. Auto-captures staged git changes by default.
 
-| Parameter    | Type     | Required | Description                                                                                                                                                                                                                                                   |
-| ------------ | -------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `auto_diff`  | boolean  | no       | Auto-capture `git diff --staged` (default: `true`)                                                                                                                                                                                                            |
-| `diff`       | string   | no       | Explicit diff instead of auto-capture                                                                                                                                                                                                                         |
-| `cwd`        | string   | no       | Absolute path to the directory this review runs in — the repository or git worktree being reviewed. Auto-capture, repository instruction files, and the reviewer subprocess all use it. Omit to use the server's launch directory. Applies to this call only. |
-| `session_id` | string   | no       | Continue from previous review                                                                                                                                                                                                                                 |
-| `checklist`  | string[] | no       | Custom pre-commit checks                                                                                                                                                                                                                                      |
-| `model`      | string   | no       | Override the model for this call (e.g. `"gpt-5.6-sol"` or `"latest"`). With Codex this can't be combined with `session_id`; compare `resolved` and `observed` to see what the runtime recorded. Gemini allows changing model on a resumed session.            |
+| Parameter    | Type     | Required | Description                                                                                                                                                                                                                                                                                                                                 |
+| ------------ | -------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `auto_diff`  | boolean  | no       | Auto-capture `git diff --staged` (default: `true`)                                                                                                                                                                                                                                                                                          |
+| `diff`       | string   | no       | Explicit diff instead of auto-capture                                                                                                                                                                                                                                                                                                       |
+| `cwd`        | string   | no       | Absolute path to the directory this review runs in — the repository or git worktree being reviewed. Auto-capture, repository instruction files, and the reviewer subprocess all use it. Required for auto-capture unless `require_cwd` is `false`, in which case omitting it uses the server's launch directory. Applies to this call only. |
+| `session_id` | string   | no       | Continue from previous review                                                                                                                                                                                                                                                                                                               |
+| `checklist`  | string[] | no       | Custom pre-commit checks                                                                                                                                                                                                                                                                                                                    |
+| `model`      | string   | no       | Override the model for this call (e.g. `"gpt-5.6-sol"` or `"latest"`). May be combined with `session_id` to change model mid-session. Without it a resumed session keeps its recorded model; compare `resolved` and `observed` to see what the runtime recorded.                                                                            |
 
 Returns: `{ ready_to_commit, blockers[], warnings[], session_id, models[], provenance }`, plus
 `captured_from` when the diff was auto-captured.
@@ -323,6 +334,7 @@ All fields are optional. Missing fields use the defaults shown above. Large diff
 - **`provider`** — `"codex"` (default) or `"gemini"`. Selects which backend reviews.
 - **`mode`** — `"failover"` (default), `"single"`, `"deliberate"`, or `"deliberate-deep"`. Picks how the two providers combine; see [Provider failover](#provider-failover) and [Deliberation](#deliberation). When unset it's derived from `fallback`.
 - **`fallback`** — `true` (default) auto-fails-over to the other provider when the configured one is out of usage or unavailable. Set `false` (equivalently `"mode": "single"`) for strict single-provider behavior.
+- **`require_cwd`** — `true` (default) refuses an MCP `review_code`/`review_precommit` call that would auto-capture a diff without `cwd`, returning `INVALID_INPUT` instead of capturing from the server's launch directory (which, from a worktree or second checkout, is silently the wrong repository). Set `false` for a server that only ever serves the repository it was started in. Explicit diffs, `review_plan`, and the CLI are unaffected.
 - **`reasoning_effort`** — Codex only. Gemini's effort is baked into its model name (e.g. `"Gemini 3.8 Flash (High)"`), so the field is ignored for Gemini.
 - **`codex_path`** — absolute path to a codex binary for the Codex SDK to spawn (the `CODEX_PATH` env var works too; the config field wins). Normally unnecessary: when unset, the SDK uses its own bundled binary, and if that binary can't run the bridge **auto-discovers** a working system codex from your PATH and the usual install locations (`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`), retries, and logs the substitution on stderr. Set it explicitly to pin a specific binary — an explicit path disables auto-discovery entirely.
 
@@ -381,7 +393,18 @@ When `fallback` is on (the default) and both providers are set up, a review that
 [codex-bridge] codex unavailable (RATE_LIMITED); falling back to gemini
 ```
 
-The result is tagged with the provider that actually served it (`"provider": "gemini"`). Notes:
+The result is tagged with the provider that actually served it (`"provider": "gemini"`) and carries a `failover` block saying what happened, so a Gemini answer to a Codex request is never mistaken for the primary having served:
+
+```json
+"failover": {
+  "from": "codex",
+  "error": "MODEL_ERROR: Model \"gpt-5.3-codex-spark\" was rejected, ...",
+  "requested_model": "gpt-6-astra",
+  "carried_model": "max"
+}
+```
+
+`requested_model` is what the call asked for; `carried_model` is what the other provider was handed. A tier (`max` / `balanced` / `fast`) carries as-is, and a provider-specific id that is one of that provider's tier models is carried as its tier (`gpt-6-astra` → `max`, so Gemini answers with its Pro model rather than its Flash default). Any other id cannot be mapped: `carried_model` is `null` and the secondary resolves its own default. The `models[]` entry keeps the original `requested` selector either way. `review_mode` says which composition is _configured_; the presence of `failover` says one actually _happened_. Notes:
 
 - **Fresh reviews only.** A resumed session lives in one provider's conversation store, so a `session_id` review is not failed over — start a fresh review on the other provider to continue.
 - **Data egress.** Failover can send your diff to the other vendor (e.g. OpenAI → Google) when the primary is down. Set `"fallback": false` to disable this (also good for CI determinism).
@@ -493,10 +516,13 @@ Error codes are provider-neutral. With `fallback` on (default), many of these au
 | `REVIEW_BUSY`                                             | Four reviews are already active, or this session already has a review in progress. Retry after the active call finishes.                                                                                                                                                                                                                                                    |
 | `SESSION_ROUTING_UNAVAILABLE`                             | Resume ownership could not be read safely. Restore durable storage or start a fresh review without `session_id`; the bridge will not guess a provider.                                                                                                                                                                                                                      |
 | `REVIEW_TIMEOUT: review timed out`                        | Increase `"timeout_seconds"` in `.reviewbridge.json` (default: 300).                                                                                                                                                                                                                                                                                                        |
+| `STORAGE_UNAVAILABLE`                                     | Review storage never opened, usually because the SQLite native addon could not load. Reviews still run; history is not kept. See [SQLite native addon cannot load](#sqlite-native-addon-cannot-load).                                                                                                                                                                       |
 
 ### SQLite native addon cannot load
 
-Both disk-backed and in-memory review storage require `better-sqlite3`'s native addon. If it is missing or incompatible with the MCP host's Node.js version or architecture, startup exits with recovery guidance. Switching `REVIEW_BRIDGE_DB` to `:memory:` cannot fix this. Ordinary database-file failures still fall back to memory after it successfully initializes.
+Both disk-backed and in-memory review storage require `better-sqlite3`'s native addon. If it is missing or incompatible with the MCP host's Node.js version or architecture, the server still starts and keeps serving reviews, but without any review storage: the startup diagnosis is logged once on stderr, `review_history` and `review_status` (for sessions this process is not running) answer `STORAGE_UNAVAILABLE` with that diagnosis, and every review result carries `provenance.persistence: "not_recorded"` with the diagnosis as its `warning`. Session resume works only within the running process. Switching `REVIEW_BRIDGE_DB` to `:memory:` cannot fix this. Ordinary database-file failures still fall back to memory after it successfully initializes.
+
+**After a Node.js upgrade or switch** (nvm, Volta, Homebrew), the previously built addon no longer matches the host's ABI and fails with a `NODE_MODULE_VERSION` mismatch. Run `npm rebuild better-sqlite3` in the affected installation with the new Node.js active, then reconnect.
 
 A missing addon can follow an incomplete installation or disabled install scripts; the error alone does not identify the cause. ABI errors can also occur after changing Node.js versions.
 

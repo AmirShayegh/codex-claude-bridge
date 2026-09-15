@@ -391,8 +391,8 @@ describe('createCodexBackend', () => {
     expect(createCodexBackend(config).provider).toBe('codex');
   });
 
-  it('reports it cannot change model on a resumed session (SDK reasserts --model)', () => {
-    expect(createCodexBackend(config).allowsModelOverrideOnResume).toBe(false);
+  it('allows a model change on a resumed session (the CLI accepts --model on resume, ISS-045)', () => {
+    expect(createCodexBackend(config).allowsModelOverrideOnResume).toBe(true);
   });
 });
 
@@ -629,6 +629,73 @@ describe('retry on parse failure', () => {
     if (!result.ok) {
       expect(result.error).toContain('RESPONSE_PARSE_ERROR');
     }
+  });
+});
+
+describe('whole-review deadline (ISS-046)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('aborts the turn at the review deadline even when timeout_seconds is far larger', async () => {
+    vi.useFakeTimers();
+    mockRun.mockImplementation(
+      (_prompt: string, opts: { signal: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          opts.signal.addEventListener('abort', () =>
+            reject(new DOMException('aborted', 'AbortError')),
+          );
+        }),
+    );
+    const client = createCodexBackend({
+      ...config,
+      timeout_seconds: 3600,
+      review_deadline_seconds: 2,
+    });
+    mockThreadId = 'thread_partial';
+    const pending = client.reviewPlan({ execution: EXEC, plan: 'p' });
+    await vi.advanceTimersByTimeAsync(2_100);
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('REVIEW_TIMEOUT');
+      expect(result.error).toContain('review_deadline_seconds');
+      // Locked probe: a fresh review that hit the deadline names the thread
+      // Codex had already started, so review_status/history can find it.
+      expect(result.session_id).toBe('thread_partial');
+    }
+  });
+});
+
+// Locked probe (probe-loop, ISS-046): a fresh review that fails after Codex
+// started its thread used to return a bare error, so the lifecycle had no id
+// to mark failed and the caller nothing to query. Cross-layer trust violation.
+describe('failures name the thread once it exists', () => {
+  it('attaches the started thread id to a first-attempt timeout', async () => {
+    mockRun.mockRejectedValue(new DOMException('signal is aborted', 'AbortError'));
+    mockThreadId = 'thread_started';
+    const result = await createCodexBackend(config).reviewPlan({ execution: EXEC, plan: 'plan' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.session_id).toBe('thread_started');
+  });
+
+  it('attaches it to a classified provider error and to exhausted retries', async () => {
+    mockThreadId = 'thread_started';
+    mockRun.mockRejectedValue(new Error('rate limit exceeded'));
+    const classified = await createCodexBackend(config).reviewPlan({ execution: EXEC, plan: 'p' });
+    expect(!classified.ok && classified.session_id).toBe('thread_started');
+
+    mockRun.mockResolvedValue({ finalResponse: 'not json' });
+    const exhausted = await createCodexBackend(config).reviewPlan({ execution: EXEC, plan: 'p' });
+    expect(!exhausted.ok && exhausted.error).toContain('RESPONSE_PARSE_ERROR');
+    expect(!exhausted.ok && exhausted.session_id).toBe('thread_started');
+  });
+
+  it('carries nothing when the thread never started', async () => {
+    mockThreadId = null;
+    mockRun.mockRejectedValue(new DOMException('signal is aborted', 'AbortError'));
+    const result = await createCodexBackend(config).reviewPlan({ execution: EXEC, plan: 'plan' });
+    expect(!result.ok && result.session_id).toBeUndefined();
   });
 });
 
@@ -1050,6 +1117,29 @@ describe('error classification', () => {
     }
   });
 
+  it('extracts the rejected model from the "\'X\' model is not supported" phrasing and names the config default (ISS-045)', async () => {
+    const configured = { ...config, model: 'gpt-6-astra' };
+    mockRun.mockRejectedValue(
+      new Error(
+        '{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The \'gpt-5.3-codex-spark\' model is not supported when using Codex with a ChatGPT account."}}',
+      ),
+    );
+
+    const result = await createCodexBackend(configured).reviewPlan({
+      execution: EXEC,
+      plan: 'plan',
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('MODEL_ERROR');
+      expect(result.error).toContain('Model "gpt-5.3-codex-spark" was rejected');
+      expect(result.error).toContain('gpt-6-astra');
+      expect(result.error).toContain('~/.codex/config.toml');
+      expect(result.error).not.toContain('Model "gpt-6-astra" is not supported');
+    }
+  });
+
   it('keeps the generic tip when the rejected model equals the sent model (ISS-003 boundary)', async () => {
     const configured = { ...config, model: 'gpt-5.4' };
     mockRun.mockRejectedValue(new Error('The model "gpt-5.4" is not supported'));
@@ -1251,26 +1341,7 @@ describe('per-call model override (T-011)', () => {
     expect(mockStartThread).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-6-astra' }));
   });
 
-  it('rejects session_id + model combination with INVALID_INPUT', async () => {
-    const client = createCodexBackend(config);
-    const result = await client.reviewPlan({
-      execution: EXEC,
-      plan: 'plan',
-      session_id: 'existing_session',
-      model: 'gpt-5.4',
-    });
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain('INVALID_INPUT');
-      expect(result.error).toContain('Cannot change model on a resumed session');
-    }
-    // Must reject before any SDK call
-    expect(mockStartThread).not.toHaveBeenCalled();
-    expect(mockResumeThread).not.toHaveBeenCalled();
-  });
-
-  it('multi-chunk: override applies on chunk 1 via startThread; chunks 2..N resume without override', async () => {
+  it('multi-chunk: override applies on chunk 1 via startThread and is re-sent on every resumed chunk (ISS-045)', async () => {
     // Force 2 chunks by mocking chunkDiff
     mockChunkDiff.mockReturnValue([
       'diff --git a/a b/a\n@@ -1 +1 @@\n-a\n+A',
@@ -1284,21 +1355,19 @@ describe('per-call model override (T-011)', () => {
     // Chunk 1: startThread with the override
     expect(mockStartThread).toHaveBeenCalledOnce();
     expect(mockStartThread).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-5.4' }));
-    // Chunk 2: resumeThread is called WITHOUT any `model` field. The SDK
-    // would otherwise forward `--model` to the CLI and reassert a model
-    // on a resumed thread — breaking the "inherit" guarantee. The resumed
-    // thread keeps whatever model it was started with.
+    // Chunk 2: resumeThread carries the SAME model. A resume without --model
+    // does not inherit chunk 1's model — the CLI falls back to the
+    // ~/.codex/config.toml default, which a ChatGPT-tier account may reject.
     expect(mockResumeThread).toHaveBeenCalledOnce();
     expect(mockResumeThread).toHaveBeenCalledWith(
       'thread_abc123',
-      expect.not.objectContaining({ model: expect.anything() }),
+      expect.objectContaining({ model: 'gpt-5.4' }),
     );
   });
 
-  it('reviewPrecommit multi-chunk: override on chunk 1; chunks 2..N resume without override', async () => {
-    // Mirror of the reviewCode multi-chunk test above. The precommit loop
-    // shares the same `sessionId ? undefined : input.model` guard, and a
-    // copy-paste error in its version would only be caught here.
+  it('reviewPrecommit multi-chunk: override on chunk 1 and re-sent on resumed chunks (ISS-045)', async () => {
+    // Mirror of the reviewCode multi-chunk test above; a copy-paste error in
+    // the precommit loop's version would only be caught here.
     mockChunkDiff.mockReturnValue([
       'diff --git a/a b/a\n@@ -1 +1 @@\n-a\n+A',
       'diff --git a/b b/b\n@@ -1 +1 @@\n-b\n+B',
@@ -1311,6 +1380,61 @@ describe('per-call model override (T-011)', () => {
     expect(mockStartThread).toHaveBeenCalledOnce();
     expect(mockStartThread).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-5.4' }));
     expect(mockResumeThread).toHaveBeenCalledOnce();
+    expect(mockResumeThread).toHaveBeenCalledWith(
+      'thread_abc123',
+      expect.objectContaining({ model: 'gpt-5.4' }),
+    );
+  });
+
+  it('cross-phase resume re-sends the retained session model to resumeThread (ISS-045)', async () => {
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
+    const client = createCodexBackend(config, {
+      lookupSessionModel: () => ({
+        provider: 'codex',
+        role: 'review',
+        requested: 'gpt-5.6-sol',
+        resolved: 'gpt-5.6-sol',
+        observed: 'gpt-5.6-sol',
+        evidence: 'runtime_session_record',
+      }),
+    });
+    await client.reviewPlan({ execution: EXEC, plan: 'p', session_id: 'thread_abc123' });
+    expect(mockStartThread).not.toHaveBeenCalled();
+    expect(mockResumeThread).toHaveBeenCalledWith(
+      'thread_abc123',
+      expect.objectContaining({ model: 'gpt-5.6-sol' }),
+    );
+  });
+
+  it('cross-phase resume with a per-call model forwards that model to resumeThread (ISS-045)', async () => {
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
+    const client = createCodexBackend(config, {
+      lookupSessionModel: () => ({
+        provider: 'codex',
+        role: 'review',
+        requested: 'gpt-5.6-sol',
+        resolved: 'gpt-5.6-sol',
+        observed: 'gpt-5.6-sol',
+        evidence: 'runtime_session_record',
+      }),
+    });
+    const result = await client.reviewPlan({
+      execution: EXEC,
+      plan: 'p',
+      session_id: 'thread_abc123',
+      model: 'gpt-6-astra',
+    });
+    expect(result.ok).toBe(true);
+    expect(mockResumeThread).toHaveBeenCalledWith(
+      'thread_abc123',
+      expect.objectContaining({ model: 'gpt-6-astra' }),
+    );
+  });
+
+  it('legacy resume with no retained identity still omits the model (no silent substitution)', async () => {
+    mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
+    const client = createCodexBackend(config, { lookupSessionModel: () => null });
+    await client.reviewPlan({ execution: EXEC, plan: 'p', session_id: 'thread_abc123' });
     expect(mockResumeThread).toHaveBeenCalledWith(
       'thread_abc123',
       expect.not.objectContaining({ model: expect.anything() }),

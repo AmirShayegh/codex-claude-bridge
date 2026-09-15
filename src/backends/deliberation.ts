@@ -1,7 +1,7 @@
 import { ErrorCode, ok, err } from '../utils/errors.js';
 import type { Result } from '../utils/errors.js';
 import type { ReviewProvider } from '../config/types.js';
-import { isReviewTier } from '../config/types.js';
+import { carriedModelForFailover } from './failover.js';
 import { CodeFindingSeveritySchema, PlanFindingSeveritySchema } from '../review/types.js';
 import type { PlanReviewResult, CodeReviewResult, ModelIdentity } from '../review/types.js';
 import { deduplicateModelIdentities, sessionModelConflictMessage } from './orchestrator.js';
@@ -356,8 +356,8 @@ type AdjudicateResult = {
 // reviewer — and to its adjudication — exactly as it carries across failover.
 // Dropping it here made `max` pick the strongest model for one reviewer only,
 // and `fast` run the other at a more expensive default.
-function carriedModel(model: string | undefined): string | undefined {
-  return isReviewTier(model) ? model : undefined;
+function carriedModel(from: ReviewProvider, model: string | undefined): string | undefined {
+  return carriedModelForFailover(from, model);
 }
 
 type DeliberationModelOverrides = {
@@ -595,7 +595,7 @@ export async function deliberatePlan(
     if (input.model && !canOverrideModelOnResume(ownerLeaf, ownerLeaf.provider)) {
       return err<PlanReviewResult>(sessionModelConflictMessage());
     }
-    const carried = carriedModel(input.model);
+    const carried = carriedModel(ownerLeaf.provider, input.model);
     const modelOverrides: DeliberationModelOverrides =
       ownerLeaf === primary
         ? { primary: input.model, secondary: carried }
@@ -651,7 +651,7 @@ export async function deliberatePlan(
   const [ra, rb] = await Promise.all([
     resultFromProviderCall(() => primary.reviewPlan(input)),
     resultFromProviderCall(() =>
-      secondary.reviewPlan({ ...input, model: carriedModel(input.model) }),
+      secondary.reviewPlan({ ...input, model: carriedModel(primary.provider, input.model) }),
     ),
   ]);
   if (ra.ok && rb.ok) {
@@ -664,7 +664,7 @@ export async function deliberatePlan(
         primary,
         secondary,
         crossReview,
-        { primary: input.model, secondary: carriedModel(input.model) },
+        { primary: input.model, secondary: carriedModel(primary.provider, input.model) },
         maxChunkTokens,
       ),
     );
@@ -689,7 +689,7 @@ export async function deliberateCode(
     if (input.model && !canOverrideModelOnResume(ownerLeaf, ownerLeaf.provider)) {
       return err<CodeReviewResult>(sessionModelConflictMessage());
     }
-    const carried = carriedModel(input.model);
+    const carried = carriedModel(ownerLeaf.provider, input.model);
     const modelOverrides: DeliberationModelOverrides =
       ownerLeaf === primary
         ? { primary: input.model, secondary: carried }
@@ -743,7 +743,7 @@ export async function deliberateCode(
   const [ra, rb] = await Promise.all([
     resultFromProviderCall(() => primary.reviewCode(input)),
     resultFromProviderCall(() =>
-      secondary.reviewCode({ ...input, model: carriedModel(input.model) }),
+      secondary.reviewCode({ ...input, model: carriedModel(primary.provider, input.model) }),
     ),
   ]);
   if (ra.ok && rb.ok) {
@@ -756,7 +756,7 @@ export async function deliberateCode(
         primary,
         secondary,
         crossReview,
-        { primary: input.model, secondary: carriedModel(input.model) },
+        { primary: input.model, secondary: carriedModel(primary.provider, input.model) },
         maxChunkTokens,
       ),
     );

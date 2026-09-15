@@ -370,3 +370,15 @@ describe('getSessionProvider', () => {
     legacy.close();
   });
 });
+
+describe('getOrCreateSession with a caller-supplied start (probe-loop, ISS-046)', () => {
+  it('stamps created_at from the caller instead of the insert time', () => {
+    const db = new Database(':memory:');
+    initSessionsDb(db);
+    const created = getOrCreateSession(db, 'late-known', 'codex', null, '2026-01-01 00:00:00');
+    expect(created.ok && created.data.created_at).toBe('2026-01-01 00:00:00');
+    // An existing row keeps its own start.
+    const again = getOrCreateSession(db, 'late-known', 'codex', null, '2027-01-01 00:00:00');
+    expect(again.ok && again.data.created_at).toBe('2026-01-01 00:00:00');
+  });
+});

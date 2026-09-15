@@ -20,6 +20,39 @@ beforeEach(() => {
   handler = mockServer.registerTool.mock.calls[0][2] as HandlerFn;
 });
 
+describe('registerReviewStatusTool without storage (ISS-042)', () => {
+  function setup() {
+    const registry = createSessionRegistry();
+    const server = { registerTool: vi.fn() };
+    registerReviewStatusTool(
+      server as unknown as McpServer,
+      undefined,
+      registry,
+      'SQLite native addon could not load; run npm rebuild better-sqlite3',
+    );
+    return { registry, run: server.registerTool.mock.calls[0][2] as HandlerFn };
+  }
+
+  it('still answers from the live registry', async () => {
+    const { registry, run } = setup();
+    registry.admit('live-1', 'codex');
+
+    const parsed = JSON.parse((await run({ session_id: 'live-1' }, {})).content[0].text);
+
+    expect(parsed).toMatchObject({ status: 'in_progress', elapsed_source: 'live_registry' });
+  });
+
+  it('answers STORAGE_UNAVAILABLE for a session it cannot see', async () => {
+    const { run } = setup();
+
+    const result = await run({ session_id: 'gone' }, {});
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/^STORAGE_UNAVAILABLE: /);
+    expect(result.content[0].text).toContain('npm rebuild better-sqlite3');
+  });
+});
+
 describe('registerReviewStatusTool', () => {
   it('registers tool with name review_status', () => {
     expect(mockServer.registerTool).toHaveBeenCalledTimes(1);
@@ -47,6 +80,22 @@ describe('registerReviewStatusTool', () => {
     expect(parsed.session_id).toBe('thread_active');
     expect(typeof parsed.elapsed_seconds).toBe('number');
     expect(parsed.elapsed_seconds).toBeGreaterThanOrEqual(0);
+  });
+
+  it('names its clock: wall-clock elapsed from the stored start, with the source (ISS-046)', async () => {
+    db.prepare(
+      "INSERT INTO sessions (session_id, status, created_at, completed_at) VALUES (?, 'in_progress', '2026-01-01 00:00:00', NULL)",
+    ).run('thread_clock');
+
+    const parsed = JSON.parse((await handler({ session_id: 'thread_clock' }, {})).content[0].text);
+    expect(parsed).toMatchObject({
+      status: 'in_progress',
+      elapsed_source: 'history_db',
+      elapsed_basis: 'wall_clock',
+      started_at: '2026-01-01T00:00:00.000Z',
+      completed_at: null,
+    });
+    expect(parsed.elapsed_seconds).toBeGreaterThan(1_000_000);
   });
 
   it('completed session returns frozen elapsed_seconds', async () => {
@@ -108,6 +157,9 @@ describe('registerReviewStatusTool', () => {
     expect(JSON.parse(result.content[0].text)).toMatchObject({
       status: 'in_progress',
       session_id: 'memory-session',
+      elapsed_source: 'live_registry',
+      elapsed_basis: 'wall_clock',
+      completed_at: null,
     });
     if (admission.ok) admission.data.release();
   });

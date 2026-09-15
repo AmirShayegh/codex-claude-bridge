@@ -37,10 +37,23 @@ export const SessionIdSchema = ControlFreeStringSchema.min(1, 'must not be empty
 export const CWD_DESCRIPTION =
   'Absolute path to the directory this review runs in — the repository or git worktree ' +
   'whose code is being reviewed. Auto-capture, repository instruction files, and the ' +
-  'reviewer subprocess all use it. Omit to use the directory the server was started in. ' +
+  'reviewer subprocess all use it. Always pass it: an auto-capturing review without it is ' +
+  'refused unless the server is configured with "require_cwd": false, in which case the ' +
+  "server's launch directory is used. " +
   'Must be absolute; "~" is not expanded. Applies to this call only — pass it again on resume.';
 
 export const WorkingDirectorySchema = ControlFreeStringSchema.min(1, 'must not be empty').max(
   4096,
   'must be at most 4096 characters',
 );
+
+// A git ref for review_code's base/head (ISS-049). Syntactic only, and matched
+// to the pattern git.ts enforces before spawning git, so a bad value is refused
+// at the transport boundary with INVALID_INPUT rather than deep in capture. A
+// leading '-' is refused separately: git would read it as an option.
+export const GitRefSchema = ControlFreeStringSchema.min(1, 'must not be empty')
+  .max(256, 'must be at most 256 characters')
+  .refine((value) => !value.startsWith('-'), { message: 'must not start with "-"' })
+  .refine((value) => /^[\w.\-/^~@{}]+$/.test(value), {
+    message: 'must be a git ref (letters, digits, and . - / ^ ~ @ { })',
+  });

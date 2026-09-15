@@ -233,8 +233,9 @@ function tracker() {
 
 describe('composites must not drop the directory the way they drop the model', () => {
   it('failover keeps it when falling back to the secondary provider', async () => {
-    // The fallback deliberately CLEARS a provider-specific model. The directory
-    // is not provider-specific, and clearing it would move the review.
+    // The fallback maps a provider-specific model to its provider-neutral tier
+    // (ISS-048). The directory is not provider-specific, and clearing it would
+    // move the review.
     const seen = tracker();
     const primary = leaf('codex', seen, { failCode: 'RATE_LIMITED: out of usage' });
     const secondary = leaf('gemini', seen);
@@ -248,8 +249,8 @@ describe('composites must not drop the directory the way they drop the model', (
     expect(result.ok).toBe(true);
     expect(seen.code).toHaveLength(2);
     expect(seen.code[1].execution).toEqual(REQUESTED);
-    // ...while the model IS dropped, which is the behavior being contrasted.
-    expect(seen.code[1].model).toBeUndefined();
+    // ...while the model is carried as its tier (gpt-5.6-sol is Codex's `balanced`).
+    expect(seen.code[1].model).toBe('balanced');
   });
 
   it('deliberation gives BOTH providers the same directory', async () => {
@@ -260,7 +261,7 @@ describe('composites must not drop the directory the way they drop the model', (
 
     expect(seen.code).toHaveLength(2);
     expect(seen.code.every((i) => i.execution === REQUESTED)).toBe(true);
-    expect(seen.code[1].model).toBeUndefined();
+    expect(seen.code[1].model).toBe('balanced');
   });
 
   it('deliberation gives the plan path the same directory', async () => {

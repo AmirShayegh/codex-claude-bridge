@@ -74,6 +74,23 @@ export function classifyAgyError(raw: string): { code: ErrorCode; message: strin
     };
   }
 
+  // Capacity / availability (ISS-043): a 503 or "no capacity" is the provider
+  // being unavailable right now, not a bridge parse fault and not a quota hit.
+  // Classified as PROVIDER_UNAVAILABLE so failover treats it as retryable on
+  // the other provider.
+  if (
+    lower.includes('503') ||
+    lower.includes('unavailable') ||
+    lower.includes('no capacity') ||
+    lower.includes('overloaded') ||
+    lower.includes('try again later')
+  ) {
+    return {
+      code: ErrorCode.PROVIDER_UNAVAILABLE,
+      message: `The Gemini backend has no capacity right now (503 / unavailable). Retry shortly or rely on failover. Original error: ${text}`,
+    };
+  }
+
   // Rate limit / quota
   if (
     lower.includes('rate limit') ||
@@ -121,6 +138,9 @@ export interface AgyPrintOptions {
   // Working directory for the run (agy keys conversations by cwd).
   cwd: string;
   timeoutMs: number;
+  // Receives the model agy named in its init event, when it named one. Called
+  // at most once, before the Result resolves, and only on a successful run.
+  onInitModel?: (model: string) => void;
 }
 
 // The one stream-json event agy emits that carries the answer. Everything else
@@ -136,6 +156,29 @@ function isAgyResultEvent(value: unknown): value is AgyResultEvent {
   if (v.event !== 'result' || typeof v.result !== 'object' || v.result === null) return false;
   const r = v.result as { status?: unknown; response?: unknown };
   return typeof r.status === 'string' && typeof r.response === 'string';
+}
+
+// The model agy names in its `init` event — what it accepted for this run
+// (verified on agy 1.2.3: it echoes the --model value verbatim and refuses an
+// unknown id with a result ERROR instead of running something else). Null when
+// no init event carried a model. This is the only runtime label Gemini exposes,
+// so it is what `observed` reports (ISS-048).
+export function extractAgyInitModel(stdout: string): string | null {
+  for (const line of stdout.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('{')) continue;
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      if (typeof parsed !== 'object' || parsed === null) continue;
+      const v = parsed as { event?: unknown; init?: unknown };
+      if (v.event !== 'init' || typeof v.init !== 'object' || v.init === null) continue;
+      const model = (v.init as { model?: unknown }).model;
+      if (typeof model === 'string' && model.trim() !== '') return model;
+    } catch {
+      // Progress noise, not the answer.
+    }
+  }
+  return null;
 }
 
 // Find the final `result` event in agy's NDJSON stdout. Null when agy printed
@@ -260,6 +303,14 @@ export function runAgyPrint(opts: AgyPrintOptions): Promise<Result<string>> {
       if (result === null) {
         finish(ok(stdout));
         return;
+      }
+      const initModel = extractAgyInitModel(stdout);
+      if (initModel !== null && result.status === 'SUCCESS') {
+        try {
+          opts.onInitModel?.(initModel);
+        } catch {
+          // Observation is optional evidence; it must never fail the review.
+        }
       }
       if (result.status !== 'SUCCESS') {
         // agy reports its own failures (bad model, auth, rate limit) inside the
@@ -509,6 +560,32 @@ export async function warnIfUnknownModel(requested: string): Promise<void> {
   }
 }
 
+// Bounded per-process memory of the model agy named for each conversation, so
+// the orchestrator's observeSessionModel hook can report Gemini's runtime label
+// after the turn (ISS-048). agy has no queryable session record, so this is
+// the only source; it is evidence for THIS process's own runs only.
+const MAX_OBSERVED_MODELS = 512;
+const observedModels = new Map<string, string>();
+
+function rememberObservedModel(sessionId: string, model: string): void {
+  if (observedModels.has(sessionId)) observedModels.delete(sessionId);
+  while (observedModels.size >= MAX_OBSERVED_MODELS) {
+    const oldest = observedModels.keys().next().value;
+    if (oldest === undefined) break;
+    observedModels.delete(oldest);
+  }
+  observedModels.set(sessionId, model);
+}
+
+export function observedGeminiModel(sessionId: string): string | undefined {
+  return observedModels.get(sessionId);
+}
+
+// Test seam: conversation ids are fixtures shared across tests.
+export function clearObservedGeminiModels(): void {
+  observedModels.clear();
+}
+
 // Gemini implementation of the orchestrator's TurnRunner: run one prompt through
 // agy and return the schema-validated result plus the session (conversation) id.
 // Mirrors the Codex runReview shape — parse-then-retry on malformed/empty output
@@ -543,12 +620,16 @@ async function runAgyReview<T extends Record<string, unknown>>(
       // The retry gets only the budget remaining after attempt 1 (floored at 1ms
       // so setTimeout never goes negative — an exhausted budget aborts at once).
       const timeoutMs = Math.max(deadline - Date.now(), 1);
+      let initModel: string | undefined;
       const run = await runAgyPrint({
         prompt,
         model: resolvedModel,
         conversationId: sessionId,
         cwd,
         timeoutMs,
+        onInitModel: (model) => {
+          initModel = model;
+        },
       });
       if (!run.ok) {
         // A retry that timed out AFTER a prior parse failure: the malformed
@@ -608,6 +689,7 @@ async function runAgyReview<T extends Record<string, unknown>>(
             `Check that ~/.gemini/antigravity-cli is readable.`,
         );
       }
+      if (initModel !== undefined) rememberObservedModel(parsedSessionId.data, initModel);
       // Single cast justified: safeParse validated result.data matches the schema.
       return ok({ ...(result.data as T), session_id: parsedSessionId.data });
     }
@@ -653,6 +735,9 @@ export function createGeminiBackend(config: ReviewBridgeConfig): ReviewBackend {
       return requested;
     },
     resumesAcrossChunks: false,
+    // The model agy named in its init event for this process's own run of the
+    // session — Gemini's only runtime label (ISS-048).
+    observeSessionModel: async (sessionId: string) => observedGeminiModel(sessionId),
   };
 
   return {

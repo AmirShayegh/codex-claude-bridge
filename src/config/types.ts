@@ -51,6 +51,17 @@ export const TIER_MODELS: Record<ReviewProvider, Record<ReviewTier, string>> = {
   },
 };
 
+// Reverse lookup: the tier a provider-specific model id stands for, if it is one
+// of that provider's tier models. Lets a failover carry `gpt-6-astra` to Gemini
+// as `max` instead of dropping it and letting Gemini pick its default (ISS-048).
+export function tierForModel(provider: ReviewProvider, model: string): ReviewTier | undefined {
+  const wanted = model.trim().toLowerCase();
+  for (const tier of REVIEW_TIERS) {
+    if (TIER_MODELS[provider][tier].toLowerCase() === wanted) return tier;
+  }
+  return undefined;
+}
+
 // Shared one-liner for tool/CLI help so every surface explains tiers the same way.
 export const TIER_HELP =
   'Or pick a tier instead of a model id: "max" (hardest problems — architecture, concurrency, ' +

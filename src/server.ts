@@ -67,8 +67,12 @@ TIPS:
   one call: true = both providers review (deliberation), false = single provider with failover.
   Requires a two-provider setup. review_precommit is always failover.
 - Every result carries a 'review_mode' field (single/failover/deliberate/deliberate-deep) naming the
-  composition that ran, so you can tell whether deliberation actually happened even without a
-  'deliberation' block.
+  composition that was CONFIGURED for the call. A result also carries a 'failover' block ONLY when
+  the primary provider failed and the other one served: it names the failed provider, its error,
+  the model you asked for, and what the other provider was handed. No 'failover' block means the
+  primary served. Treat a failed-over result as a different reviewer's opinion, not the one you
+  requested, and consider whether its 'carried_model' (null = the secondary's default) is
+  adequate for the change.
 - Every successful review also carries 'models' (successful reviewer/adjudicator contributions with
   requested/resolved/observed identity evidence) and 'provenance' (durable, memory_only, or
   not_recorded). Runtime labels are control-plane evidence, not proof of underlying weights.

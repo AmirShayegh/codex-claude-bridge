@@ -81,8 +81,10 @@ Each `models[]` entry reports:
 - `requested` is the per-call/config selector considered for the turn. It is `null` for provider
   defaults and Codex resumes where no model override is applied.
 - `resolved` is the concrete label selected or retained by the bridge.
-- `observed` is a runtime-recorded label when one is available. Codex can read this from its local
-  session record; Gemini currently reports `null` because `agy` has no equivalent observation.
+- `observed` is a runtime-recorded label when one is available. Codex reads it from its local
+  session record; Gemini reports the model `agy` named in its own `init` event for a run made by
+  this server process, and `null` for a session this process did not run. A mismatch between
+  `resolved` and `observed` is logged on stderr.
 - `role` distinguishes normal review turns from deliberate-deep adjudication turns.
 - `evidence` says whether identity came from a runtime session record, bridge selection, or was
   unavailable.
@@ -381,7 +383,18 @@ When `fallback` is on (the default) and both providers are set up, a review that
 [codex-bridge] codex unavailable (RATE_LIMITED); falling back to gemini
 ```
 
-The result is tagged with the provider that actually served it (`"provider": "gemini"`). Notes:
+The result is tagged with the provider that actually served it (`"provider": "gemini"`) and carries a `failover` block saying what happened, so a Gemini answer to a Codex request is never mistaken for the primary having served:
+
+```json
+"failover": {
+  "from": "codex",
+  "error": "MODEL_ERROR: Model \"gpt-5.3-codex-spark\" was rejected, ...",
+  "requested_model": "gpt-6-astra",
+  "carried_model": "max"
+}
+```
+
+`requested_model` is what the call asked for; `carried_model` is what the other provider was handed. A tier (`max` / `balanced` / `fast`) carries as-is, and a provider-specific id that is one of that provider's tier models is carried as its tier (`gpt-6-astra` → `max`, so Gemini answers with its Pro model rather than its Flash default). Any other id cannot be mapped: `carried_model` is `null` and the secondary resolves its own default. The `models[]` entry keeps the original `requested` selector either way. `review_mode` says which composition is *configured*; the presence of `failover` says one actually *happened*. Notes:
 
 - **Fresh reviews only.** A resumed session lives in one provider's conversation store, so a `session_id` review is not failed over — start a fresh review on the other provider to continue.
 - **Data egress.** Failover can send your diff to the other vendor (e.g. OpenAI → Google) when the primary is down. Set `"fallback": false` to disable this (also good for CI determinism).

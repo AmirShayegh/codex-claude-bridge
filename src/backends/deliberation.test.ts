@@ -564,7 +564,7 @@ describe('createDeliberationBackend', () => {
       }),
     ); // owner resumes with its override
     expect(pReview).toHaveBeenCalledWith(
-      expect.objectContaining({ session_id: undefined, model: undefined }),
+      expect.objectContaining({ session_id: undefined, model: 'max' }),
     ); // primary fresh on its own default
     expect(res.ok && res.data.provider).toBe('codex'); // composite presents as primary
     expect(res.ok && res.data.session_id).toBe('gemini-sess'); // combined = resumed owner session
@@ -608,7 +608,7 @@ describe('createDeliberationBackend', () => {
       }),
     );
     expect(primaryReview).toHaveBeenCalledWith(
-      expect.objectContaining({ session_id: undefined, model: undefined }),
+      expect.objectContaining({ session_id: undefined, model: 'max' }),
     );
   });
 
@@ -888,11 +888,12 @@ describe('createDeliberationBackend — deliberate-deep (cross-review round)', (
     expect(secondary.reviewCode).toHaveBeenCalledWith(
       expect.objectContaining({ model: 'Gemini 3.1 Pro (High)' }),
     );
-    expect(primary.reviewCode).toHaveBeenCalledWith(expect.objectContaining({ model: undefined }));
+    // 'Gemini 3.1 Pro (High)' is Gemini's `max`; the fresh primary gets the tier (ISS-048).
+    expect(primary.reviewCode).toHaveBeenCalledWith(expect.objectContaining({ model: 'max' }));
     expect(secondaryJudge).toHaveBeenCalledWith(
       expect.objectContaining({ model: 'Gemini 3.1 Pro (High)' }),
     );
-    expect(primaryJudge).toHaveBeenCalledWith(expect.objectContaining({ model: undefined }));
+    expect(primaryJudge).toHaveBeenCalledWith(expect.objectContaining({ model: 'max' }));
   });
 
   it('ISS-012: slices the cross-review subject to the files each finding touches', async () => {
@@ -1174,7 +1175,7 @@ describe('createDeliberationBackend — provider-neutral tiers', () => {
     expect(secCross).toHaveBeenCalledWith(expect.objectContaining({ model: 'max' }));
   });
 
-  it('still drops a concrete model id for the secondary reviewer', async () => {
+  it('carries a concrete tier-model id to the secondary reviewer as its tier (ISS-048)', async () => {
     const { primary, secondary } = mixedPair();
 
     await createDeliberationBackend(primary, secondary).reviewCode({
@@ -1186,6 +1187,20 @@ describe('createDeliberationBackend — provider-neutral tiers', () => {
     expect(primary.reviewCode).toHaveBeenCalledWith(
       expect.objectContaining({ model: 'gpt-6-astra' }),
     );
+    // gpt-6-astra is Codex's `max`; the secondary maps `max` to its own model.
+    expect(secondary.reviewCode).toHaveBeenCalledWith(expect.objectContaining({ model: 'max' }));
+  });
+
+  it('still drops a concrete model id that is not a tier model', async () => {
+    const { primary, secondary } = mixedPair();
+
+    await createDeliberationBackend(primary, secondary).reviewCode({
+      execution: EXEC,
+      diff: DIFF,
+      model: 'gpt-5.4',
+    });
+
+    expect(primary.reviewCode).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-5.4' }));
     expect(secondary.reviewCode).toHaveBeenCalledWith(
       expect.objectContaining({ model: undefined }),
     );

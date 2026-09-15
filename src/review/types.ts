@@ -62,11 +62,24 @@ export const ReviewProvenanceSchema = z.object({
   warning: z.string().nullable(),
 });
 
+// Present ONLY when the configured primary failed and the other provider served
+// the review (ISS-044). `error` is the primary's classified error; `requested_model`
+// is what the caller asked for; `carried_model` is what the secondary was handed
+// (a provider-neutral tier, or null when the pin could not be mapped and the
+// secondary resolved its own default). Absent means the primary served.
+export const ReviewFailoverSchema = z.object({
+  from: ReviewProviderSchema,
+  error: z.string(),
+  requested_model: ModelSelectorSchema.nullable(),
+  carried_model: ModelSelectorSchema.nullable(),
+});
+
 const HostReviewMetadataFields = {
   // Additive for backward-compatible decoding. New successful bridge responses
   // always emit both fields; model-facing schemas must explicitly omit them.
   models: z.array(ModelIdentitySchema).optional(),
   provenance: ReviewProvenanceSchema.optional(),
+  failover: ReviewFailoverSchema.optional(),
 };
 
 // Deliberation metadata: when both providers review the same input, the bridge
@@ -239,6 +252,7 @@ export type ReviewFinding = z.infer<typeof ReviewFindingSchema>;
 export type ReviewProvider = z.infer<typeof ReviewProviderSchema>;
 export type ModelIdentity = z.infer<typeof ModelIdentitySchema>;
 export type ReviewProvenance = z.infer<typeof ReviewProvenanceSchema>;
+export type ReviewFailover = z.infer<typeof ReviewFailoverSchema>;
 export type PlanReviewResult = z.infer<typeof PlanReviewResultSchema>;
 export type CodeReviewResult = z.infer<typeof CodeReviewResultSchema>;
 export type PrecommitResult = z.infer<typeof PrecommitResultSchema>;

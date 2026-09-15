@@ -163,6 +163,7 @@ const PlanReviewResponseSchema = PlanReviewResultSchema.omit({
   deliberation: true,
   models: true,
   provenance: true,
+  failover: true,
 });
 const CodeReviewResponseSchema = CodeReviewResultSchema.omit({
   session_id: true,
@@ -176,6 +177,7 @@ const CodeReviewResponseSchema = CodeReviewResultSchema.omit({
   deliberation: true,
   models: true,
   provenance: true,
+  failover: true,
 });
 const PrecommitResponseSchema = PrecommitResultSchema.omit({
   session_id: true,
@@ -187,6 +189,7 @@ const PrecommitResponseSchema = PrecommitResultSchema.omit({
   review_mode: true,
   models: true,
   provenance: true,
+  failover: true,
 });
 
 // The exact model-facing schemas handed to the provider SDKs (via toJSONSchema in

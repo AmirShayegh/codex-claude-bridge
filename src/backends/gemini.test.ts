@@ -85,8 +85,19 @@ function script(...responses: Scripted[]): void {
 // What agy actually prints for a successful turn: NDJSON progress events and a
 // final `result` event whose `response` is the model's text. Review fixtures go
 // through this so the tests speak the real protocol, not raw JSON on stdout.
-function agyResultLine(response: string, status = 'SUCCESS', error?: string): string {
-  const init = JSON.stringify({ event: 'init', conversation_id: 'conv-fixture' });
+function agyResultLine(
+  response: string,
+  status = 'SUCCESS',
+  error?: string,
+  initModel?: string,
+): string {
+  // Real agy (1.2.3) echoes the model it accepted in the init event; tests
+  // that assert on `observed` pass one, the rest leave it out.
+  const init = JSON.stringify({
+    event: 'init',
+    conversation_id: 'conv-fixture',
+    ...(initModel ? { init: { model: initModel } } : {}),
+  });
   const result = JSON.stringify({
     event: 'result',
     result: { conversation_id: 'conv-fixture', status, response, ...(error ? { error } : {}) },
@@ -122,6 +133,8 @@ import {
   parseAgyModels,
   warnIfUnknownModel,
   clearGeminiModelCatalogCache,
+  clearObservedGeminiModels,
+  extractAgyInitModel,
 } from './gemini.js';
 import { DEFAULT_CONFIG } from '../config/types.js';
 
@@ -150,6 +163,7 @@ beforeEach(() => {
   spawnCount = 0;
   lastEnv = undefined;
   clearGeminiModelCatalogCache();
+  clearObservedGeminiModels();
   // The flow narrates the resolved model on stderr for unpinned reviews; these
   // tests don't assert on it, so keep their output clean.
   vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -180,6 +194,21 @@ describe('classifyAgyError', () => {
   it('classifies a rate-limit / quota failure', () => {
     expect(classifyAgyError('429 resource exhausted').code).toBe(ErrorCode.RATE_LIMITED);
     expect(classifyAgyError('quota exceeded').code).toBe(ErrorCode.RATE_LIMITED);
+  });
+
+  it('classifies a 503 / no-capacity failure as provider-unavailable, not unknown (ISS-043)', () => {
+    const r = classifyAgyError(
+      'error: API error (attempt 1): UNAVAILABLE (code 503): No capacity available for model gemini-3.8-flash-medium on the server',
+    );
+    expect(r.code).toBe(ErrorCode.PROVIDER_UNAVAILABLE);
+    expect(r.message).toContain('503');
+    expect(r.message).toContain('No capacity available');
+  });
+
+  it('classifies an overloaded / try-again-later failure as provider-unavailable (ISS-043)', () => {
+    expect(classifyAgyError('The model is overloaded. Please try again later.').code).toBe(
+      ErrorCode.PROVIDER_UNAVAILABLE,
+    );
   });
 
   it('classifies a network failure', () => {
@@ -649,6 +678,72 @@ describe('createGeminiBackend', () => {
     const warn = vi.spyOn(console, 'error').mockImplementation(() => {});
     createGeminiBackend(DEFAULT_CONFIG);
     expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('reasoning_effort'));
+  });
+
+  it("reports the model agy's init event named as `observed` runtime evidence (ISS-048)", async () => {
+    fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-new' });
+    script({
+      stdout: agyResultLine(
+        JSON.stringify(PLAN_OK),
+        'SUCCESS',
+        undefined,
+        'Gemini 3.8 Flash (Medium)',
+      ),
+    });
+    const res = await createGeminiBackend(PINNED_CONFIG).reviewPlan({ execution: EXEC, plan: 'x' });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.data.models?.[0]).toMatchObject({
+        provider: 'gemini',
+        resolved: 'Gemini 3.8 Flash (Medium)',
+        observed: 'Gemini 3.8 Flash (Medium)',
+        evidence: 'runtime_session_record',
+      });
+    }
+  });
+
+  it('warns on stderr when agy ran a different model than the bridge selected (ISS-048)', async () => {
+    const warn = vi.spyOn(console, 'error').mockImplementation(() => {});
+    fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-new' });
+    script({
+      stdout: agyResultLine(
+        JSON.stringify(PLAN_OK),
+        'SUCCESS',
+        undefined,
+        'Gemini 3.8 Flash (Low)',
+      ),
+    });
+    const res = await createGeminiBackend(PINNED_CONFIG).reviewPlan({ execution: EXEC, plan: 'x' });
+    expect(res.ok && res.data.models?.[0]).toMatchObject({
+      resolved: 'Gemini 3.8 Flash (Medium)',
+      observed: 'Gemini 3.8 Flash (Low)',
+    });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('model identity mismatch'));
+  });
+
+  it('extractAgyInitModel reads init.model and ignores everything else', () => {
+    const out = [
+      JSON.stringify({ event: 'init', conversation_id: 'c', init: { model: 'M (High)' } }),
+      'not json',
+      JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: 'x' } }),
+    ].join('\n');
+    expect(extractAgyInitModel(out)).toBe('M (High)');
+    expect(extractAgyInitModel(JSON.stringify({ event: 'init', init: {} }))).toBeNull();
+    expect(extractAgyInitModel('')).toBeNull();
+  });
+
+  it('leaves `observed` null when agy emits no init model', async () => {
+    fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-new' });
+    const bare = JSON.stringify({
+      event: 'result',
+      result: { conversation_id: 'conv-new', status: 'SUCCESS', response: JSON.stringify(PLAN_OK) },
+    });
+    script({ stdout: `${bare}\n` });
+    const res = await createGeminiBackend(PINNED_CONFIG).reviewPlan({ execution: EXEC, plan: 'x' });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.data.models?.[0]).toMatchObject({ observed: null, evidence: 'bridge_selection' });
+    }
   });
 
   it('reviewPlan: fresh run with no model resolves the latest Flash from agy, runs in sandbox, captures the id', async () => {

@@ -54,10 +54,11 @@ TIPS:
 - review_precommit auto-captures staged changes — no need to pass a diff manually.
 - WHERE a review runs is per call. review_plan/review_code/review_precommit accept 'cwd': an absolute
   path to the repository or git worktree being reviewed. It decides where git captures from, which
-  repository instruction files apply, and where the reviewer subprocess runs. Omit it and the bridge
-  uses the directory the server was launched in — which is often NOT where you are working. Pass 'cwd'
-  whenever you are in a worktree, a second checkout, or another repository. It is not remembered
-  across calls: send it again on every call, including when resuming a session_id.
+  repository instruction files apply, and where the reviewer subprocess runs. ALWAYS pass 'cwd':
+  by default an auto-capturing review_code/review_precommit call without it is refused with
+  INVALID_INPUT, because the alternative — capturing from the directory the server was launched in —
+  is often NOT where you are working. It is not remembered across calls: send it again on every
+  call, including when resuming a session_id.
 - Auto-captured results carry 'captured_from': the absolute directory the bridge actually ran git in.
   Check it when a result surprises you — an empty result means "nothing there", not "nothing at all".
   If it is not the repository you meant, pass 'cwd' (or supply the diff explicitly).
@@ -138,6 +139,7 @@ export function createServer(): McpServer {
     limiter: createPreparationLimiter(),
     defaultWorkingDirectory: canonicalizeStartupDirectory(process.cwd()),
     loadInstructions: config.copilot_instructions,
+    requireCwdForCapture: config.require_cwd,
   };
 
   // Open the db before building the backend so resume routing can consult session

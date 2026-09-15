@@ -114,6 +114,13 @@ export const ReviewBridgeConfigSchema = z.object({
   review_standards: ReviewStandardsSchema.default(() => ReviewStandardsSchema.parse({})),
   project_context: z.string().default(''),
   copilot_instructions: z.boolean().default(true),
+  // Over MCP, a review that auto-captures a diff must say WHERE with `cwd`.
+  // Without it the bridge captured from its launch directory, which for a
+  // caller in a worktree or a second checkout is silently the wrong repository
+  // (ISS-047). Set false to restore the launch-directory default for a server
+  // that only ever serves the repository it was started in. Explicit diffs and
+  // the CLI (whose default is the caller's own directory) are unaffected.
+  require_cwd: z.boolean().default(true),
   // When a review fails because the configured provider is out of usage /
   // unavailable, automatically retry through the other provider. On by default;
   // set false for strict single-provider behavior (CI determinism, or to avoid

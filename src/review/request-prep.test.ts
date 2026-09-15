@@ -230,6 +230,59 @@ describe.skipIf(!gitAvailable)('prepareDiffReview — capture', () => {
     }
   });
 
+  // A request that names no directory used to capture from the server's launch
+  // directory, which in a worktree or a second checkout is silently the wrong
+  // repository (ISS-047). When the deployment requires it, a capture without
+  // `cwd` is refused before any git runs; explicit diffs are unaffected.
+  describe('requireCwdForCapture', () => {
+    function strict(defaultWorkingDirectory: string): RequestPreparationDeps {
+      return { ...deps(defaultWorkingDirectory), requireCwdForCapture: true };
+    }
+
+    it('refuses to auto-capture without cwd, naming the launch directory it would have used', async () => {
+      const repo = await repoWithCommit();
+      const result = await prepareDiffReview(strict(repo), {
+        source: { kind: 'capture', target: 'working' },
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toMatch(/^INVALID_INPUT:/);
+        expect(result.error).toContain('cwd');
+        expect(result.error).toContain(repo);
+        expect(result.error).toContain('require_cwd');
+      }
+    });
+
+    it('captures normally once cwd is given', async () => {
+      const repo = await repoWithCommit();
+      await writeFile(join(repo, 'app.ts'), 'export const a = 2;\n');
+      const result = await prepareDiffReview(strict(repo), {
+        cwd: repo,
+        source: { kind: 'capture', target: 'working' },
+      });
+      expectReady(result);
+    });
+
+    it('still accepts an explicit diff without cwd', async () => {
+      const repo = await repoWithCommit();
+      const result = await prepareDiffReview(strict(repo), {
+        source: { kind: 'explicit', diff: 'diff --git a/x b/x' },
+      });
+      expectReady(result);
+    });
+
+    it('takes no permit for the refusal', async () => {
+      const repo = await repoWithCommit();
+      const limiter = createPreparationLimiter();
+      const run = vi.spyOn(limiter, 'run');
+      await prepareDiffReview(
+        { ...strict(repo), limiter },
+        { source: { kind: 'capture', target: 'staged' } },
+      );
+      expect(run).not.toHaveBeenCalled();
+    });
+  });
+
   it('follows a symlinked directory to the repository it points at', async () => {
     // Worktrees are routinely reached through a symlink.
     const repo = await repoWithCommit();

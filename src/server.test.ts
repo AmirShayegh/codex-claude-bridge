@@ -208,8 +208,18 @@ describe('createServer', () => {
     // Canonicalized, so it matches the paths git and the providers report back.
     expect(prep.defaultWorkingDirectory).toBe(realpathSync(process.cwd()));
     expect(prep.loadInstructions).toBe(DEFAULT_CONFIG.copilot_instructions);
+    expect(prep.requireCwdForCapture).toBe(true);
     expect(vi.mocked(registerReviewCodeTool).mock.calls[0][2]).toBe(prep);
     expect(vi.mocked(registerReviewPrecommitTool).mock.calls[0][2]).toBe(prep);
+  });
+
+  it('relaxes the cwd requirement when the config says so (ISS-047)', () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      ok: true,
+      data: { config: { ...DEFAULT_CONFIG, require_cwd: false }, source: { kind: 'default' } },
+    });
+    createServer();
+    expect(vi.mocked(registerReviewPlanTool).mock.calls[0][2].requireCwdForCapture).toBe(false);
   });
 
   it('turns instruction loading off when the config disables it', () => {

@@ -37,7 +37,9 @@ export const SessionIdSchema = ControlFreeStringSchema.min(1, 'must not be empty
 export const CWD_DESCRIPTION =
   'Absolute path to the directory this review runs in — the repository or git worktree ' +
   'whose code is being reviewed. Auto-capture, repository instruction files, and the ' +
-  'reviewer subprocess all use it. Omit to use the directory the server was started in. ' +
+  'reviewer subprocess all use it. Always pass it: an auto-capturing review without it is ' +
+  'refused unless the server is configured with "require_cwd": false, in which case the ' +
+  "server's launch directory is used. " +
   'Must be absolute; "~" is not expanded. Applies to this call only — pass it again on resume.';
 
 export const WorkingDirectorySchema = ControlFreeStringSchema.min(1, 'must not be empty').max(

@@ -519,6 +519,21 @@ describe('review lifecycle coordinator', () => {
     expect(recordOutcome).not.toHaveBeenCalled();
   });
 
+  it('carries the storage diagnosis on not_recorded provenance when there is no storage (ISS-042)', async () => {
+    const lifecycle = createReviewLifecycle({
+      backend: backend(),
+      registry: createSessionRegistry(),
+      storageWarning: 'SQLite native addon could not load; run npm rebuild better-sqlite3',
+    });
+
+    const result = await lifecycle.reviewPlan({ execution: EXEC, plan: 'p' });
+
+    expect(result.ok && result.data.provenance).toEqual({
+      persistence: 'not_recorded',
+      warning: 'SQLite native addon could not load; run npm rebuild better-sqlite3',
+    });
+  });
+
   it('rejects same-session overlap across different review tools', async () => {
     const pending = deferred<ReturnType<typeof ok<PlanReviewResult>>>();
     const client = backend({ reviewPlan: vi.fn(() => pending.promise) });

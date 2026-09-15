@@ -4,6 +4,7 @@ import type Database from 'better-sqlite3';
 import { getRecentReviewsPage, getReviewsBySessionPage } from '../storage/reviews.js';
 import { getSession } from '../storage/sessions.js';
 import { SessionIdSchema } from '../utils/input-validation.js';
+import { storageUnavailable } from '../utils/errors.js';
 
 // The session's own state, so a review that failed or timed out — which never
 // produces a review row — still leaves evidence under its id (ISS-046). Null
@@ -26,7 +27,13 @@ const ReviewCursorSchema = z
   .regex(/^[1-9]\d*$/, 'cursor must be a positive decimal review-row ID')
   .refine((value) => Number.isSafeInteger(Number(value)), 'cursor is outside the safe range');
 
-export function registerReviewHistoryTool(server: McpServer, db: Database.Database): void {
+// `db` is undefined when storage never opened (ISS-042); `unavailableReason` is
+// the startup diagnosis, repeated on every call so the caller can act on it.
+export function registerReviewHistoryTool(
+  server: McpServer,
+  db: Database.Database | undefined,
+  unavailableReason?: string,
+): void {
   server.registerTool(
     'review_history',
     {
@@ -45,6 +52,12 @@ export function registerReviewHistoryTool(server: McpServer, db: Database.Databa
       },
     },
     async (args) => {
+      if (!db) {
+        return {
+          content: [{ type: 'text' as const, text: storageUnavailable(unavailableReason) }],
+          isError: true,
+        };
+      }
       try {
         if (args.session_id) {
           const result = getReviewsBySessionPage(db, args.session_id, {

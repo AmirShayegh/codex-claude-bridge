@@ -41,6 +41,9 @@ export interface ReviewLifecycleOptions {
   lookupSessionProvider?: SessionProviderLookup;
   lookupResultSession?: SessionProviderLookup;
   storage?: ReviewLifecycleStorage;
+  // Why `storage` is absent (ISS-042): surfaced as the provenance warning on
+  // every not_recorded result so a caller sees the degradation on each review.
+  storageWarning?: string;
   recordOutcome?: (db: Database.Database, input: RecordReviewOutcomeInput) => Promise<Result<void>>;
   onOutcomePersistenceFailure?: (sessionId: string) => void;
   onOutcomePersisted?: (sessionId: string) => void;
@@ -227,7 +230,8 @@ export function createReviewLifecycle(options: ReviewLifecycleOptions): ReviewLi
     normalized: NormalizedReview<R>,
     prepared: PreparedReview,
   ): Promise<Result<ReviewProvenance>> {
-    if (!storage) return ok({ persistence: 'not_recorded', warning: null });
+    if (!storage)
+      return ok({ persistence: 'not_recorded', warning: options.storageWarning ?? null });
 
     let outcome: Result<void>;
     try {

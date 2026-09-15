@@ -21,6 +21,24 @@ beforeEach(() => {
   handler = mockServer.registerTool.mock.calls[0][2] as HandlerFn;
 });
 
+describe('registerReviewHistoryTool without storage (ISS-042)', () => {
+  it('answers STORAGE_UNAVAILABLE with the startup diagnosis instead of crashing', async () => {
+    const server = { registerTool: vi.fn() };
+    registerReviewHistoryTool(
+      server as unknown as McpServer,
+      undefined,
+      'SQLite native addon could not load; run npm rebuild better-sqlite3',
+    );
+    const run = server.registerTool.mock.calls[0][2] as HandlerFn;
+
+    const result = await run({ last_n: 5 }, {});
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/^STORAGE_UNAVAILABLE: /);
+    expect(result.content[0].text).toContain('npm rebuild better-sqlite3');
+  });
+});
+
 describe('registerReviewHistoryTool', () => {
   it('registers tool with name review_history', () => {
     expect(mockServer.registerTool).toHaveBeenCalledTimes(1);

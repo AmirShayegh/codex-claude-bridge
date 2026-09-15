@@ -3,11 +3,13 @@ import type Database from 'better-sqlite3';
 import type { SessionInfo } from '../storage/sessions.js';
 import type { SessionRegistry } from '../storage/session-registry.js';
 import { SessionIdSchema } from '../utils/input-validation.js';
+import { storageUnavailable } from '../utils/errors.js';
 
 export function registerReviewStatusTool(
   server: McpServer,
-  db: Database.Database,
+  db: Database.Database | undefined,
   registry?: SessionRegistry,
+  unavailableReason?: string,
 ): void {
   server.registerTool(
     'review_status',
@@ -42,6 +44,15 @@ export function registerReviewStatusTool(
                 }),
               },
             ],
+          };
+        }
+        // Without storage (ISS-042) the live registry is the only source; a
+        // session it does not hold cannot be told apart from one that never
+        // existed, so say why rather than answering not_found.
+        if (!db) {
+          return {
+            content: [{ type: 'text' as const, text: storageUnavailable(unavailableReason) }],
+            isError: true,
           };
         }
         const row = db

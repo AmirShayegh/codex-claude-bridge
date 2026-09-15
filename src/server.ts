@@ -10,6 +10,7 @@ import {
   makeSessionProviderLookup,
   openReviewDbWithMetadata,
 } from './storage/db.js';
+import type { OpenReviewDbMetadata } from './storage/db.js';
 import { createSessionRegistry } from './storage/session-registry.js';
 import { createSessionRouting } from './storage/session-routing.js';
 import { createReviewLifecycle } from './review/lifecycle.js';
@@ -93,6 +94,29 @@ const PACKAGE_VERSION = (
   }
 ).version;
 
+// Storage is optional at runtime (ISS-042). When even the in-memory database
+// cannot open — the SQLite native addon failed to load — the server still comes
+// up: reviews run with in-process session state only, and history/status
+// answer STORAGE_UNAVAILABLE with the diagnosis. Exiting here used to close the
+// MCP connection, which hid the cause behind CONNECTION_CLOSED and forced a
+// manual reconnect after the rebuild.
+interface StartupStorage {
+  opened: OpenReviewDbMetadata | undefined;
+  unavailableReason: string | undefined;
+}
+
+function openStorageOrDegrade(): StartupStorage {
+  try {
+    return { opened: openReviewDbWithMetadata(), unavailableReason: undefined };
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : String(e);
+    console.error(
+      `[codex-bridge] review storage unavailable; reviews will run without history: ${escapeTerminalControls(reason)}`,
+    );
+    return { opened: undefined, unavailableReason: reason };
+  }
+}
+
 export function createServer(): McpServer {
   const configResult = loadConfig();
   if (!configResult.ok) {
@@ -117,15 +141,15 @@ export function createServer(): McpServer {
   };
 
   // Open the db before building the backend so resume routing can consult session
-  // ownership. The read-write open always returns a usable db (in-memory on
-  // failure); the tools and lookup accept an optional db regardless.
-  const storage = openReviewDbWithMetadata();
+  // ownership. Ordinary file failures fall back to in-memory inside the open;
+  // only a native-addon failure leaves no database at all.
+  const storage = openStorageOrDegrade();
   const registry = createSessionRegistry();
   const routing = createSessionRouting({
     registry,
-    durability: storage.durability,
-    providerLookup: makeSessionProviderLookup(storage.db),
-    modelLookup: makeSessionModelLookup(storage.db),
+    durability: storage.opened?.durability ?? 'memory_only',
+    providerLookup: makeSessionProviderLookup(storage.opened?.db),
+    modelLookup: makeSessionModelLookup(storage.opened?.db),
   });
   const client = createBackend(config, routing.lookupProvider, routing.lookupModel);
   const lifecycle = createReviewLifecycle({
@@ -133,7 +157,8 @@ export function createServer(): McpServer {
     registry,
     lookupSessionProvider: routing.lookupProvider,
     lookupResultSession: routing.lookupResultSession,
-    storage,
+    storage: storage.opened,
+    storageWarning: storage.unavailableReason,
     onOutcomePersistenceFailure: routing.markOutcomePersistenceFailure,
     onOutcomePersisted: routing.markOutcomePersisted,
   });
@@ -144,11 +169,12 @@ export function createServer(): McpServer {
       { instructions: SERVER_INSTRUCTIONS },
     );
 
-    registerReviewPlanTool(server, client, prep, storage.db, lifecycle);
-    registerReviewCodeTool(server, client, prep, storage.db, lifecycle);
-    registerReviewPrecommitTool(server, client, prep, storage.db, config, lifecycle);
-    registerReviewHistoryTool(server, storage.db);
-    registerReviewStatusTool(server, storage.db, registry);
+    const db = storage.opened?.db;
+    registerReviewPlanTool(server, client, prep, db, lifecycle);
+    registerReviewCodeTool(server, client, prep, db, lifecycle);
+    registerReviewPrecommitTool(server, client, prep, db, config, lifecycle);
+    registerReviewHistoryTool(server, db, storage.unavailableReason);
+    registerReviewStatusTool(server, db, registry, storage.unavailableReason);
 
     return server;
   } catch (e) {

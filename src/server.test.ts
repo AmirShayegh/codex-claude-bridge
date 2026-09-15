@@ -3,6 +3,9 @@ import { createServer, SERVER_INSTRUCTIONS } from './server.js';
 import { err } from './utils/errors.js';
 
 let shouldThrow = false;
+// Every open fails the way a missing native addon does (ISS-042): persistent
+// AND the in-memory fallback, so there is no database at all.
+let nativeAddonMissing = false;
 let lastConstructorArgs: unknown[] = [];
 
 vi.mock('@modelcontextprotocol/sdk/server/mcp.js', () => {
@@ -43,6 +46,11 @@ vi.mock('./tools/review-precommit.js', () => ({ registerReviewPrecommitTool: vi.
 
 vi.mock('better-sqlite3', () => {
   const MockDatabase = vi.fn(function () {
+    if (nativeAddonMissing) {
+      throw new Error(
+        'Could not locate the bindings file. Tried: /x/node_modules/better-sqlite3/build/better_sqlite3.node',
+      );
+    }
     if (shouldThrow) {
       shouldThrow = false;
       throw new Error('SQLITE_CANTOPEN');
@@ -89,6 +97,7 @@ import Database from 'better-sqlite3';
 beforeEach(() => {
   vi.clearAllMocks();
   shouldThrow = false;
+  nativeAddonMissing = false;
   lastConstructorArgs = [];
   vi.mocked(loadConfig).mockReturnValue({
     ok: true,
@@ -156,6 +165,34 @@ describe('createServer', () => {
     expect(typeof server.connect).toBe('function');
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('SQLITE_CANTOPEN'));
     expect(Database).toHaveBeenCalledTimes(2);
+    consoleSpy.mockRestore();
+  });
+
+  it('starts without storage when the SQLite native addon cannot load (ISS-042)', () => {
+    nativeAddonMissing = true;
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const server = createServer();
+
+    // The connection stays up: the client learns about the failure through the
+    // tools, not through CONNECTION_CLOSED.
+    expect(typeof server.connect).toBe('function');
+    expect(registerReviewPlanTool).toHaveBeenCalledOnce();
+    expect(registerReviewCodeTool).toHaveBeenCalledOnce();
+    expect(registerReviewPrecommitTool).toHaveBeenCalledOnce();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const registerTool = (server as any).registerTool as ReturnType<typeof vi.fn>;
+    expect(registerTool.mock.calls.map((call: unknown[]) => call[0])).toEqual(
+      expect.arrayContaining(['review_status', 'review_history']),
+    );
+    // No database handle reaches any tool.
+    expect(vi.mocked(registerReviewCodeTool).mock.calls[0][3]).toBeUndefined();
+    // Diagnosed once on stderr, with the recovery guidance.
+    const diagnoses = consoleSpy.mock.calls.filter((call) =>
+      String(call[0]).includes('SQLite native addon could not load'),
+    );
+    expect(diagnoses).toHaveLength(1);
+    expect(String(diagnoses[0][0])).toContain('npm rebuild better-sqlite3');
     consoleSpy.mockRestore();
   });
 

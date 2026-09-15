@@ -20,6 +20,39 @@ beforeEach(() => {
   handler = mockServer.registerTool.mock.calls[0][2] as HandlerFn;
 });
 
+describe('registerReviewStatusTool without storage (ISS-042)', () => {
+  function setup() {
+    const registry = createSessionRegistry();
+    const server = { registerTool: vi.fn() };
+    registerReviewStatusTool(
+      server as unknown as McpServer,
+      undefined,
+      registry,
+      'SQLite native addon could not load; run npm rebuild better-sqlite3',
+    );
+    return { registry, run: server.registerTool.mock.calls[0][2] as HandlerFn };
+  }
+
+  it('still answers from the live registry', async () => {
+    const { registry, run } = setup();
+    registry.admit('live-1', 'codex');
+
+    const parsed = JSON.parse((await run({ session_id: 'live-1' }, {})).content[0].text);
+
+    expect(parsed).toMatchObject({ status: 'in_progress', elapsed_source: 'live_registry' });
+  });
+
+  it('answers STORAGE_UNAVAILABLE for a session it cannot see', async () => {
+    const { run } = setup();
+
+    const result = await run({ session_id: 'gone' }, {});
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/^STORAGE_UNAVAILABLE: /);
+    expect(result.content[0].text).toContain('npm rebuild better-sqlite3');
+  });
+});
+
 describe('registerReviewStatusTool', () => {
   it('registers tool with name review_status', () => {
     expect(mockServer.registerTool).toHaveBeenCalledTimes(1);

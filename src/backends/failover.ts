@@ -173,7 +173,12 @@ export async function withFailover<I extends FailoverInput, R extends FailoverRe
 
   // Both failed: lead with the primary's error (its code/prefix), note the
   // fallback outcome so the failure is diagnosable.
-  return err<R>(`${first.error} (fallback to ${secondary.provider} also failed: ${second.error})`);
+  // The primary's partial session (a thread that started and then failed) is
+  // the one the caller can still inspect; keep it on the combined failure.
+  return err<R>(
+    `${first.error} (fallback to ${secondary.provider} also failed: ${second.error})`,
+    first.session_id ?? second.session_id,
+  );
 }
 
 export function createFailoverBackend(

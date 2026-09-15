@@ -652,6 +652,7 @@ describe('whole-review deadline (ISS-046)', () => {
       timeout_seconds: 3600,
       review_deadline_seconds: 2,
     });
+    mockThreadId = 'thread_partial';
     const pending = client.reviewPlan({ execution: EXEC, plan: 'p' });
     await vi.advanceTimersByTimeAsync(2_100);
     const result = await pending;
@@ -659,7 +660,42 @@ describe('whole-review deadline (ISS-046)', () => {
     if (!result.ok) {
       expect(result.error).toContain('REVIEW_TIMEOUT');
       expect(result.error).toContain('review_deadline_seconds');
+      // Locked probe: a fresh review that hit the deadline names the thread
+      // Codex had already started, so review_status/history can find it.
+      expect(result.session_id).toBe('thread_partial');
     }
+  });
+});
+
+// Locked probe (probe-loop, ISS-046): a fresh review that fails after Codex
+// started its thread used to return a bare error, so the lifecycle had no id
+// to mark failed and the caller nothing to query. Cross-layer trust violation.
+describe('failures name the thread once it exists', () => {
+  it('attaches the started thread id to a first-attempt timeout', async () => {
+    mockRun.mockRejectedValue(new DOMException('signal is aborted', 'AbortError'));
+    mockThreadId = 'thread_started';
+    const result = await createCodexBackend(config).reviewPlan({ execution: EXEC, plan: 'plan' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.session_id).toBe('thread_started');
+  });
+
+  it('attaches it to a classified provider error and to exhausted retries', async () => {
+    mockThreadId = 'thread_started';
+    mockRun.mockRejectedValue(new Error('rate limit exceeded'));
+    const classified = await createCodexBackend(config).reviewPlan({ execution: EXEC, plan: 'p' });
+    expect(!classified.ok && classified.session_id).toBe('thread_started');
+
+    mockRun.mockResolvedValue({ finalResponse: 'not json' });
+    const exhausted = await createCodexBackend(config).reviewPlan({ execution: EXEC, plan: 'p' });
+    expect(!exhausted.ok && exhausted.error).toContain('RESPONSE_PARSE_ERROR');
+    expect(!exhausted.ok && exhausted.session_id).toBe('thread_started');
+  });
+
+  it('carries nothing when the thread never started', async () => {
+    mockThreadId = null;
+    mockRun.mockRejectedValue(new DOMException('signal is aborted', 'AbortError'));
+    const result = await createCodexBackend(config).reviewPlan({ execution: EXEC, plan: 'plan' });
+    expect(!result.ok && result.session_id).toBeUndefined();
   });
 });
 

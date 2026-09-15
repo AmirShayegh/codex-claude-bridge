@@ -303,6 +303,14 @@ async function runReview<T extends Record<string, unknown>>(
   timer.unref?.();
   const signal = controller.signal;
   let lastError: string | undefined;
+  // Once the thread exists, every failure names it. The Codex thread id is
+  // assigned from the first `thread.started` event, well before a turn can time
+  // out, so a fresh review that fails mid-turn still leaves a session the
+  // lifecycle can mark failed and the caller can query (probe-loop, ISS-046).
+  // Cross-layer trust violation guarded: the lifecycle persists whatever id the
+  // backend hands back, and used to be handed nothing.
+  const fail = (message: string): Result<T & { session_id: string }> =>
+    err(message, thread.id ?? sessionId);
 
   try {
     // Attempt up to 2 times (initial + 1 retry)
@@ -317,24 +325,24 @@ async function runReview<T extends Record<string, unknown>>(
           // timeout (m2). A first-attempt timeout has no lastError and still
           // reports REVIEW_TIMEOUT.
           if (lastError) {
-            return err(`${ErrorCode.RESPONSE_PARSE_ERROR}: ${lastError}`);
+            return fail(`${ErrorCode.RESPONSE_PARSE_ERROR}: ${lastError}`);
           }
           const tokenEst = estimateTokens(prompt);
           if (deadlineGoverns) {
-            return err(
+            return fail(
               `${ErrorCode.REVIEW_TIMEOUT}: review_deadline_seconds ` +
                 `(${config.review_deadline_seconds}s) reached during a provider turn ` +
                 `(prompt ~${tokenEst} tokens). Raise it in .reviewbridge.json or reduce the diff.`,
             );
           }
-          return err(
+          return fail(
             `${ErrorCode.REVIEW_TIMEOUT}: review timed out after ${config.timeout_seconds}s ` +
               `(prompt ~${tokenEst} tokens). ` +
               `Try: increase timeout_seconds in .reviewbridge.json, reduce diff size, or check input format.`,
           );
         }
         const classified = classifyError(e, { model: resolvedModel });
-        return err(`${classified.code}: ${classified.message}`);
+        return fail(`${classified.code}: ${classified.message}`);
       }
 
       let parsed: unknown;
@@ -366,7 +374,7 @@ async function runReview<T extends Record<string, unknown>>(
       return ok({ ...validated, session_id: parsedSessionId.data });
     }
 
-    return err(`${ErrorCode.RESPONSE_PARSE_ERROR}: ${lastError}`);
+    return fail(`${ErrorCode.RESPONSE_PARSE_ERROR}: ${lastError}`);
   } finally {
     clearTimeout(timer);
   }

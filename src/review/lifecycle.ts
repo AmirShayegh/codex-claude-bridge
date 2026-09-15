@@ -20,7 +20,7 @@ import type { RecordReviewOutcomeInput } from '../storage/review-outcome.js';
 import { recordReviewOutcomeWithRetry } from '../storage/review-outcome.js';
 import type { SessionRegistry } from '../storage/session-registry.js';
 import type { StorageDurability } from '../storage/db.js';
-import { getOrCreateSession, markSessionFailed } from '../storage/sessions.js';
+import { getOrCreateSession, markSessionFailed, toSessionTimestamp } from '../storage/sessions.js';
 import { escapeTerminalControls } from '../utils/terminal.js';
 import { err, ErrorCode, ok } from '../utils/errors.js';
 import type { Result } from '../utils/errors.js';
@@ -60,6 +60,22 @@ const MEMORY_ONLY_WARNING =
 const OUTCOME_WRITE_WARNING =
   'Review succeeded, but its history could not be saved durably; session routing is memory-only.';
 const UNEXPECTED_REVIEW_ERROR = `${ErrorCode.UNKNOWN_ERROR}: review failed unexpectedly`;
+
+// A failed review whose provider had already started a session names it in the
+// message: the id is otherwise invisible to an MCP caller (tools return only
+// the text), and it is what review_status / review_history answer for. A
+// resumed session's own id is not repeated — the caller already has it.
+function withPartialSessionHint<R>(
+  failure: Result<R>,
+  inputSessionId: string | undefined,
+): Result<R> {
+  if (failure.ok || !failure.session_id || failure.session_id === inputSessionId) return failure;
+  return err<R>(
+    `${failure.error} [session_id: ${failure.session_id} — it is recorded as failed; ` +
+      `review_status and review_history can look it up]`,
+    failure.session_id,
+  );
+}
 
 function notRecorded<R extends ReviewResult>(result: R): R {
   return {
@@ -165,6 +181,9 @@ export function createReviewLifecycle(options: ReviewLifecycleOptions): ReviewLi
     servingProvider: ReviewProvider;
     release: () => void;
     discardAfterRelease: Set<string>;
+    // When this review was admitted; the start a failed fresh session is
+    // recorded with.
+    startedAt: number;
   }
 
   interface NormalizedReview<R extends ReviewResult> {
@@ -192,6 +211,7 @@ export function createReviewLifecycle(options: ReviewLifecycleOptions): ReviewLi
       servingProvider,
       release: admission.data.release,
       discardAfterRelease: new Set<string>(),
+      startedAt: Date.now(),
     });
   }
 
@@ -214,7 +234,7 @@ export function createReviewLifecycle(options: ReviewLifecycleOptions): ReviewLi
     );
     if (!freshResult.ok) {
       registry.fail(input.session_id);
-      persistFailure(prepared.servingProvider, input.session_id);
+      persistFailure(prepared.servingProvider, prepared.startedAt, input.session_id);
       return err(freshResult.error);
     }
 
@@ -297,6 +317,7 @@ export function createReviewLifecycle(options: ReviewLifecycleOptions): ReviewLi
   // mask the review failure being reported.
   function persistFailure(
     provider: ReviewProvider,
+    startedAt: number,
     ...sessionIds: Array<string | undefined>
   ): void {
     if (!storage || storage.durability === 'memory_only') return;
@@ -304,7 +325,13 @@ export function createReviewLifecycle(options: ReviewLifecycleOptions): ReviewLi
       if (!id) continue;
       try {
         storage.db.transaction(() => {
-          const created = getOrCreateSession(storage.db, id, provider);
+          const created = getOrCreateSession(
+            storage.db,
+            id,
+            provider,
+            undefined,
+            toSessionTimestamp(startedAt),
+          );
           if (!created.ok) throw new Error(created.error);
           const failed = markSessionFailed(storage.db, id);
           if (!failed.ok) throw new Error(failed.error);
@@ -321,10 +348,11 @@ export function createReviewLifecycle(options: ReviewLifecycleOptions): ReviewLi
 
   function unexpectedFailure<R extends ReviewResult>(
     provider: ReviewProvider,
+    startedAt: number,
     sessionId?: string,
   ): Result<R> {
     registry.fail(sessionId);
-    persistFailure(provider, sessionId);
+    persistFailure(provider, startedAt, sessionId);
     console.error('[codex-bridge] review failed unexpectedly');
     return err<R>(UNEXPECTED_REVIEW_ERROR);
   }
@@ -341,7 +369,7 @@ export function createReviewLifecycle(options: ReviewLifecycleOptions): ReviewLi
         const synthetic = await invoke();
         return synthetic.ok ? ok(notRecorded(synthetic.data)) : synthetic;
       } catch {
-        return unexpectedFailure<R>(backend.provider);
+        return unexpectedFailure<R>(backend.provider, Date.now());
       }
     }
 
@@ -353,8 +381,13 @@ export function createReviewLifecycle(options: ReviewLifecycleOptions): ReviewLi
       const providerResult = await invoke();
       if (!providerResult.ok) {
         registry.fail(input.session_id, providerResult.session_id);
-        persistFailure(prepared.servingProvider, input.session_id, providerResult.session_id);
-        return providerResult;
+        persistFailure(
+          prepared.servingProvider,
+          prepared.startedAt,
+          input.session_id,
+          providerResult.session_id,
+        );
+        return withPartialSessionHint(providerResult, input.session_id);
       }
 
       const normalized = normalizeProviderSuccess(input, providerResult.data, prepared);
@@ -368,7 +401,7 @@ export function createReviewLifecycle(options: ReviewLifecycleOptions): ReviewLi
       if (!provenance.ok) return err<R>(provenance.error);
       return ok({ ...normalized.data.result, provenance: provenance.data });
     } catch {
-      return unexpectedFailure<R>(prepared.servingProvider, input.session_id);
+      return unexpectedFailure<R>(prepared.servingProvider, prepared.startedAt, input.session_id);
     } finally {
       releaseOrDiscardRoutingState(prepared);
     }

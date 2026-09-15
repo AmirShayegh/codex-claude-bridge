@@ -775,9 +775,68 @@ describe('failure persistence', () => {
       recordOutcome: vi.fn(),
     });
 
-    await lifecycle.reviewPlan({ execution: EXEC, plan: 'plan' });
+    const result = await lifecycle.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(await statusOf(db, 'fresh-partial')).toBe('failed');
+    // Locked probe (probe-loop, ISS-046): the id must reach the caller in the
+    // text, since MCP tools return only the error string.
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/^MODEL_ERROR: boom \[session_id: fresh-partial/);
+      expect(result.session_id).toBe('fresh-partial');
+    }
+  });
+
+  it('records when a failed FRESH review actually began, not when it failed (probe-loop, ISS-046)', async () => {
+    const db = await completedSessionDb();
+    const { getSession } = await import('../storage/sessions.js');
+    const admittedAt = Date.now() - 45_000;
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(admittedAt);
+    const lifecycle = createReviewLifecycle({
+      backend: backend({
+        reviewPlan: vi.fn().mockImplementation(async () => {
+          // The provider ran for 45 seconds before failing mid-turn.
+          vi.setSystemTime(admittedAt + 45_000);
+          return err('REVIEW_TIMEOUT: deadline', 'fresh-late');
+        }),
+      }),
+      registry: createSessionRegistry(),
+      lookupSessionProvider: () => ({ status: 'absent' }),
+      storage: { db, durability: 'durable', warning: null },
+      recordOutcome: vi.fn(),
+    });
+    try {
+      await lifecycle.reviewPlan({ execution: EXEC, plan: 'plan' });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const row = getSession(db, 'fresh-late');
+    expect(row.ok && row.data?.status).toBe('failed');
+    const createdAt = row.ok && row.data ? new Date(row.data.created_at + 'Z').getTime() : NaN;
+    expect(createdAt).toBe(Math.floor(admittedAt / 1000) * 1000);
+  });
+
+  it('does not repeat a resumed session id in the failure text', async () => {
+    const db = await completedSessionDb();
+    const lifecycle = createReviewLifecycle({
+      backend: backend({
+        reviewPlan: vi.fn().mockResolvedValue(err('MODEL_ERROR: boom', 'old-owner')),
+      }),
+      registry: createSessionRegistry(),
+      lookupSessionProvider: () => ({ status: 'found', value: 'codex' }),
+      storage: { db, durability: 'durable', warning: null },
+      recordOutcome: vi.fn(),
+    });
+
+    const result = await lifecycle.reviewPlan({
+      execution: EXEC,
+      plan: 'plan',
+      session_id: 'old-owner',
+    });
+
+    expect(!result.ok && result.error).toBe('MODEL_ERROR: boom');
   });
 
   it('writes nothing when storage is memory-only', async () => {

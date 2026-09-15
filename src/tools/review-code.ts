@@ -116,10 +116,17 @@ export function registerReviewCodeTool(
           // An empty capture is a real (approving) answer, so it must still say
           // WHERE it looked — otherwise it is indistinguishable from a capture
           // that ran in the wrong repository.
+          const where = escapeTerminalControls(prepared.data.capturedFrom);
+          const range =
+            source.data.kind === 'capture' && source.data.target === 'range' ? source.data : null;
           const emptyCapture = withCapturedFrom(
             {
               verdict: 'approve',
-              summary: `No changes found to review in ${escapeTerminalControls(prepared.data.capturedFrom)}.`,
+              // A range names its refs (probe-loop, ISS-049): "no changes in
+              // <dir>" reads as a clean tree, which is not what was asked.
+              summary: range
+                ? `No changes between ${range.base} and ${range.head} in ${where}.`
+                : `No changes found to review in ${where}.`,
               findings: [],
               session_id: args.session_id ?? randomUUID(),
               models: [],

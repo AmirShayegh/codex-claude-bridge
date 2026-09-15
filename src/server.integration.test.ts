@@ -831,13 +831,27 @@ describe('MCP integration — session lifecycle', () => {
       .mockResolvedValueOnce({ finalResponse: JSON.stringify(validPlanResponse) });
     client = await startServer();
 
+    // Codex had started a thread before the turn failed. Real Codex never hands
+    // a second review the same thread id, so the failed one gets its own.
+    mockThreadId = 'thread_integ_failed';
     const failResult = await client.callTool({
       name: 'review_plan',
       arguments: { plan: 'Plan A' },
     });
     const failText = getErrorText(failResult);
     expect(failText).toContain('transient failure');
+    // Locked probe (probe-loop, ISS-046): the failure names the thread it left
+    // behind, and review_status can find it as failed.
+    expect(failText).toContain('session_id: thread_integ_failed');
+    const status = parseToolResult(
+      await client.callTool({
+        name: 'review_status',
+        arguments: { session_id: 'thread_integ_failed' },
+      }),
+    ) as Record<string, unknown>;
+    expect(status.status).toBe('failed');
 
+    mockThreadId = 'thread_integ_001';
     const okResult = await client.callTool({ name: 'review_plan', arguments: { plan: 'Plan B' } });
     const parsed = parseToolResult(okResult) as Record<string, unknown>;
     expect(parsed.verdict).toBe('approve');

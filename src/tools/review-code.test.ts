@@ -151,6 +151,14 @@ describe('registerReviewCodeTool', () => {
     expect(prepareDiffReview).not.toHaveBeenCalled();
   });
 
+  it('names both refs when a committed range is empty (probe-loop, ISS-049)', async () => {
+    vi.mocked(prepareDiffReview).mockResolvedValue(emptyCapture('/work/repo-b'));
+    const response = await setup()({ base: 'main', head: 'feature', cwd: '/work/repo-b' }, {});
+    expect(JSON.parse(response.content[0].text).summary).toBe(
+      'No changes between main and feature in /work/repo-b.',
+    );
+  });
+
   it('auto-captures when diff is omitted', async () => {
     await setup()({}, {});
     expect(prepareDiffReview).toHaveBeenCalledWith(PREP, {

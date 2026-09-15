@@ -138,6 +138,22 @@ describe('createFailoverBackend', () => {
     }
   });
 
+  it('keeps the primary partial session id on a combined failure (probe-loop, ISS-046)', async () => {
+    const primary = backend('codex', {
+      reviewCode: vi.fn().mockResolvedValue(err(`${ErrorCode.RATE_LIMITED}: usage`, 'pri-partial')),
+    });
+    const secondary = backend('gemini', {
+      reviewCode: vi.fn().mockResolvedValue(err(`${ErrorCode.AUTH_ERROR}: not signed in`)),
+    });
+
+    const res = await createFailoverBackend(primary, secondary).reviewCode({
+      execution: EXEC,
+      diff: DIFF,
+    });
+
+    expect(!res.ok && res.session_id).toBe('pri-partial');
+  });
+
   it('does NOT fail over a resumed session (delegates to primary only)', async () => {
     const secReview = vi.fn();
     const primary = backend('codex', {

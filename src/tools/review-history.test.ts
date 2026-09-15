@@ -59,6 +59,29 @@ describe('registerReviewHistoryTool', () => {
     expect(parsed.next_cursor).toBeNull();
   });
 
+  it('reports the session state alongside a session query so a failed or stalled review leaves evidence (ISS-046)', async () => {
+    db.prepare(
+      "INSERT INTO sessions (session_id, status, created_at, completed_at, provider) VALUES (?, 'failed', '2026-01-01 00:00:00', '2026-01-01 00:30:00', 'codex')",
+    ).run('thread_stalled');
+
+    const parsed = JSON.parse(
+      (await handler({ session_id: 'thread_stalled' }, {})).content[0].text,
+    );
+    expect(parsed.reviews).toEqual([]);
+    expect(parsed.session).toEqual({
+      status: 'failed',
+      provider: 'codex',
+      created_at: '2026-01-01T00:00:00.000Z',
+      completed_at: '2026-01-01T00:30:00.000Z',
+    });
+  });
+
+  it('reports session: null for a session id it has never seen', async () => {
+    const parsed = JSON.parse((await handler({ session_id: 'never' }, {})).content[0].text);
+    expect(parsed.reviews).toEqual([]);
+    expect(parsed.session).toBeNull();
+  });
+
   it('returns last_n recent reviews when no session_id', async () => {
     saveReview(db, {
       session_id: 'thread_a',

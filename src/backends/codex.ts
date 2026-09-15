@@ -255,6 +255,7 @@ async function runReview<T extends Record<string, unknown>>(
     model,
     resolvedModel,
     workingDirectory,
+    deadlineAt,
   } = params;
   let sessionId: string | undefined;
   if (rawSessionId !== undefined) {
@@ -290,64 +291,85 @@ async function runReview<T extends Record<string, unknown>>(
   }
 
   const outputSchema = toJSONSchema(responseSchema);
-  const signal = AbortSignal.timeout(config.timeout_seconds * 1000);
+  // One budget across both attempts: the per-turn timeout, or the time left to
+  // the whole-review deadline when that is nearer (ISS-046). A plain timer +
+  // controller rather than AbortSignal.timeout so the bound is observable and
+  // testable with fake timers, and never keeps the process alive.
+  const perTurnMs = config.timeout_seconds * 1000;
+  const remainingMs = deadlineAt === undefined ? perTurnMs : Math.max(deadlineAt - Date.now(), 1);
+  const deadlineGoverns = remainingMs < perTurnMs;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.min(perTurnMs, remainingMs));
+  timer.unref?.();
+  const signal = controller.signal;
   let lastError: string | undefined;
 
-  // Attempt up to 2 times (initial + 1 retry)
-  for (let attempt = 0; attempt < 2; attempt++) {
-    let turn;
-    try {
-      turn = await thread.run(prompt, { outputSchema, signal });
-    } catch (e: unknown) {
-      if (isAbortError(e)) {
-        // If a prior attempt already produced unparseable output, the malformed
-        // response — not the clock — is the actionable cause. Don't mask it as a
-        // timeout (m2). A first-attempt timeout has no lastError and still
-        // reports REVIEW_TIMEOUT.
-        if (lastError) {
-          return err(`${ErrorCode.RESPONSE_PARSE_ERROR}: ${lastError}`);
+  try {
+    // Attempt up to 2 times (initial + 1 retry)
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let turn;
+      try {
+        turn = await thread.run(prompt, { outputSchema, signal });
+      } catch (e: unknown) {
+        if (isAbortError(e)) {
+          // If a prior attempt already produced unparseable output, the malformed
+          // response — not the clock — is the actionable cause. Don't mask it as a
+          // timeout (m2). A first-attempt timeout has no lastError and still
+          // reports REVIEW_TIMEOUT.
+          if (lastError) {
+            return err(`${ErrorCode.RESPONSE_PARSE_ERROR}: ${lastError}`);
+          }
+          const tokenEst = estimateTokens(prompt);
+          if (deadlineGoverns) {
+            return err(
+              `${ErrorCode.REVIEW_TIMEOUT}: review_deadline_seconds ` +
+                `(${config.review_deadline_seconds}s) reached during a provider turn ` +
+                `(prompt ~${tokenEst} tokens). Raise it in .reviewbridge.json or reduce the diff.`,
+            );
+          }
+          return err(
+            `${ErrorCode.REVIEW_TIMEOUT}: review timed out after ${config.timeout_seconds}s ` +
+              `(prompt ~${tokenEst} tokens). ` +
+              `Try: increase timeout_seconds in .reviewbridge.json, reduce diff size, or check input format.`,
+          );
         }
-        const tokenEst = estimateTokens(prompt);
+        const classified = classifyError(e, { model: resolvedModel });
+        return err(`${classified.code}: ${classified.message}`);
+      }
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(turn.finalResponse);
+      } catch {
+        lastError = 'malformed JSON in response';
+        continue;
+      }
+
+      const result = responseSchema.safeParse(parsed);
+      if (!result.success) {
+        lastError = result.error.message;
+        continue;
+      }
+
+      const resolvedId = thread.id ?? sessionId;
+      if (resolvedId === undefined || resolvedId === null) {
+        return err(`${ErrorCode.RESPONSE_PARSE_ERROR}: missing session ID after successful review`);
+      }
+      const parsedSessionId = SessionIdSchema.safeParse(resolvedId);
+      if (!parsedSessionId.success) {
         return err(
-          `${ErrorCode.REVIEW_TIMEOUT}: review timed out after ${config.timeout_seconds}s ` +
-            `(prompt ~${tokenEst} tokens). ` +
-            `Try: increase timeout_seconds in .reviewbridge.json, reduce diff size, or check input format.`,
+          `${ErrorCode.RESPONSE_PARSE_ERROR}: provider returned an invalid session ID after successful review`,
         );
       }
-      const classified = classifyError(e, { model: resolvedModel });
-      return err(`${classified.code}: ${classified.message}`);
+      // Single cast justified: safeParse validated result.data matches the schema
+      const validated = result.data as T;
+      return ok({ ...validated, session_id: parsedSessionId.data });
     }
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(turn.finalResponse);
-    } catch {
-      lastError = 'malformed JSON in response';
-      continue;
-    }
-
-    const result = responseSchema.safeParse(parsed);
-    if (!result.success) {
-      lastError = result.error.message;
-      continue;
-    }
-
-    const resolvedId = thread.id ?? sessionId;
-    if (resolvedId === undefined || resolvedId === null) {
-      return err(`${ErrorCode.RESPONSE_PARSE_ERROR}: missing session ID after successful review`);
-    }
-    const parsedSessionId = SessionIdSchema.safeParse(resolvedId);
-    if (!parsedSessionId.success) {
-      return err(
-        `${ErrorCode.RESPONSE_PARSE_ERROR}: provider returned an invalid session ID after successful review`,
-      );
-    }
-    // Single cast justified: safeParse validated result.data matches the schema
-    const validated = result.data as T;
-    return ok({ ...validated, session_id: parsedSessionId.data });
+    return err(`${ErrorCode.RESPONSE_PARSE_ERROR}: ${lastError}`);
+  } finally {
+    clearTimeout(timer);
   }
-
-  return err(`${ErrorCode.RESPONSE_PARSE_ERROR}: ${lastError}`);
 }
 
 export function createCodexBackend(

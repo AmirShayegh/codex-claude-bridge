@@ -105,6 +105,11 @@ export const ReviewBridgeConfigSchema = z.object({
   codex_path: z.string().optional(),
   reasoning_effort: z.enum(['low', 'medium', 'high']).default('medium'),
   timeout_seconds: z.number().int().positive().default(300),
+  // Optional wall-clock ceiling for ONE WHOLE review call, across every chunk
+  // and retry. `timeout_seconds` bounds a single provider turn, so a chunked
+  // review could legitimately run N times that long; this bounds the caller's
+  // total wait instead (ISS-046). Unset = no whole-review ceiling.
+  review_deadline_seconds: z.number().int().positive().optional(),
   max_chunk_tokens: z.number().int().positive().default(8000),
   review_standards: ReviewStandardsSchema.default(() => ReviewStandardsSchema.parse({})),
   project_context: z.string().default(''),

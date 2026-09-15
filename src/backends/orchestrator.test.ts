@@ -477,6 +477,60 @@ describe('orchestrator — model resolution wiring', () => {
   });
 });
 
+describe('orchestrator — whole-review deadline (ISS-046)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('hands every turn the same absolute deadline when review_deadline_seconds is set', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    const { turn, calls } = makeCountingTurn(CANNED_CODE);
+    const res = await runCodeReview(
+      { execution: EXEC, diff: bigDiff(3, 30) },
+      deps(false, { max_chunk_tokens: 2500, review_deadline_seconds: 60 }),
+      turn,
+    );
+    expect(res.ok).toBe(true);
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    const expected = new Date('2026-01-01T00:01:00Z').getTime();
+    expect(calls.every((c) => c.deadlineAt === expected)).toBe(true);
+  });
+
+  it('leaves deadlineAt undefined when no deadline is configured', async () => {
+    const { turn, calls } = makeCountingTurn(CANNED_CODE);
+    await runCodeReview({ execution: EXEC, diff: SMALL_DIFF }, deps(false), turn);
+    expect(calls[0].deadlineAt).toBeUndefined();
+  });
+
+  it('stops between chunks once the deadline has passed and reports the established session', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    const calls: TurnParams[] = [];
+    const turn: TurnRunner = <T extends Record<string, unknown>>(params: TurnParams) => {
+      calls.push(params);
+      // Chunk 1 takes longer than the whole budget.
+      vi.setSystemTime(new Date('2026-01-01T00:02:00Z'));
+      const canned: Record<string, unknown> = CANNED_CODE;
+      return Promise.resolve(
+        ok({ ...canned, session_id: 'thread-1' } as T & { session_id: string }),
+      );
+    };
+    const res = await runCodeReview(
+      { execution: EXEC, diff: bigDiff(3, 30) },
+      deps(false, { max_chunk_tokens: 2500, review_deadline_seconds: 60 }),
+      turn,
+    );
+    expect(calls).toHaveLength(1);
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error).toContain('REVIEW_TIMEOUT');
+      expect(res.error).toContain('review_deadline_seconds');
+      expect(res.session_id).toBe('thread-1');
+    }
+  });
+});
+
 describe('orchestrator — resumesAcrossChunks capability (chunked reviews)', () => {
   it('resumesAcrossChunks=true (Codex): chunks 2..N resume the prior chunk session', async () => {
     const { turn, calls } = makeCountingTurn(CANNED_CODE);

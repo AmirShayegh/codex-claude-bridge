@@ -32,6 +32,13 @@ export function registerReviewStatusTool(
                   status: live.status,
                   session_id: live.sessionId,
                   elapsed_seconds: Math.max(0, Math.round((end - live.startedAt) / 1000)),
+                  // Where the clock comes from (ISS-046): wall time since this
+                  // process admitted the review, not provider progress.
+                  elapsed_source: 'live_registry',
+                  elapsed_basis: 'wall_clock',
+                  started_at: new Date(live.startedAt).toISOString(),
+                  completed_at:
+                    live.completedAt === null ? null : new Date(live.completedAt).toISOString(),
                 }),
               },
             ],
@@ -55,13 +62,9 @@ export function registerReviewStatusTool(
         }
 
         const createdAt = new Date(row.created_at + 'Z');
-        let elapsedSeconds: number;
-        if (row.completed_at) {
-          const completedAt = new Date(row.completed_at + 'Z');
-          elapsedSeconds = Math.round((completedAt.getTime() - createdAt.getTime()) / 1000);
-        } else {
-          elapsedSeconds = Math.round((Date.now() - createdAt.getTime()) / 1000);
-        }
+        const completedAt = row.completed_at ? new Date(row.completed_at + 'Z') : null;
+        const end = completedAt ?? new Date();
+        const elapsedSeconds = Math.round((end.getTime() - createdAt.getTime()) / 1000);
 
         return {
           content: [
@@ -71,6 +74,11 @@ export function registerReviewStatusTool(
                 status: row.status,
                 session_id: row.session_id,
                 elapsed_seconds: elapsedSeconds,
+                // Wall time since the stored session row was created (ISS-046).
+                elapsed_source: 'history_db',
+                elapsed_basis: 'wall_clock',
+                started_at: createdAt.toISOString(),
+                completed_at: completedAt === null ? null : completedAt.toISOString(),
               }),
             },
           ],

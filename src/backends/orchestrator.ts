@@ -229,6 +229,34 @@ export interface TurnParams {
   // bridge knows it. It stays undefined for an unrecorded legacy Codex resume
   // instead of substituting today's default. Used for error context otherwise.
   resolvedModel?: string;
+  // Absolute epoch-ms deadline for the WHOLE review this turn belongs to
+  // (config.review_deadline_seconds), when one is configured. A backend bounds
+  // its own turn by the smaller of its per-turn timeout and the time left to
+  // this deadline (ISS-046).
+  deadlineAt?: number;
+}
+
+// The whole-review deadline for one review call, computed once at its start.
+function reviewDeadline(config: ReviewBridgeConfig): number | undefined {
+  return config.review_deadline_seconds === undefined
+    ? undefined
+    : Date.now() + config.review_deadline_seconds * 1000;
+}
+
+// Between chunks: has the whole-review deadline already passed? Returns the
+// error to surface, or undefined to continue.
+function deadlineExceeded(
+  config: ReviewBridgeConfig,
+  deadlineAt: number | undefined,
+  done: number,
+  total: number,
+): string | undefined {
+  if (deadlineAt === undefined || Date.now() < deadlineAt) return undefined;
+  return (
+    `${ErrorCode.REVIEW_TIMEOUT}: review_deadline_seconds (${config.review_deadline_seconds}s) ` +
+    `reached after ${done} of ${total} chunks. Raise it in .reviewbridge.json, reduce the diff, ` +
+    `or review in smaller pieces.`
+  );
 }
 
 export type TurnRunner = <T extends Record<string, unknown>>(
@@ -412,6 +440,7 @@ export async function runPlanReview(
     sessionId: input.session_id,
     model: perTurnModel(prepared.turnResolved),
     resolvedModel: prepared.turnResolved,
+    deadlineAt: reviewDeadline(config),
   });
   return enrichModelIdentity(result, deps, prepared, 'review');
 }
@@ -526,6 +555,7 @@ export async function runCodeReview(
   const preparedResult = await prepareModel(input, deps);
   if (!preparedResult.ok) return preparedResult;
   const prepared = preparedResult.data;
+  const deadlineAt = reviewDeadline(config);
 
   // Single chunk — standard path (no chunks_reviewed)
   if (chunks.length === 1) {
@@ -544,6 +574,7 @@ export async function runCodeReview(
       sessionId: input.session_id,
       model: perTurnModel(prepared.turnResolved),
       resolvedModel: prepared.turnResolved,
+      deadlineAt,
     });
     return enrichModelIdentity(result, deps, prepared, 'review');
   }
@@ -563,6 +594,12 @@ export async function runCodeReview(
   let reviewSessionId: string | undefined;
 
   for (let i = 0; i < chunks.length; i++) {
+    // The session to blame on a failure: the threaded session when resuming,
+    // else chunk 1's id (or a cross-phase input session if chunk 1 itself
+    // failed). Surfaced so the tool layer can mark it failed (T-001).
+    const established = resumesAcrossChunks ? threaded : (reviewSessionId ?? input.session_id);
+    const late = deadlineExceeded(config, deadlineAt, i, chunks.length);
+    if (late !== undefined) return err<CodeReviewResult>(late, established);
     const chunkHeader = `Chunk ${i + 1} of ${chunks.length}: reviewing the following files only.`;
     const prompt = buildCodeReviewPrompt({ ...input, diff: chunks[i], chunkHeader }, codeConfig);
     const chunkSession = chunkSessionFor(i, resumesAcrossChunks, threaded, input.session_id);
@@ -575,18 +612,10 @@ export async function runCodeReview(
       sessionId: chunkSession,
       model: perTurnModel(prepared.turnResolved),
       resolvedModel: prepared.turnResolved,
+      deadlineAt,
     });
 
     if (!result.ok) {
-      // Surface the partial session id so the tool layer can mark this session
-      // failed (T-001): the threaded session when resuming, else chunk 1's id
-      // (or a cross-phase input session if chunk 1 itself failed).
-      let established: string | undefined;
-      if (resumesAcrossChunks) {
-        established = threaded;
-      } else {
-        established = reviewSessionId ?? input.session_id;
-      }
       return established ? err<CodeReviewResult>(result.error, established) : result;
     }
     chunkResults.push(result.data);
@@ -651,6 +680,7 @@ export async function runPrecommitReview(
   const preparedResult = await prepareModel(input, deps);
   if (!preparedResult.ok) return preparedResult;
   const prepared = preparedResult.data;
+  const deadlineAt = reviewDeadline(config);
 
   // Single chunk — standard path (no chunks_reviewed)
   if (chunks.length === 1) {
@@ -668,6 +698,7 @@ export async function runPrecommitReview(
       sessionId: input.session_id,
       model: perTurnModel(prepared.turnResolved),
       resolvedModel: prepared.turnResolved,
+      deadlineAt,
     });
     return enrichModelIdentity(result, deps, prepared, 'review');
   }
@@ -683,6 +714,10 @@ export async function runPrecommitReview(
   let reviewSessionId: string | undefined;
 
   for (let i = 0; i < chunks.length; i++) {
+    // T-001: see runCodeReview chunk loop for rationale.
+    const established = resumesAcrossChunks ? threaded : (reviewSessionId ?? input.session_id);
+    const late = deadlineExceeded(config, deadlineAt, i, chunks.length);
+    if (late !== undefined) return err<PrecommitResult>(late, established);
     const chunkHeader = `Chunk ${i + 1} of ${chunks.length}: checking the following files only.`;
     const prompt = buildPrecommitPrompt(
       { ...input, diff: chunks[i], chunkHeader },
@@ -698,16 +733,10 @@ export async function runPrecommitReview(
       sessionId: chunkSession,
       model: perTurnModel(prepared.turnResolved),
       resolvedModel: prepared.turnResolved,
+      deadlineAt,
     });
 
     if (!result.ok) {
-      // T-001: see runCodeReview chunk loop for rationale.
-      let established: string | undefined;
-      if (resumesAcrossChunks) {
-        established = threaded;
-      } else {
-        established = reviewSessionId ?? input.session_id;
-      }
       return established ? err<PrecommitResult>(result.error, established) : result;
     }
     chunkResults.push(result.data);

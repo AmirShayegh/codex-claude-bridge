@@ -632,6 +632,37 @@ describe('retry on parse failure', () => {
   });
 });
 
+describe('whole-review deadline (ISS-046)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('aborts the turn at the review deadline even when timeout_seconds is far larger', async () => {
+    vi.useFakeTimers();
+    mockRun.mockImplementation(
+      (_prompt: string, opts: { signal: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          opts.signal.addEventListener('abort', () =>
+            reject(new DOMException('aborted', 'AbortError')),
+          );
+        }),
+    );
+    const client = createCodexBackend({
+      ...config,
+      timeout_seconds: 3600,
+      review_deadline_seconds: 2,
+    });
+    const pending = client.reviewPlan({ execution: EXEC, plan: 'p' });
+    await vi.advanceTimersByTimeAsync(2_100);
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('REVIEW_TIMEOUT');
+      expect(result.error).toContain('review_deadline_seconds');
+    }
+  });
+});
+
 describe('timeout handling', () => {
   it('returns REVIEW_TIMEOUT on AbortError', async () => {
     const abortError = new DOMException('signal is aborted', 'AbortError');

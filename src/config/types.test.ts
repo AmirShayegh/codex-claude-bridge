@@ -36,6 +36,15 @@ describe('ReviewBridgeConfigSchema', () => {
     }
   });
 
+  it('accepts an optional whole-review deadline and leaves it unset by default (ISS-046)', () => {
+    expect(ReviewBridgeConfigSchema.parse({}).review_deadline_seconds).toBeUndefined();
+    expect(
+      ReviewBridgeConfigSchema.parse({ review_deadline_seconds: 900 }).review_deadline_seconds,
+    ).toBe(900);
+    expect(() => ReviewBridgeConfigSchema.parse({ review_deadline_seconds: 0 })).toThrow();
+    expect(() => ReviewBridgeConfigSchema.parse({ review_deadline_seconds: 1.5 })).toThrow();
+  });
+
   it('merges partial config with defaults', () => {
     const partial = {
       model: 'gpt-5.4',

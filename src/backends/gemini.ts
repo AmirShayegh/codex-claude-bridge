@@ -593,7 +593,15 @@ export function clearObservedGeminiModels(): void {
 async function runAgyReview<T extends Record<string, unknown>>(
   params: TurnParams & { config: ReviewBridgeConfig; cwd: string },
 ): Promise<Result<T & { session_id: string }>> {
-  const { prompt, responseSchema, sessionId: rawSessionId, resolvedModel, config, cwd } = params;
+  const {
+    prompt,
+    responseSchema,
+    sessionId: rawSessionId,
+    resolvedModel,
+    config,
+    cwd,
+    deadlineAt,
+  } = params;
   let sessionId: string | undefined;
   if (rawSessionId !== undefined) {
     const parsedSessionId = SessionIdSchema.safeParse(rawSessionId);
@@ -610,7 +618,12 @@ async function runAgyReview<T extends Record<string, unknown>>(
   // One shared deadline across both attempts (total budget), mirroring Codex's
   // single AbortSignal.timeout — a fresh per-attempt timeout would grant up to
   // ~2× timeout_seconds of wall-clock (m2).
-  const deadline = Date.now() + config.timeout_seconds * 1000;
+  // The whole-review deadline, when configured and nearer, bounds it further
+  // (ISS-046).
+  const deadline = Math.min(
+    Date.now() + config.timeout_seconds * 1000,
+    deadlineAt ?? Number.POSITIVE_INFINITY,
+  );
 
   // Serialize the whole run+capture so concurrent same-cwd reviews can't race on
   // the id cache.

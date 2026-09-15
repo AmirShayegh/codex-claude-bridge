@@ -49,6 +49,22 @@ describe('registerReviewStatusTool', () => {
     expect(parsed.elapsed_seconds).toBeGreaterThanOrEqual(0);
   });
 
+  it('names its clock: wall-clock elapsed from the stored start, with the source (ISS-046)', async () => {
+    db.prepare(
+      "INSERT INTO sessions (session_id, status, created_at, completed_at) VALUES (?, 'in_progress', '2026-01-01 00:00:00', NULL)",
+    ).run('thread_clock');
+
+    const parsed = JSON.parse((await handler({ session_id: 'thread_clock' }, {})).content[0].text);
+    expect(parsed).toMatchObject({
+      status: 'in_progress',
+      elapsed_source: 'history_db',
+      elapsed_basis: 'wall_clock',
+      started_at: '2026-01-01T00:00:00.000Z',
+      completed_at: null,
+    });
+    expect(parsed.elapsed_seconds).toBeGreaterThan(1_000_000);
+  });
+
   it('completed session returns frozen elapsed_seconds', async () => {
     // Set created_at and completed_at to known values 30 seconds apart
     db.prepare(
@@ -108,6 +124,9 @@ describe('registerReviewStatusTool', () => {
     expect(JSON.parse(result.content[0].text)).toMatchObject({
       status: 'in_progress',
       session_id: 'memory-session',
+      elapsed_source: 'live_registry',
+      elapsed_basis: 'wall_clock',
+      completed_at: null,
     });
     if (admission.ok) admission.data.release();
   });

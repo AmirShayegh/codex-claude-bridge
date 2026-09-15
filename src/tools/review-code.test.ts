@@ -125,6 +125,32 @@ describe('registerReviewCodeTool', () => {
     expect(JSON.parse(response.content[0].text)).toEqual(RESULT);
   });
 
+  it('captures a committed range when base/head are given (ISS-049)', async () => {
+    await setup()({ base: 'main', head: 'feature', cwd: '/work/repo-b' }, {});
+    expect(prepareDiffReview).toHaveBeenCalledWith(PREP, {
+      cwd: '/work/repo-b',
+      source: { kind: 'capture', target: 'range', base: 'main', head: 'feature' },
+    });
+  });
+
+  it('refuses a malformed ref at the schema boundary (ISS-049)', () => {
+    setup();
+    const schema = server.registerTool.mock.calls[0][1].inputSchema as Record<
+      string,
+      { safeParse(value: unknown): { success: boolean } }
+    >;
+    expect(schema.base.safeParse('--upload-pack=evil').success).toBe(false);
+    expect(schema.head.safeParse('main;rm -rf /').success).toBe(false);
+    expect(schema.base.safeParse('origin/main').success).toBe(true);
+  });
+
+  it('returns INVALID_INPUT for head without base before any preparation (ISS-049)', async () => {
+    const response = await setup()({ head: 'feature' }, {});
+    expect(response.isError).toBe(true);
+    expect(response.content[0].text).toMatch(/^INVALID_INPUT: head requires base/);
+    expect(prepareDiffReview).not.toHaveBeenCalled();
+  });
+
   it('auto-captures when diff is omitted', async () => {
     await setup()({}, {});
     expect(prepareDiffReview).toHaveBeenCalledWith(PREP, {

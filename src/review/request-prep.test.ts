@@ -217,6 +217,45 @@ describe.skipIf(!gitAvailable)('prepareDiffReview — capture', () => {
     }
   });
 
+  it('captures a committed range between two refs (ISS-049)', async () => {
+    const repo = await repoWithCommit();
+    await git(repo, 'checkout', '-qb', 'feature');
+    await commitFile(repo, 'feature.ts', 'export const f = 1;\n');
+    const result = await prepareDiffReview(deps(repo), {
+      cwd: repo,
+      source: { kind: 'capture', target: 'range', base: 'main', head: 'feature' },
+    });
+    expectReady(result);
+    if (result.ok && result.data.kind === 'ready') {
+      expect(result.data.diff).toContain('feature.ts');
+      expect(result.data.diff).not.toContain('app.ts');
+      expect(result.data.capturedFrom).toBe(repo);
+    }
+  });
+
+  it('reports an empty range as an empty capture (ISS-049)', async () => {
+    const repo = await repoWithCommit();
+    const result = await prepareDiffReview(deps(repo), {
+      cwd: repo,
+      source: { kind: 'capture', target: 'range', base: 'HEAD', head: 'HEAD' },
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.kind).toBe('empty-capture');
+  });
+
+  it('fails a range whose ref does not exist, naming where it looked (ISS-049)', async () => {
+    const repo = await repoWithCommit();
+    const result = await prepareDiffReview(deps(repo), {
+      cwd: repo,
+      source: { kind: 'capture', target: 'range', base: 'no-such-branch', head: 'HEAD' },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/^GIT_ERROR:/);
+      expect(result.error).toContain(repo);
+    }
+  });
+
   it('refuses to auto-capture outside a work tree', async () => {
     const plain = await tempDir();
     const result = await prepareDiffReview(deps(plain), {

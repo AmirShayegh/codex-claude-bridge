@@ -1,11 +1,12 @@
 import { ok, err, ErrorCode } from './errors.js';
 import type { Result } from './errors.js';
-import { getStagedDiff, getWorkingDiff } from './git.js';
+import { getDiffBetween, getStagedDiff, getWorkingDiff } from './git.js';
 import type { ResolvedWorkspace } from './workspace.js';
 import { escapeTerminalControls } from './terminal.js';
 
 export const NO_STAGED_CHANGES = 'NO_STAGED_CHANGES';
 export const NO_WORKING_CHANGES = 'NO_WORKING_CHANGES';
+export const NO_RANGE_CHANGES = 'NO_RANGE_CHANGES';
 
 // Where a review's diff comes from, decided from the transport arguments alone.
 // Normalizing this BEFORE any filesystem work means the explicit-diff paths
@@ -13,7 +14,9 @@ export const NO_WORKING_CHANGES = 'NO_WORKING_CHANGES';
 // for before it asks anything.
 export type DiffSource =
   | { kind: 'explicit'; diff: string }
-  | { kind: 'capture'; target: 'working' | 'staged' };
+  | { kind: 'capture'; target: 'working' | 'staged' }
+  // A committed range (ISS-049): `git diff base head` at the repository root.
+  | { kind: 'capture'; target: 'range'; base: string; head: string };
 
 // A resolver-specific widening of Result<string>: a capture also reports the
 // absolute directory git actually ran in, so an empty or failed capture names
@@ -28,13 +31,30 @@ const AUTO_DIFF_DISABLED = 'auto_diff disabled and no diff provided';
 // Code review: a defined, NON-BLANK diff is explicit. A missing or
 // whitespace-only diff falls through to auto-capture — callers routinely pass
 // an empty string meaning "you fetch it".
+//
+// A `base`/`head` pair names a committed range instead (ISS-049). It is a
+// deliberate request, so it does not compete with `auto_diff`; it does compete
+// with an explicit diff, and rather than pick one silently the pair is refused.
+// `head` alone is refused too: "diff from where?" has no safe default, whereas
+// `base` alone means "up to HEAD", which is what a branch review wants.
 export function normalizeCodeDiffSource(args: {
   diff?: string;
   auto_diff?: boolean;
+  base?: string;
+  head?: string;
 }): Result<DiffSource> {
-  if (args.diff !== undefined && args.diff.trim() !== '') {
-    return ok({ kind: 'explicit', diff: args.diff });
+  const diff = args.diff ?? '';
+  const explicit = diff.trim() !== '';
+  if (args.base !== undefined || args.head !== undefined) {
+    if (explicit) {
+      return err(`${ErrorCode.INVALID_INPUT}: pass either diff or base/head, not both`);
+    }
+    if (args.base === undefined) {
+      return err(`${ErrorCode.INVALID_INPUT}: head requires base (the ref to diff from)`);
+    }
+    return ok({ kind: 'capture', target: 'range', base: args.base, head: args.head ?? 'HEAD' });
   }
+  if (explicit) return ok({ kind: 'explicit', diff });
   // auto_diff defaults to true (undefined !== false)
   if (args.auto_diff !== false) return ok({ kind: 'capture', target: 'working' });
   return err(AUTO_DIFF_DISABLED);
@@ -83,23 +103,47 @@ export async function captureDiff(
   }
   const capturedFrom = workspace.repositoryRoot;
 
-  const gitResult =
-    source.target === 'staged'
-      ? await getStagedDiff(capturedFrom)
-      : await getWorkingDiff(capturedFrom);
+  const gitResult = await runCapture(source, capturedFrom);
 
   if (!gitResult.ok) {
     return { ok: false, error: withCaptureLocation(gitResult.error, capturedFrom), capturedFrom };
   }
   if (!gitResult.data) {
-    const sentinel = source.target === 'staged' ? NO_STAGED_CHANGES : NO_WORKING_CHANGES;
-    const detail =
-      source.target === 'staged'
-        ? `No staged changes found in ${escapeTerminalControls(capturedFrom)}. Stage files with git add first.`
-        : `No changes found vs HEAD in ${escapeTerminalControls(capturedFrom)}.`;
+    const [sentinel, detail] = emptyCaptureMessage(source, capturedFrom);
     return { ok: false, error: `${sentinel}: ${detail}`, capturedFrom };
   }
   return { ok: true, data: gitResult.data, capturedFrom };
+}
+
+type CaptureSource = Extract<DiffSource, { kind: 'capture' }>;
+
+function runCapture(source: CaptureSource, root: string): Promise<Result<string>> {
+  switch (source.target) {
+    case 'staged':
+      return getStagedDiff(root);
+    case 'working':
+      return getWorkingDiff(root);
+    case 'range':
+      return getDiffBetween(source.base, source.head, root);
+  }
+}
+
+function emptyCaptureMessage(source: CaptureSource, root: string): [string, string] {
+  const where = escapeTerminalControls(root);
+  switch (source.target) {
+    case 'staged':
+      return [
+        NO_STAGED_CHANGES,
+        `No staged changes found in ${where}. Stage files with git add first.`,
+      ];
+    case 'working':
+      return [NO_WORKING_CHANGES, `No changes found vs HEAD in ${where}.`];
+    case 'range':
+      return [
+        NO_RANGE_CHANGES,
+        `No changes between ${escapeTerminalControls(source.base)} and ${escapeTerminalControls(source.head)} in ${where}.`,
+      ];
+  }
 }
 
 // Stamp a response with the resolver's capture location. The resolver is the

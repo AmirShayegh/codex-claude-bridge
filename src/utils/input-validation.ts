@@ -46,3 +46,14 @@ export const WorkingDirectorySchema = ControlFreeStringSchema.min(1, 'must not b
   4096,
   'must be at most 4096 characters',
 );
+
+// A git ref for review_code's base/head (ISS-049). Syntactic only, and matched
+// to the pattern git.ts enforces before spawning git, so a bad value is refused
+// at the transport boundary with INVALID_INPUT rather than deep in capture. A
+// leading '-' is refused separately: git would read it as an option.
+export const GitRefSchema = ControlFreeStringSchema.min(1, 'must not be empty')
+  .max(256, 'must be at most 256 characters')
+  .refine((value) => !value.startsWith('-'), { message: 'must not start with "-"' })
+  .refine((value) => /^[\w.\-/^~@{}]+$/.test(value), {
+    message: 'must be a git ref (letters, digits, and . - / ^ ~ @ { })',
+  });

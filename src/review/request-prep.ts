@@ -6,7 +6,12 @@ import {
   instructionsRootFor,
 } from '../utils/workspace.js';
 import type { ResolvedWorkspace } from '../utils/workspace.js';
-import { captureDiff, NO_STAGED_CHANGES, NO_WORKING_CHANGES } from '../utils/resolve-diff.js';
+import {
+  captureDiff,
+  NO_RANGE_CHANGES,
+  NO_STAGED_CHANGES,
+  NO_WORKING_CHANGES,
+} from '../utils/resolve-diff.js';
 import type { DiffSource } from '../utils/resolve-diff.js';
 import { loadCopilotInstructions } from '../config/copilot-instructions.js';
 import type { CopilotInstructions } from '../config/copilot-instructions.js';
@@ -164,7 +169,9 @@ async function runPrepared<T>(
 }
 
 function isEmptyCapture(error: string): boolean {
-  return error.startsWith(`${NO_STAGED_CHANGES}:`) || error.startsWith(`${NO_WORKING_CHANGES}:`);
+  return [NO_STAGED_CHANGES, NO_WORKING_CHANGES, NO_RANGE_CHANGES].some((sentinel) =>
+    error.startsWith(`${sentinel}:`),
+  );
 }
 
 /**

@@ -15,7 +15,11 @@ import { createPreparationLimiter } from '../review/preparation.js';
 import { preparePlanReview, prepareDiffReview } from '../review/request-prep.js';
 import type { RequestPreparationDeps } from '../review/request-prep.js';
 import { readInput, resetStdinGuard } from './stdin.js';
-import { normalizePrecommitDiffSource, stampCapture } from '../utils/resolve-diff.js';
+import {
+  normalizeCodeDiffSource,
+  normalizePrecommitDiffSource,
+  stampCapture,
+} from '../utils/resolve-diff.js';
 import { createHandler } from './handlers.js';
 import type { HandlerIO } from './handlers.js';
 import {
@@ -27,6 +31,7 @@ import {
 import type { PlanReviewResult, CodeReviewResult, PrecommitResult } from '../review/types.js';
 import { escapeTerminalControls } from '../utils/terminal.js';
 import {
+  GitRefSchema,
   ModelSelectorSchema,
   SessionIdSchema,
   WorkingDirectorySchema,
@@ -94,6 +99,34 @@ const invocation: { directory: string; error?: string } = (() => {
   }
 })();
 const invocationDirectory = invocation.directory;
+
+function splitCriteria(focus: string | undefined): string[] | undefined {
+  return focus
+    ? focus
+        .split(',')
+        .map((s: string) => s.trim())
+        .filter(Boolean)
+    : undefined;
+}
+
+// --base/--head are validated with the same schema the MCP surface uses, so a
+// ref that would be read by git as an option never reaches it (ISS-049).
+function validateRangeRefs(base: unknown, head: unknown): Result<{ base: string; head: string }> {
+  const parsedBase = GitRefSchema.safeParse(base);
+  if (!parsedBase.success) {
+    return err(
+      `${ErrorCode.INVALID_INPUT}: --base ${parsedBase.error.issues[0]?.message ?? 'is invalid'}`,
+    );
+  }
+  if (head === undefined) return ok({ base: parsedBase.data, head: 'HEAD' });
+  const parsedHead = GitRefSchema.safeParse(head);
+  if (!parsedHead.success) {
+    return err(
+      `${ErrorCode.INVALID_INPUT}: --head ${parsedHead.error.issues[0]?.message ?? 'is invalid'}`,
+    );
+  }
+  return ok({ base: parsedBase.data, head: parsedHead.data });
+}
 
 const CWD_HELP =
   'Directory to review in — the repository or git worktree whose code is being reviewed ' +
@@ -329,7 +362,12 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
   program
     .command('review-code')
     .description('Send a code diff for review')
-    .requiredOption('--diff <path>', 'File path or "-" for stdin')
+    .option('--diff <path>', 'File path or "-" for stdin')
+    .option(
+      '--base <ref>',
+      'Review a committed range instead of --diff: the ref to diff from (e.g. main, origin/main, HEAD~1)',
+    )
+    .option('--head <ref>', 'The ref to diff to when --base is given (default: HEAD)')
     .option('--focus <items>', 'Comma-separated review criteria')
     .option('--session <id>', 'Resume session')
     .option('--cwd <path>', CWD_HELP)
@@ -359,9 +397,84 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
         return;
       }
 
+      if (opts.diff === undefined && opts.base === undefined) {
+        io.stderr.write(
+          `Error: ${ErrorCode.INVALID_INPUT}: pass --diff <path|-> or --base <ref> (optionally --head <ref>)\n`,
+        );
+        deps.exit(1);
+        return;
+      }
+
       const init = initClient(opts.config, deps);
       if (!init) return;
       const { client } = init;
+
+      // A committed range (ISS-049): git runs in --cwd, exactly as precommit's
+      // auto-capture does, and an empty range is answered without a reviewer.
+      if (opts.diff === undefined) {
+        const refs = validateRangeRefs(opts.base, opts.head);
+        if (!refs.ok) {
+          io.stderr.write(`Error: ${escapeTerminalControls(refs.error)}\n`);
+          deps.exit(1);
+          return;
+        }
+        if (!guardSession(init, selectors.data.session, io, deps)) return;
+        const source = normalizeCodeDiffSource(refs.data);
+        if (!source.ok) {
+          io.stderr.write(`Error: ${escapeTerminalControls(source.error)}\n`);
+          deps.exit(1);
+          return;
+        }
+        const prepared = await prepareDiffReview(init.prep, {
+          cwd: requestedCwd.data,
+          source: source.data,
+        });
+        if (!prepared.ok) {
+          io.stderr.write(`Error: ${escapeTerminalControls(prepared.error)}\n`);
+          deps.exit(1);
+          return;
+        }
+        if (prepared.data.kind === 'empty-capture') {
+          const emptyFrom = prepared.data.capturedFrom;
+          const syntheticHandler = createHandler<CodeReviewResult>({
+            execute: () =>
+              Promise.resolve(
+                stampCapture(
+                  ok<CodeReviewResult>({
+                    verdict: 'approve',
+                    summary: `No changes between ${refs.data.base} and ${refs.data.head} in ${escapeTerminalControls(emptyFrom)}.`,
+                    findings: [],
+                    session_id: selectors.data.session ?? randomUUID(),
+                    models: [],
+                  }),
+                  emptyFrom,
+                ),
+              ),
+            format: formatCodeResult,
+            exitCode: () => 0,
+          });
+          await syntheticHandler(io);
+          return;
+        }
+        const { diff, capturedFrom, execution } = prepared.data;
+        const handler = createHandler<CodeReviewResult>({
+          execute: async () => {
+            const result = await client.reviewCode({
+              diff,
+              execution,
+              criteria: splitCriteria(opts.focus),
+              session_id: selectors.data.session,
+              model: selectors.data.model,
+              deliberate: opts.deliberate,
+            });
+            return stampCapture(result, capturedFrom);
+          },
+          format: formatCodeResult,
+          exitCode: () => 0,
+        });
+        await handler(io);
+        return;
+      }
 
       // --diff is read relative to the CURRENT directory, never rebased onto --cwd.
       const inputResult = await readInput(opts.diff);
@@ -417,19 +530,13 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
           const result = await client.reviewCode({
             diff: inputResult.data,
             execution,
-            criteria: opts.focus
-              ? opts.focus
-                  .split(',')
-                  .map((s: string) => s.trim())
-                  .filter(Boolean)
-              : undefined,
+            criteria: splitCriteria(opts.focus),
             session_id: selectors.data.session,
             model: selectors.data.model,
             deliberate: opts.deliberate,
           });
-          // The CLI's review-code is an explicit-input command — it never
-          // auto-captures — so there is no capture location to report, and a
-          // backend-supplied one is discarded (ISS-028).
+          // An explicit --diff never touches git, so there is no capture
+          // location to report, and a backend-supplied one is discarded (ISS-028).
           return stampCapture(result, undefined);
         },
         format: formatCodeResult,

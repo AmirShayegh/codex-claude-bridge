@@ -50,7 +50,9 @@ ACTING ON RESULTS:
 - reject → Rethink the approach. Consider a new plan and start a fresh session.
 
 TIPS:
-- review_code auto-captures working changes (git diff HEAD) — pass diff explicitly only for PR or branch diffs.
+- review_code auto-captures working changes (git diff HEAD). To review a branch or landed commits,
+  pass 'base' (and optionally 'head', default HEAD) and the bridge runs git diff base head in cwd —
+  no need to paste a diff or stage it into a scratch worktree.
 - review_precommit auto-captures staged changes — no need to pass a diff manually.
 - WHERE a review runs is per call. review_plan/review_code/review_precommit accept 'cwd': an absolute
   path to the repository or git worktree being reviewed. It decides where git captures from, which

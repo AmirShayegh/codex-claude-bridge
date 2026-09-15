@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ModelSelectorSchema, SessionIdSchema } from './input-validation.js';
+import { GitRefSchema, ModelSelectorSchema, SessionIdSchema } from './input-validation.js';
 
 describe('ModelSelectorSchema', () => {
   it('trims ordinary surrounding spaces', () => {
@@ -45,4 +45,20 @@ describe('SessionIdSchema', () => {
       );
     }
   });
+});
+
+describe('GitRefSchema (ISS-049)', () => {
+  it.each(['main', 'HEAD~3', 'origin/feature', 'v1.2.0', 'abc123', 'HEAD@{1}', 'a^'])(
+    'accepts %s',
+    (ref) => {
+      expect(GitRefSchema.safeParse(ref).success).toBe(true);
+    },
+  );
+
+  it.each(['-x', '--upload-pack=evil', 'main;rm -rf /', 'HEAD$(whoami)', 'a b', '', 'x\u0007'])(
+    'rejects %j',
+    (ref) => {
+      expect(GitRefSchema.safeParse(ref).success).toBe(false);
+    },
+  );
 });

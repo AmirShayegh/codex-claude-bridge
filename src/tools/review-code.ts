@@ -11,6 +11,7 @@ import { createSessionTracker } from '../storage/session-tracker.js';
 import type { ReviewLifecycle } from '../review/lifecycle.js';
 import {
   CWD_DESCRIPTION,
+  GitRefSchema,
   ModelSelectorSchema,
   SessionIdSchema,
   WorkingDirectorySchema,
@@ -32,7 +33,8 @@ export function registerReviewCodeTool(
         'Get an independent code review of your changes before committing. ' +
         'Call this after writing or modifying code. Pass a git diff as input. ' +
         'The diff parameter MUST contain actual git diff output (from git diff, gh pr diff, etc.), ' +
-        'NOT a summary or description of changes. ' +
+        'NOT a summary or description of changes. To review a branch or landed commits, pass base ' +
+        '(and optionally head) instead and the bridge runs git diff base head in cwd. ' +
         'If you reviewed a plan first, pass the same session_id so the reviewer checks the code against the plan. ' +
         'Returns a verdict, findings, responding models, and persistence provenance. ' +
         'An auto-captured review also returns captured_from: the absolute directory the bridge ran ' +
@@ -51,6 +53,13 @@ export function registerReviewCodeTool(
           .optional()
           .default(true)
           .describe('Auto-capture working tree changes (staged + unstaged) via git diff HEAD'),
+        base: GitRefSchema.optional().describe(
+          'Review a committed range instead: the ref to diff FROM (e.g. "main", "origin/main", ' +
+            'a commit, or "HEAD~1"). Runs git diff <base> <head> in cwd. Cannot be combined with diff.',
+        ),
+        head: GitRefSchema.optional().describe(
+          'The ref to diff TO when base is given (default: "HEAD"). Requires base.',
+        ),
         cwd: WorkingDirectorySchema.optional().describe(CWD_DESCRIPTION),
         context: z.string().optional().describe('Intent of the changes'),
         session_id: SessionIdSchema.optional().describe('Continue from previous review'),
@@ -90,6 +99,8 @@ export function registerReviewCodeTool(
       const source = normalizeCodeDiffSource({
         diff: args.diff,
         auto_diff: args.auto_diff ?? true,
+        base: args.base,
+        head: args.head,
       });
       if (!source.ok) {
         return { content: [{ type: 'text' as const, text: source.error }], isError: true };

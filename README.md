@@ -143,6 +143,13 @@ npx codex-claude-bridge@latest review-plan --plan plan.md
 git diff main | npx codex-claude-bridge@latest review-code --diff -
 ```
 
+**Review a branch or landed commits (no pasted diff, no scratch worktree):**
+
+```bash
+npx codex-claude-bridge@latest review-code --base main            # main..HEAD
+npx codex-claude-bridge@latest review-code --base v1.2.0 --head v1.3.0
+```
+
 **Review another checkout or worktree:**
 
 ```bash
@@ -181,6 +188,8 @@ Send a code diff for code review.
 | Parameter    | Type     | Required | Description                                                                                                                                                                                                                                                                                                                                 |
 | ------------ | -------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `diff`       | string   | no       | Git diff to review. Omit to auto-capture `git diff HEAD`.                                                                                                                                                                                                                                                                                   |
+| `base`       | string   | no       | Review a committed range instead: the ref to diff from (e.g. `"main"`, `"origin/main"`, `"HEAD~1"`, a commit). Runs `git diff <base> <head>` in `cwd`. Cannot be combined with `diff`.                                                                                                                                                      |
+| `head`       | string   | no       | The ref to diff to when `base` is given (default: `"HEAD"`). Requires `base`.                                                                                                                                                                                                                                                               |
 | `cwd`        | string   | no       | Absolute path to the directory this review runs in — the repository or git worktree being reviewed. Auto-capture, repository instruction files, and the reviewer subprocess all use it. Required for auto-capture unless `require_cwd` is `false`, in which case omitting it uses the server's launch directory. Applies to this call only. |
 | `auto_diff`  | boolean  | no       | Auto-capture working-tree changes via `git diff HEAD` when `diff` is omitted or blank (default: `true`)                                                                                                                                                                                                                                     |
 | `context`    | string   | no       | Intent of the changes                                                                                                                                                                                                                                                                                                                       |
@@ -189,7 +198,7 @@ Send a code diff for code review.
 | `model`      | string   | no       | Override the model for this call (e.g. `"gpt-5.6-sol"` or `"latest"`). May be combined with `session_id` to change model mid-session. Without it a resumed session keeps its recorded model; compare `resolved` and `observed` to see what the runtime recorded.                                                                            |
 
 Returns: `{ verdict, summary, findings[], session_id, models[], provenance }`, plus `captured_from`
-when the diff was auto-captured.
+when the diff was auto-captured or taken from a `base`/`head` range.
 
 Findings include `file` and `line` references when available.
 

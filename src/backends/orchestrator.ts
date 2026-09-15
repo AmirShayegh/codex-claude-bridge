@@ -235,10 +235,15 @@ export type TurnRunner = <T extends Record<string, unknown>>(
 export interface ReviewFlowDeps {
   config: ReviewBridgeConfig;
   provider: ReviewProvider;
-  // When false (e.g. Codex, whose SDK reasserts --model on resume) the flow
-  // rejects session_id + model and omits the model on resumed chunks. When true
-  // (e.g. Gemini) the caller may change model on a resumed session.
+  // When false the flow rejects session_id + model. When true the caller may
+  // change model on a resumed session.
   allowsModelOverrideOnResume: boolean;
+  // When true (Codex), a resume that names no per-call model retains the
+  // session's recorded identity and re-sends it, never resolving today's
+  // configured default in its place. A legacy session with no recorded identity
+  // sends no model at all. When false/unset (Gemini), a resume resolves the
+  // requested-or-configured model exactly like a fresh call.
+  retainSessionModelOnResume?: boolean;
   // Resolve a model spec to a concrete id the backend can run. `requested` is the
   // per-call override or config.model (undefined if neither set). Each backend
   // maps 'latest' (and unset) to its own newest supported model — Codex bounded
@@ -285,10 +290,12 @@ async function prepareModel(
   deps: ReviewFlowDeps,
   quiet = false,
 ): Promise<Result<PreparedModel>> {
-  // A Codex resume must retain the bridge's prior identity rather than replacing
+  // A retaining resume keeps the bridge's prior identity rather than replacing
   // it with today's configured default. Fresh runtime observation may disagree;
-  // that mismatch is reported after the successful turn.
-  if (input.session_id && !deps.allowsModelOverrideOnResume) {
+  // that mismatch is reported after the successful turn. An explicit per-call
+  // model is a deliberate change and resolves like a fresh request.
+  const retains = deps.retainSessionModelOnResume ?? !deps.allowsModelOverrideOnResume;
+  if (input.session_id && retains && !input.model) {
     const known = lookupKnownModel(deps, input.session_id);
     const resolved = safeModel(known?.resolved);
     const observed = safeModel(known?.observed);
@@ -400,7 +407,7 @@ export async function runPlanReview(
     responseSchema: PlanReviewResponseSchema,
     workingDirectory,
     sessionId: input.session_id,
-    model: perTurnModel(prepared.turnResolved, input.session_id, allowsModelOverrideOnResume),
+    model: perTurnModel(prepared.turnResolved),
     resolvedModel: prepared.turnResolved,
   });
   return enrichModelIdentity(result, deps, prepared, 'review');
@@ -439,17 +446,14 @@ async function resolveModelValidated(
   return ok(resolved.data);
 }
 
-// The model to apply on a given turn. Backends that reassert model on resume
-// (Codex) must omit it when resuming an existing session — the thread keeps the
-// model it was created with. Backends that allow a mid-session model change
-// (Gemini) always send the resolved model.
-function perTurnModel(
-  resolved: string | undefined,
-  sessionId: string | undefined,
-  allowsModelOverrideOnResume: boolean,
-): string | undefined {
-  if (allowsModelOverrideOnResume) return resolved;
-  return sessionId ? undefined : resolved;
+// The model to apply on a given turn: always the resolved one, on a fresh start
+// and on a resume alike. A resumed turn that omits the model does NOT inherit
+// the session's model — the Codex CLI falls back to ~/.codex/config.toml's
+// default, which a ChatGPT-tier account can reject (ISS-045). `resolved` is
+// undefined only for a legacy resume with no recorded identity, where there is
+// nothing truthful to send.
+function perTurnModel(resolved: string | undefined): string | undefined {
+  return resolved;
 }
 
 // Session id to run a given chunk against. When resumesAcrossChunks is true
@@ -535,7 +539,7 @@ export async function runCodeReview(
       responseSchema: CodeReviewResponseSchema,
       workingDirectory,
       sessionId: input.session_id,
-      model: perTurnModel(prepared.turnResolved, input.session_id, allowsModelOverrideOnResume),
+      model: perTurnModel(prepared.turnResolved),
       resolvedModel: prepared.turnResolved,
     });
     return enrichModelIdentity(result, deps, prepared, 'review');
@@ -566,7 +570,7 @@ export async function runCodeReview(
       responseSchema: CodeReviewResponseSchema,
       workingDirectory,
       sessionId: chunkSession,
-      model: perTurnModel(prepared.turnResolved, chunkSession, allowsModelOverrideOnResume),
+      model: perTurnModel(prepared.turnResolved),
       resolvedModel: prepared.turnResolved,
     });
 
@@ -659,7 +663,7 @@ export async function runPrecommitReview(
       responseSchema: PrecommitResponseSchema,
       workingDirectory,
       sessionId: input.session_id,
-      model: perTurnModel(prepared.turnResolved, input.session_id, allowsModelOverrideOnResume),
+      model: perTurnModel(prepared.turnResolved),
       resolvedModel: prepared.turnResolved,
     });
     return enrichModelIdentity(result, deps, prepared, 'review');
@@ -689,7 +693,7 @@ export async function runPrecommitReview(
       responseSchema: PrecommitResponseSchema,
       workingDirectory,
       sessionId: chunkSession,
-      model: perTurnModel(prepared.turnResolved, chunkSession, allowsModelOverrideOnResume),
+      model: perTurnModel(prepared.turnResolved),
       resolvedModel: prepared.turnResolved,
     });
 
@@ -742,7 +746,7 @@ export async function runCrossReview(
     }),
     responseSchema: CrossReviewResponseSchema,
     workingDirectory: input.execution.workingDirectory,
-    model: perTurnModel(prepared.turnResolved, undefined, deps.allowsModelOverrideOnResume),
+    model: perTurnModel(prepared.turnResolved),
     resolvedModel: prepared.turnResolved,
   });
   const enriched = await enrichModelIdentity(result, deps, prepared, 'adjudication');

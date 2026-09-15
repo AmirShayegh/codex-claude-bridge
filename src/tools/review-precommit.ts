@@ -51,8 +51,9 @@ export function registerReviewPrecommitTool(
           'Override the configured default model for this call (e.g., "gpt-5.6-sol"), or "latest". ' +
             TIER_HELP +
             ' ' +
-            'With the Codex provider this cannot be combined with session_id; compare returned ' +
-            'resolved and observed labels for runtime changes. Gemini allows changing model on resume.',
+            'May be combined with session_id to change model mid-session; without it a resumed ' +
+            'session keeps the model it was recorded with. Compare returned resolved and observed ' +
+            'labels for runtime changes.',
         ),
       },
     },

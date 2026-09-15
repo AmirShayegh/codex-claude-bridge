@@ -168,7 +168,7 @@ Send an implementation plan for architectural/feasibility review.
 | `focus`      | string[]                  | no       | Review focus areas (e.g. `["architecture", "security"]`)                                                                                                                                                                                                                        |
 | `depth`      | `"quick"` \| `"thorough"` | no       | Review depth                                                                                                                                                                                                                                                                    |
 | `session_id` | string                    | no       | Continue from a previous review session                                                                                                                                                                                                                                         |
-| `model`      | string                    | no       | Override the model for this call (e.g. `"gpt-5.6-sol"` or `"latest"`). With Codex this can't be combined with `session_id`; the bridge retains the prior resolved identity and reports any different runtime-observed label. Gemini allows changing model on a resumed session. |
+| `model`      | string                    | no       | Override the model for this call (e.g. `"gpt-5.6-sol"` or `"latest"`). May be combined with `session_id` to change model mid-session (both providers). Without it a resumed session keeps the model it was recorded with, re-sent on every turn; the bridge reports any different runtime-observed label. |
 
 Returns: `{ verdict, summary, findings[], session_id, models[], provenance }`
 
@@ -184,7 +184,7 @@ Send a code diff for code review.
 | `context`    | string   | no       | Intent of the changes                                                                                                                                                                                                                                         |
 | `session_id` | string   | no       | Continue from previous review (e.g. plan review session)                                                                                                                                                                                                      |
 | `criteria`   | string[] | no       | Review criteria (e.g. `["bugs", "security", "performance"]`)                                                                                                                                                                                                  |
-| `model`      | string   | no       | Override the model for this call (e.g. `"gpt-5.6-sol"` or `"latest"`). With Codex this can't be combined with `session_id`; compare `resolved` and `observed` to see what the runtime recorded. Gemini allows changing model on a resumed session.            |
+| `model`      | string   | no       | Override the model for this call (e.g. `"gpt-5.6-sol"` or `"latest"`). May be combined with `session_id` to change model mid-session. Without it a resumed session keeps its recorded model; compare `resolved` and `observed` to see what the runtime recorded.            |
 
 Returns: `{ verdict, summary, findings[], session_id, models[], provenance }`, plus `captured_from`
 when the diff was auto-captured.
@@ -202,7 +202,7 @@ Quick pre-commit sanity check. Auto-captures staged git changes by default.
 | `cwd`        | string   | no       | Absolute path to the directory this review runs in — the repository or git worktree being reviewed. Auto-capture, repository instruction files, and the reviewer subprocess all use it. Omit to use the server's launch directory. Applies to this call only. |
 | `session_id` | string   | no       | Continue from previous review                                                                                                                                                                                                                                 |
 | `checklist`  | string[] | no       | Custom pre-commit checks                                                                                                                                                                                                                                      |
-| `model`      | string   | no       | Override the model for this call (e.g. `"gpt-5.6-sol"` or `"latest"`). With Codex this can't be combined with `session_id`; compare `resolved` and `observed` to see what the runtime recorded. Gemini allows changing model on a resumed session.            |
+| `model`      | string   | no       | Override the model for this call (e.g. `"gpt-5.6-sol"` or `"latest"`). May be combined with `session_id` to change model mid-session. Without it a resumed session keeps its recorded model; compare `resolved` and `observed` to see what the runtime recorded.            |
 
 Returns: `{ ready_to_commit, blockers[], warnings[], session_id, models[], provenance }`, plus
 `captured_from` when the diff was auto-captured.

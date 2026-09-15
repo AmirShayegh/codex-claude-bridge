@@ -92,8 +92,8 @@ export interface ReviewBackend {
   // composite lists all of its children's. Used by the cross-provider guard
   // (membership check) and by resume routing to find a session's owning leaf.
   providers: readonly ReviewProvider[];
-  // Whether a resumed session may change model. False for Codex (its SDK
-  // reasserts --model on resume); true for Gemini. Leaf orchestration and the
+  // Whether a resumed session may change model. True for both Codex (the CLI
+  // accepts --model on resume, ISS-045) and Gemini. Leaf orchestration and the
   // lifecycle's pre-admission validation both consult this capability.
   allowsModelOverrideOnResume: boolean;
   // Composites may serve leaves with different resume capabilities. Resolve

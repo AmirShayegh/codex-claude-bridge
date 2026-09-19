@@ -1,4 +1,4 @@
-import { TIER_HELP } from '../config/types.js';
+import { MODEL_PARAM_HELP, ReviewTierSchema, TIER_PARAM_HELP } from '../config/types.js';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -17,7 +17,31 @@ import {
   WorkingDirectorySchema,
 } from '../utils/input-validation.js';
 import { prepareDiffReview } from '../review/request-prep.js';
+import {
+  classifyToolArguments,
+  invalidInputResponse,
+  selectModel,
+  toolInputSchema,
+  withArgumentReport,
+} from './tool-input.js';
 import type { RequestPreparationDeps } from '../review/request-prep.js';
+
+// The accepted parameters, kept as a plain shape so the handler can classify
+// whatever else the call carried (ISS-054).
+const PRECOMMIT_INPUT = {
+  auto_diff: z
+    .boolean()
+    .optional()
+    .describe(
+      'Auto-capture staged git changes. Omit to use the project config default (review_standards.precommit.auto_diff).',
+    ),
+  diff: z.string().optional().describe('Explicit diff to review instead of auto-capture'),
+  cwd: WorkingDirectorySchema.optional().describe(CWD_DESCRIPTION),
+  session_id: SessionIdSchema.optional().describe('Continue from previous review'),
+  checklist: z.array(z.string()).optional().describe('Custom pre-commit checks'),
+  model: ModelSelectorSchema.optional().describe(MODEL_PARAM_HELP),
+  tier: ReviewTierSchema.optional().describe(TIER_PARAM_HELP),
+};
 
 export function registerReviewPrecommitTool(
   server: McpServer,
@@ -36,31 +60,22 @@ export function registerReviewPrecommitTool(
         'Returns ready_to_commit, blockers, warnings, responding models, and persistence provenance. ' +
         'An auto-captured check also returns captured_from: the absolute directory the bridge ran ' +
         'git in. If that is not the repository you are working in, pass the diff explicitly.',
-      inputSchema: {
-        auto_diff: z
-          .boolean()
-          .optional()
-          .describe(
-            'Auto-capture staged git changes. Omit to use the project config default (review_standards.precommit.auto_diff).',
-          ),
-        diff: z.string().optional().describe('Explicit diff to review instead of auto-capture'),
-        cwd: WorkingDirectorySchema.optional().describe(CWD_DESCRIPTION),
-        session_id: SessionIdSchema.optional().describe('Continue from previous review'),
-        checklist: z.array(z.string()).optional().describe('Custom pre-commit checks'),
-        model: ModelSelectorSchema.optional().describe(
-          'Override the configured default model for this call (e.g., "gpt-5.6-sol"), or "latest". ' +
-            TIER_HELP +
-            ' ' +
-            'May be combined with session_id to change model mid-session; without it a resumed ' +
-            'session keeps the model it was recorded with. Compare returned resolved and observed ' +
-            'labels for runtime changes.',
-        ),
-      },
+      inputSchema: toolInputSchema(PRECOMMIT_INPUT),
     },
-    async (args) => {
+    async (rawArgs) => {
+      // Unknown keys are folded, echoed, or refused here (ISS-054), never
+      // silently stripped; model/tier collapse to the one selector backends take.
+      const classified = classifyToolArguments(PRECOMMIT_INPUT, rawArgs, {
+        refuseSelectorIntent: true,
+      });
+      if (!classified.ok) return invalidInputResponse(classified.error);
+      const { args, report } = classified.data;
+      const selector = selectModel(args);
+      if (!selector.ok) return invalidInputResponse(selector.error);
+      const model = selector.data;
       // The shared lifecycle performs owner-aware validation before admission;
       // this scalar gate remains only for the no-lifecycle compatibility path.
-      if (!lifecycle && !client.allowsModelOverrideOnResume && args.session_id && args.model) {
+      if (!lifecycle && !client.allowsModelOverrideOnResume && args.session_id && model) {
         return {
           content: [{ type: 'text' as const, text: sessionModelConflictMessage() }],
           isError: true,
@@ -98,7 +113,14 @@ export function registerReviewPrecommitTool(
             },
             prepared.data.capturedFrom,
           );
-          return { content: [{ type: 'text' as const, text: JSON.stringify(emptyCapture) }] };
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify(withArgumentReport(emptyCapture, report)),
+              },
+            ],
+          };
         }
         // Set only when git actually ran. Every capture-derived field below comes
         // from this one value, never from a fresh cwd read (ISS-028).
@@ -109,7 +131,7 @@ export function registerReviewPrecommitTool(
           execution,
           checklist: args.checklist,
           session_id: args.session_id,
-          model: args.model,
+          model,
         };
 
         if (lifecycle) {
@@ -123,7 +145,9 @@ export function registerReviewPrecommitTool(
             content: [
               {
                 type: 'text' as const,
-                text: JSON.stringify(withCapturedFrom(result.data, capturedFrom)),
+                text: JSON.stringify(
+                  withArgumentReport(withCapturedFrom(result.data, capturedFrom), report),
+                ),
               },
             ],
           };
@@ -158,7 +182,9 @@ export function registerReviewPrecommitTool(
           content: [
             {
               type: 'text' as const,
-              text: JSON.stringify(withCapturedFrom(result.data, capturedFrom)),
+              text: JSON.stringify(
+                withArgumentReport(withCapturedFrom(result.data, capturedFrom), report),
+              ),
             },
           ],
         };

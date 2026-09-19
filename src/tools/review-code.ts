@@ -1,4 +1,4 @@
-import { TIER_HELP } from '../config/types.js';
+import { MODEL_PARAM_HELP, ReviewTierSchema, TIER_PARAM_HELP } from '../config/types.js';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -17,7 +17,56 @@ import {
   WorkingDirectorySchema,
 } from '../utils/input-validation.js';
 import { prepareDiffReview } from '../review/request-prep.js';
+import {
+  classifyToolArguments,
+  invalidInputResponse,
+  selectModel,
+  toolInputSchema,
+  withArgumentReport,
+} from './tool-input.js';
 import type { RequestPreparationDeps } from '../review/request-prep.js';
+
+// The accepted parameters, kept as a plain shape so the handler can classify
+// whatever else the call carried (ISS-054).
+const CODE_INPUT = {
+  diff: z
+    .string()
+    .optional()
+    .describe(
+      'Raw git diff output to review. Must be unified diff format ' +
+        '(output of git diff, gh pr diff, etc.). Do NOT pass summaries or descriptions. ' +
+        'If omitted, auto-captures changes via git diff HEAD.',
+    ),
+  auto_diff: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe('Auto-capture working tree changes (staged + unstaged) via git diff HEAD'),
+  base: GitRefSchema.optional().describe(
+    'Review a committed range instead: the ref to diff FROM (e.g. "main", "origin/main", ' +
+      'a commit, or "HEAD~1"). Runs git diff <base> <head> in cwd. Cannot be combined with diff.',
+  ),
+  head: GitRefSchema.optional().describe(
+    'The ref to diff TO when base is given (default: "HEAD"). Requires base.',
+  ),
+  cwd: WorkingDirectorySchema.optional().describe(CWD_DESCRIPTION),
+  context: z.string().optional().describe('Intent of the changes'),
+  session_id: SessionIdSchema.optional().describe('Continue from previous review'),
+  criteria: z.array(z.string()).optional().describe('Review criteria to focus on'),
+  model: ModelSelectorSchema.optional().describe(MODEL_PARAM_HELP),
+  tier: ReviewTierSchema.optional().describe(TIER_PARAM_HELP),
+  deliberate: z
+    .boolean()
+    .optional()
+    .describe(
+      'Per-call override of the configured review mode: true = both providers review (deliberation); ' +
+        'false = single provider with failover. Omit to use the configured mode. Requires a two-provider ' +
+        'setup; requesting deliberation under a single-provider config returns an error. Under ' +
+        "deliberate-deep, the returned verdict reflects both providers' independent reviews and is NOT " +
+        'recomputed from cross-review adjudications — treat deliberation.divergent[].adjudication as ' +
+        'advisory input for your own synthesis.',
+    ),
+};
 
 export function registerReviewCodeTool(
   server: McpServer,
@@ -39,56 +88,20 @@ export function registerReviewCodeTool(
         'Returns a verdict, findings, responding models, and persistence provenance. ' +
         'An auto-captured review also returns captured_from: the absolute directory the bridge ran ' +
         'git in. If that is not the repository you are working in, pass the diff explicitly.',
-      inputSchema: {
-        diff: z
-          .string()
-          .optional()
-          .describe(
-            'Raw git diff output to review. Must be unified diff format ' +
-              '(output of git diff, gh pr diff, etc.). Do NOT pass summaries or descriptions. ' +
-              'If omitted, auto-captures changes via git diff HEAD.',
-          ),
-        auto_diff: z
-          .boolean()
-          .optional()
-          .default(true)
-          .describe('Auto-capture working tree changes (staged + unstaged) via git diff HEAD'),
-        base: GitRefSchema.optional().describe(
-          'Review a committed range instead: the ref to diff FROM (e.g. "main", "origin/main", ' +
-            'a commit, or "HEAD~1"). Runs git diff <base> <head> in cwd. Cannot be combined with diff.',
-        ),
-        head: GitRefSchema.optional().describe(
-          'The ref to diff TO when base is given (default: "HEAD"). Requires base.',
-        ),
-        cwd: WorkingDirectorySchema.optional().describe(CWD_DESCRIPTION),
-        context: z.string().optional().describe('Intent of the changes'),
-        session_id: SessionIdSchema.optional().describe('Continue from previous review'),
-        criteria: z.array(z.string()).optional().describe('Review criteria to focus on'),
-        model: ModelSelectorSchema.optional().describe(
-          'Override the configured default model for this call (e.g., "gpt-5.6-sol"), or "latest". ' +
-            TIER_HELP +
-            ' ' +
-            'May be combined with session_id to change model mid-session; without it a resumed ' +
-            'session keeps the model it was recorded with. Compare returned resolved and observed ' +
-            'labels for runtime changes.',
-        ),
-        deliberate: z
-          .boolean()
-          .optional()
-          .describe(
-            'Per-call override of the configured review mode: true = both providers review (deliberation); ' +
-              'false = single provider with failover. Omit to use the configured mode. Requires a two-provider ' +
-              'setup; requesting deliberation under a single-provider config returns an error. Under ' +
-              "deliberate-deep, the returned verdict reflects both providers' independent reviews and is NOT " +
-              'recomputed from cross-review adjudications — treat deliberation.divergent[].adjudication as ' +
-              'advisory input for your own synthesis.',
-          ),
-      },
+      inputSchema: toolInputSchema(CODE_INPUT),
     },
-    async (args) => {
+    async (rawArgs) => {
+      // Unknown keys are folded, echoed, or refused here (ISS-054), never
+      // silently stripped; model/tier collapse to the one selector backends take.
+      const classified = classifyToolArguments(CODE_INPUT, rawArgs, { refuseSelectorIntent: true });
+      if (!classified.ok) return invalidInputResponse(classified.error);
+      const { args, report } = classified.data;
+      const selector = selectModel(args);
+      if (!selector.ok) return invalidInputResponse(selector.error);
+      const model = selector.data;
       // The shared lifecycle performs owner-aware validation before admission;
       // this scalar gate remains only for the no-lifecycle compatibility path.
-      if (!lifecycle && !client.allowsModelOverrideOnResume && args.session_id && args.model) {
+      if (!lifecycle && !client.allowsModelOverrideOnResume && args.session_id && model) {
         return {
           content: [{ type: 'text' as const, text: sessionModelConflictMessage() }],
           isError: true,
@@ -134,7 +147,14 @@ export function registerReviewCodeTool(
             },
             prepared.data.capturedFrom,
           );
-          return { content: [{ type: 'text' as const, text: JSON.stringify(emptyCapture) }] };
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify(withArgumentReport(emptyCapture, report)),
+              },
+            ],
+          };
         }
         // Set only when git actually ran. Every capture-derived field below comes
         // from this one value, never from a fresh cwd read (ISS-028).
@@ -146,7 +166,7 @@ export function registerReviewCodeTool(
           context: args.context,
           criteria: args.criteria,
           session_id: args.session_id,
-          model: args.model,
+          model,
           deliberate: args.deliberate,
         };
 
@@ -161,7 +181,9 @@ export function registerReviewCodeTool(
             content: [
               {
                 type: 'text' as const,
-                text: JSON.stringify(withCapturedFrom(result.data, capturedFrom)),
+                text: JSON.stringify(
+                  withArgumentReport(withCapturedFrom(result.data, capturedFrom), report),
+                ),
               },
             ],
           };
@@ -194,7 +216,9 @@ export function registerReviewCodeTool(
           content: [
             {
               type: 'text' as const,
-              text: JSON.stringify(withCapturedFrom(result.data, capturedFrom)),
+              text: JSON.stringify(
+                withArgumentReport(withCapturedFrom(result.data, capturedFrom), report),
+              ),
             },
           ],
         };

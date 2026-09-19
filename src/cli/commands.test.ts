@@ -927,3 +927,59 @@ describe('--cwd', () => {
     expect(deps.stderrBuf).toContain('INVALID_INPUT');
   });
 });
+
+describe('--tier (ISS-054)', () => {
+  const CLIENT = () => ({
+    provider: 'codex' as const,
+    providers: ['codex'] as const,
+    allowsModelOverrideOnResume: false,
+    reviewPlan: vi.fn().mockResolvedValue({
+      ok: true,
+      data: { verdict: 'approve', summary: 'ok', findings: [], session_id: 's1' },
+    }),
+    reviewCode: vi.fn(),
+    reviewPrecommit: vi.fn(),
+  });
+
+  it('forwards a tier as the model selector', async () => {
+    mockReadInput.mockResolvedValue({ ok: true, data: 'plan' });
+    mockPreparePlan.mockResolvedValue(ok(EXEC));
+    const mockClient = CLIENT();
+    mockCreateClient.mockReturnValue(mockClient);
+
+    await runCli(
+      ['node', 'bridge', 'review-plan', '--plan', 'f.md', '--tier', 'max'],
+      createDeps(),
+    );
+
+    expect(mockClient.reviewPlan).toHaveBeenCalledWith(expect.objectContaining({ model: 'max' }));
+  });
+
+  it('rejects --model with --tier, and a non-tier value, before initialization', async () => {
+    const both = createDeps();
+    await runCli(
+      [
+        'node',
+        'bridge',
+        'review-plan',
+        '--plan',
+        'f.md',
+        '--model',
+        'gpt-6-astra',
+        '--tier',
+        'max',
+      ],
+      both,
+    );
+    expect(both.exitCode).toBe(1);
+    expect(both.stderrBuf).toContain('INVALID_INPUT');
+    expect(mockCreateClient).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+    const bad = createDeps();
+    await runCli(['node', 'bridge', 'review-plan', '--plan', 'f.md', '--tier', 'turbo'], bad);
+    expect(bad.exitCode).toBe(1);
+    expect(bad.stderrBuf).toContain('INVALID_INPUT');
+    expect(mockCreateClient).not.toHaveBeenCalled();
+  });
+});

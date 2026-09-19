@@ -164,6 +164,9 @@ const PlanReviewResponseSchema = PlanReviewResultSchema.omit({
   models: true,
   provenance: true,
   failover: true,
+  argument_corrections: true,
+  ignored_arguments: true,
+  accepted_arguments: true,
 });
 const CodeReviewResponseSchema = CodeReviewResultSchema.omit({
   session_id: true,
@@ -178,6 +181,9 @@ const CodeReviewResponseSchema = CodeReviewResultSchema.omit({
   models: true,
   provenance: true,
   failover: true,
+  argument_corrections: true,
+  ignored_arguments: true,
+  accepted_arguments: true,
 });
 const PrecommitResponseSchema = PrecommitResultSchema.omit({
   session_id: true,
@@ -190,6 +196,9 @@ const PrecommitResponseSchema = PrecommitResultSchema.omit({
   models: true,
   provenance: true,
   failover: true,
+  argument_corrections: true,
+  ignored_arguments: true,
+  accepted_arguments: true,
 });
 
 // The exact model-facing schemas handed to the provider SDKs (via toJSONSchema in

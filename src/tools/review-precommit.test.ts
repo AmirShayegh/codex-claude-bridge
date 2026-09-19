@@ -103,7 +103,7 @@ describe('registerReviewPrecommitTool', () => {
   it('registers bounded model and session schemas', () => {
     setup();
     expect(server.registerTool.mock.calls[0][0]).toBe('review_precommit');
-    const schema = server.registerTool.mock.calls[0][1].inputSchema as Record<
+    const schema = server.registerTool.mock.calls[0][1].inputSchema.shape as Record<
       string,
       { parse(value: unknown): unknown }
     >;
@@ -262,5 +262,29 @@ describe('capture location reporting (ISS-028)', () => {
     expect(parsed.warnings).toEqual(['No staged changes found in /work/repo-b']);
     expect(parsed.captured_from).toBe('/work/repo-b');
     expect(lifecycle.reviewPrecommit).not.toHaveBeenCalled();
+  });
+});
+
+describe('argument handling (ISS-054)', () => {
+  it('REGRESSION: tier: "fast" reaches the reviewer as the fast tier', async () => {
+    await setup(true)({ tier: 'fast' }, {});
+    expect(lifecycle.reviewPrecommit).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'fast' }),
+    );
+  });
+
+  it('refuses selector intent before preparation', async () => {
+    const response = await setup(true)({ effort: 'balanced' }, {});
+    expect(response.isError).toBe(true);
+    expect(response.content[0].text).toMatch(/^INVALID_INPUT: /);
+    expect(prepareDiffReview).not.toHaveBeenCalled();
+  });
+
+  it('echoes unknown keys with the captured_from decoration intact', async () => {
+    const response = await setup(true)({ priority: 'high' }, {});
+    expect(JSON.parse(response.content[0].text)).toMatchObject({
+      captured_from: '/work/repo-b',
+      ignored_arguments: ['priority'],
+    });
   });
 });

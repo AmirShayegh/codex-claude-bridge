@@ -80,6 +80,12 @@ const HostReviewMetadataFields = {
   models: z.array(ModelIdentitySchema).optional(),
   provenance: ReviewProvenanceSchema.optional(),
   failover: ReviewFailoverSchema.optional(),
+  // Stamped at the tool boundary when the call carried keys the schema does not
+  // know (ISS-054): what was folded into a real parameter, what was ignored, and
+  // the accepted names. Host-only; model-facing schemas omit all three.
+  argument_corrections: z.array(z.object({ from: z.string(), to: z.string() })).optional(),
+  ignored_arguments: z.array(z.string()).optional(),
+  accepted_arguments: z.array(z.string()).optional(),
 };
 
 // Deliberation metadata: when both providers review the same input, the bridge

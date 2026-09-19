@@ -355,7 +355,12 @@ The CLI's `--config <dir>` flag is an explicit override: it looks only at `<dir>
 
 ### Model selection
 
-`model` takes a concrete id, `"latest"`, or a **tier**; each provider resolves its own default when the field is unset.
+Two selectors pick the reviewing model; a call passes one of them, not both:
+
+- `tier` — pick by capability: `"max"`, `"balanced"`, or `"fast"` (CLI: `--tier`).
+- `model` — pick by id (e.g. `"gpt-5.6-sol"`) or `"latest"` (CLI: `--model`). A tier word is still accepted here for compatibility.
+
+Each provider resolves its own default when neither is set.
 
 **Tiers** let a caller pick by difficulty or urgency instead of tracking model ids. Each provider maps a tier to its own model, and the tier carries across provider failover:
 
@@ -366,6 +371,14 @@ The CLI's `--config <dir>` flag is an explicit override: it looks only at `<dir>
 | `fast`     | Small diffs, precommit sanity checks, style passes, quick iteration loops | `gpt-5.6-luna` | `Gemini 3.8 Flash (Medium)` |
 
 Rule of thumb for an agent: `fast` for a precommit check or a diff under a few hundred lines with no cross-file logic, `max` when the plan or diff touches concurrency, auth, data integrity, or a design you are unsure about, `balanced` otherwise. The tier name is reported back as `requested` in `models`, with the concrete id in `resolved`.
+
+#### Unknown arguments
+
+Tool arguments are written by a model that never sees the server's stderr, so a key the tools do not know is never dropped silently. Each one gets exactly one disposition, reported in the result:
+
+- **Folded** — an alias or near-miss of a real parameter (`modle`, `sessionId`, `working_directory`) whose value validates is rewritten into it and listed in `argument_corrections`.
+- **Echoed** — anything else is ignored, listed in `ignored_arguments` next to `accepted_arguments`, and the review proceeds.
+- **Refused** — an unknown key whose value is a model selector (a tier word, a known model id, or `"latest"`) while neither `model` nor `tier` was given returns `INVALID_INPUT` with the fold hint (`did you mean tier: "max"?`) before any provider call: proceeding would review at the default tier, and that is the one case where a resend is cheaper than the review. `review_status` and `review_history` only fold or echo.
 
 **Codex** — default `gpt-6-astra`. If Astra has not reached your account yet, pin `gpt-5.6-sol`:
 

@@ -7,6 +7,7 @@ import type Database from 'better-sqlite3';
 import { loadConfig, formatConfigSource } from '../config/loader.js';
 import { createBackend } from '../backends/index.js';
 import type { ReviewBackend } from '../backends/backend.js';
+import { REVIEW_TIERS, ReviewTierSchema } from '../config/types.js';
 import type { ReviewBridgeConfig } from '../config/types.js';
 import { makeSessionModelLookup, makeSessionProviderLookup, openReviewDb } from '../storage/db.js';
 import { checkSessionProvider } from '../storage/session-tracker.js';
@@ -159,6 +160,7 @@ interface ValidatedSelectors {
 function validateSelectors(
   session: string | undefined,
   model: string | undefined,
+  tier: string | undefined,
 ): Result<ValidatedSelectors> {
   if (session !== undefined) {
     const parsed = SessionIdSchema.safeParse(session);
@@ -167,6 +169,18 @@ function validateSelectors(
         `${ErrorCode.INVALID_INPUT}: session must be 1–256 control-free characters without surrounding whitespace`,
       );
     }
+  }
+  // --tier is the same selector as --model, by capability (ISS-054); the backends
+  // take one, so both at once is a contradiction rather than a precedence call.
+  if (model !== undefined && tier !== undefined) {
+    return err(`${ErrorCode.INVALID_INPUT}: pass either --model or --tier, not both`);
+  }
+  if (tier !== undefined) {
+    const parsed = ReviewTierSchema.safeParse(tier);
+    if (!parsed.success) {
+      return err(`${ErrorCode.INVALID_INPUT}: tier must be one of ${REVIEW_TIERS.join(', ')}`);
+    }
+    return ok({ session, model: parsed.data });
   }
   if (model !== undefined) {
     const parsed = ModelSelectorSchema.safeParse(model);
@@ -291,7 +305,11 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
     .option('--cwd <path>', CWD_HELP)
     .option(
       '--model <name>',
-      'Override the configured default model (e.g., gpt-5.6-sol, or a tier: max | balanced | fast)',
+      'Override the configured default model by id (e.g., gpt-5.6-sol) or "latest"',
+    )
+    .option(
+      '--tier <name>',
+      'Pick the reviewing model by capability tier: max | balanced | fast (not with --model)',
     )
     .option('--deliberate', 'Force deliberation (both providers) for this call')
     .option('--no-deliberate', 'Force single-provider failover for this call')
@@ -301,7 +319,7 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
       resetStdinGuard();
       const json = opts.json ?? false;
       const io = buildIO(deps, json);
-      const selectors = validateSelectors(opts.session, opts.model);
+      const selectors = validateSelectors(opts.session, opts.model, opts.tier);
       if (!selectors.ok) {
         io.stderr.write(`Error: ${escapeTerminalControls(selectors.error)}\n`);
         deps.exit(1);
@@ -373,7 +391,11 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
     .option('--cwd <path>', CWD_HELP)
     .option(
       '--model <name>',
-      'Override the configured default model (e.g., gpt-5.6-sol, or a tier: max | balanced | fast)',
+      'Override the configured default model by id (e.g., gpt-5.6-sol) or "latest"',
+    )
+    .option(
+      '--tier <name>',
+      'Pick the reviewing model by capability tier: max | balanced | fast (not with --model)',
     )
     .option('--deliberate', 'Force deliberation (both providers) for this call')
     .option('--no-deliberate', 'Force single-provider failover for this call')
@@ -383,7 +405,7 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
       resetStdinGuard();
       const json = opts.json ?? false;
       const io = buildIO(deps, json);
-      const selectors = validateSelectors(opts.session, opts.model);
+      const selectors = validateSelectors(opts.session, opts.model, opts.tier);
       if (!selectors.ok) {
         io.stderr.write(`Error: ${escapeTerminalControls(selectors.error)}\n`);
         deps.exit(1);
@@ -554,7 +576,11 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
     .option('--cwd <path>', CWD_HELP)
     .option(
       '--model <name>',
-      'Override the configured default model (e.g., gpt-5.6-sol, or a tier: max | balanced | fast)',
+      'Override the configured default model by id (e.g., gpt-5.6-sol) or "latest"',
+    )
+    .option(
+      '--tier <name>',
+      'Pick the reviewing model by capability tier: max | balanced | fast (not with --model)',
     )
     .option('--auto-diff', 'Force auto-capture of staged changes for this call')
     .option('--no-auto-diff', 'Skip auto-capture for this call')
@@ -564,7 +590,7 @@ export async function runCli(argv?: string[], deps: CliDeps = DEFAULT_DEPS): Pro
       resetStdinGuard();
       const json = opts.json ?? false;
       const io = buildIO(deps, json);
-      const selectors = validateSelectors(opts.session, opts.model);
+      const selectors = validateSelectors(opts.session, opts.model, opts.tier);
       if (!selectors.ok) {
         io.stderr.write(`Error: ${escapeTerminalControls(selectors.error)}\n`);
         deps.exit(1);

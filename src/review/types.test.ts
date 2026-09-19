@@ -725,3 +725,19 @@ describe('captured_from is response-only (ISS-028)', () => {
     expect(parsed).not.toHaveProperty('captured_from');
   });
 });
+
+describe('argument report fields (ISS-054)', () => {
+  it('are accepted as optional host metadata on every review result', () => {
+    const report = {
+      argument_corrections: [{ from: 'modle', to: 'model' }],
+      ignored_arguments: ['priority'],
+      accepted_arguments: ['plan', 'model', 'tier'],
+    };
+    const plan = { verdict: 'approve', summary: 'ok', findings: [], session_id: 's1' };
+    const code = { verdict: 'approve', summary: 'ok', findings: [], session_id: 's1' };
+    const precommit = { ready_to_commit: true, blockers: [], warnings: [], session_id: 's1' };
+    expect(PlanReviewResultSchema.safeParse({ ...plan, ...report }).success).toBe(true);
+    expect(CodeReviewResultSchema.safeParse({ ...code, ...report }).success).toBe(true);
+    expect(PrecommitResultSchema.safeParse({ ...precommit, ...report }).success).toBe(true);
+  });
+});

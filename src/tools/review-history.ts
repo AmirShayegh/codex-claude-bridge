@@ -5,6 +5,12 @@ import { getRecentReviewsPage, getReviewsBySessionPage } from '../storage/review
 import { getSession } from '../storage/sessions.js';
 import { SessionIdSchema } from '../utils/input-validation.js';
 import { storageUnavailable } from '../utils/errors.js';
+import {
+  classifyToolArguments,
+  invalidInputResponse,
+  toolInputSchema,
+  withArgumentReport,
+} from './tool-input.js';
 
 // The session's own state, so a review that failed or timed out — which never
 // produces a review row — still leaves evidence under its id (ISS-046). Null
@@ -27,6 +33,16 @@ const ReviewCursorSchema = z
   .regex(/^[1-9]\d*$/, 'cursor must be a positive decimal review-row ID')
   .refine((value) => Number.isSafeInteger(Number(value)), 'cursor is outside the safe range');
 
+// The accepted parameters, kept as a plain shape so the handler can classify
+// whatever else the call carried (ISS-054).
+const HISTORY_INPUT = {
+  session_id: SessionIdSchema.optional().describe('Specific session to query'),
+  last_n: z.number().int().min(1).max(100).optional().describe('Return 1–100 reviews'),
+  cursor: ReviewCursorSchema.optional().describe(
+    'Decimal review-row cursor returned as next_cursor by the preceding page',
+  ),
+};
+
 // `db` is undefined when storage never opened (ISS-042); `unavailableReason` is
 // the startup diagnosis, repeated on every call so the caller can act on it.
 export function registerReviewHistoryTool(
@@ -43,15 +59,16 @@ export function registerReviewHistoryTool(
         "and a next_cursor for bounded pagination. A session_id query also returns the session's " +
         'own state (in_progress / completed / failed with timestamps), so a review that failed or ' +
         'timed out is visible even though it produced no review row.',
-      inputSchema: {
-        session_id: SessionIdSchema.optional().describe('Specific session to query'),
-        last_n: z.number().int().min(1).max(100).optional().describe('Return 1–100 reviews'),
-        cursor: ReviewCursorSchema.optional().describe(
-          'Decimal review-row cursor returned as next_cursor by the preceding page',
-        ),
-      },
+      inputSchema: toolInputSchema(HISTORY_INPUT),
     },
-    async (args) => {
+    async (rawArgs) => {
+      // Fold or echo unknown keys (ISS-054). A lookup never refuses: nothing
+      // here can be the wrong review, so a stray selector word is only echoed.
+      const classified = classifyToolArguments(HISTORY_INPUT, rawArgs, {
+        refuseSelectorIntent: false,
+      });
+      if (!classified.ok) return invalidInputResponse(classified.error);
+      const { args, report } = classified.data;
       if (!db) {
         return {
           content: [{ type: 'text' as const, text: storageUnavailable(unavailableReason) }],
@@ -71,11 +88,16 @@ export function registerReviewHistoryTool(
             content: [
               {
                 type: 'text' as const,
-                text: JSON.stringify({
-                  reviews: result.data.items,
-                  next_cursor: result.data.nextCursor,
-                  session: sessionState(db, args.session_id),
-                }),
+                text: JSON.stringify(
+                  withArgumentReport(
+                    {
+                      reviews: result.data.items,
+                      next_cursor: result.data.nextCursor,
+                      session: sessionState(db, args.session_id),
+                    },
+                    report,
+                  ),
+                ),
               },
             ],
           };
@@ -90,10 +112,15 @@ export function registerReviewHistoryTool(
           content: [
             {
               type: 'text' as const,
-              text: JSON.stringify({
-                reviews: result.data.items,
-                next_cursor: result.data.nextCursor,
-              }),
+              text: JSON.stringify(
+                withArgumentReport(
+                  {
+                    reviews: result.data.items,
+                    next_cursor: result.data.nextCursor,
+                  },
+                  report,
+                ),
+              ),
             },
           ],
         };

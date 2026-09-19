@@ -104,7 +104,7 @@ describe('registerReviewCodeTool', () => {
   it('registers bounded model and session input schemas', () => {
     setup();
     expect(server.registerTool.mock.calls[0][0]).toBe('review_code');
-    const schema = server.registerTool.mock.calls[0][1].inputSchema as Record<
+    const schema = server.registerTool.mock.calls[0][1].inputSchema.shape as Record<
       string,
       { parse(value: unknown): unknown }
     >;
@@ -135,7 +135,7 @@ describe('registerReviewCodeTool', () => {
 
   it('refuses a malformed ref at the schema boundary (ISS-049)', () => {
     setup();
-    const schema = server.registerTool.mock.calls[0][1].inputSchema as Record<
+    const schema = server.registerTool.mock.calls[0][1].inputSchema.shape as Record<
       string,
       { safeParse(value: unknown): { success: boolean } }
     >;
@@ -286,5 +286,28 @@ describe('capture location reporting (ISS-028)', () => {
     expect(parsed.summary).toContain('\\x1B');
     expect(parsed.summary).not.toContain('\u001b');
     expect(parsed.captured_from).toBe('/work/re\u001bpo');
+  });
+});
+
+describe('argument handling (ISS-054)', () => {
+  it('REGRESSION: tier: "max" reaches the reviewer as the max tier', async () => {
+    await setup()({ diff: 'explicit diff', tier: 'max' }, {});
+    expect(lifecycle.reviewCode).toHaveBeenCalledWith(expect.objectContaining({ model: 'max' }));
+  });
+
+  it('refuses selector intent before preparation', async () => {
+    const response = await setup()({ diff: 'explicit diff', quality: 'gpt-6-astra' }, {});
+    expect(response.isError).toBe(true);
+    expect(response.content[0].text).toMatch(/^INVALID_INPUT: .*model: "gpt-6-astra"/);
+    expect(prepareDiffReview).not.toHaveBeenCalled();
+  });
+
+  it('echoes unknown keys on an empty-capture answer too', async () => {
+    vi.mocked(prepareDiffReview).mockResolvedValue(emptyCapture('/work/repo-b'));
+    const response = await setup()({ cwd: '/work/repo-b', priority: 'high' }, {});
+    expect(JSON.parse(response.content[0].text)).toMatchObject({
+      verdict: 'approve',
+      ignored_arguments: ['priority'],
+    });
   });
 });

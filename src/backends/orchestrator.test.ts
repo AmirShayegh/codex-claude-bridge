@@ -941,3 +941,17 @@ describe('capture metadata is never model-facing (ISS-028)', () => {
     expect(parsed).not.toHaveProperty('captured_from');
   });
 });
+
+// ISS-054: the argument report is host knowledge stamped at the tool boundary.
+// Leaving it in a model-facing schema would break structured outputs exactly as
+// review_mode/captured_from would (ISS-019).
+describe('argument report is never model-facing (ISS-054)', () => {
+  it('omits the three report fields from every response schema', () => {
+    for (const schema of Object.values(RESPONSE_SCHEMAS)) {
+      const keys = Object.keys(schema.shape);
+      expect(keys).not.toContain('argument_corrections');
+      expect(keys).not.toContain('ignored_arguments');
+      expect(keys).not.toContain('accepted_arguments');
+    }
+  });
+});

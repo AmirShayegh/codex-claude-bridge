@@ -80,6 +80,9 @@ const HostReviewMetadataFields = {
   models: z.array(ModelIdentitySchema).optional(),
   provenance: ReviewProvenanceSchema.optional(),
   failover: ReviewFailoverSchema.optional(),
+  // The failover EVENT, stated outright (ISS-055): true exactly when `failover`
+  // is present. review_mode only names the configured composition.
+  failover_occurred: z.boolean().optional(),
   // Stamped at the tool boundary when the call carried keys the schema does not
   // know (ISS-054): what was folded into a real parameter, what was ignored, and
   // the accepted names. Host-only; model-facing schemas omit all three.

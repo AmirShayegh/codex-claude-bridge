@@ -74,13 +74,22 @@ function singleModeConflictError(): string {
 // which composition ran (even when there's no deliberation block). When `provider`
 // is given (single mode, where no downstream composite tags it), stamp that too so
 // every mode reports the serving provider (ISS-023).
-function stamp<R extends { review_mode?: ReviewMode; provider?: ReviewProvider }>(
-  mode: ReviewMode,
-  result: Result<R>,
-  provider?: ReviewProvider,
-): Result<R> {
+// review_mode names the CONFIGURED composition, so a failover-configured server
+// says "failover" on every result whether or not anything failed over — which
+// led a caller to diagnose a failover that never happened (ISS-055). The EVENT
+// is therefore stated outright: failover_occurred is true exactly when the
+// primary failed and the secondary served (the `failover` block's presence),
+// never inferred from an absent field.
+function stamp<
+  R extends { review_mode?: ReviewMode; provider?: ReviewProvider; failover?: unknown },
+>(mode: ReviewMode, result: Result<R>, provider?: ReviewProvider): Result<R> {
   if (!result.ok) return result;
-  return ok({ ...result.data, review_mode: mode, ...(provider ? { provider } : {}) });
+  return ok({
+    ...result.data,
+    review_mode: mode,
+    failover_occurred: result.data.failover !== undefined,
+    ...(provider ? { provider } : {}),
+  });
 }
 
 // Single-provider decorator: stamps review_mode:'single' and rejects a per-call

@@ -732,6 +732,7 @@ describe('argument report fields (ISS-054)', () => {
       argument_corrections: [{ from: 'modle', to: 'model' }],
       ignored_arguments: ['priority'],
       accepted_arguments: ['plan', 'model', 'tier'],
+      failover_occurred: false,
     };
     const plan = { verdict: 'approve', summary: 'ok', findings: [], session_id: 's1' };
     const code = { verdict: 'approve', summary: 'ok', findings: [], session_id: 's1' };

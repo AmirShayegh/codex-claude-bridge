@@ -952,6 +952,7 @@ describe('argument report is never model-facing (ISS-054)', () => {
       expect(keys).not.toContain('argument_corrections');
       expect(keys).not.toContain('ignored_arguments');
       expect(keys).not.toContain('accepted_arguments');
+      expect(keys).not.toContain('failover_occurred');
     }
   });
 });

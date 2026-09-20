@@ -312,6 +312,7 @@ interface PreparedModel {
   resolved: string | null;
   turnResolved?: string;
   known: ModelIdentity | null;
+  selection: NonNullable<ModelIdentity['selection']>;
 }
 
 function safeModel(value: string | null | undefined): string | null {
@@ -347,6 +348,7 @@ async function prepareModel(
       resolved,
       turnResolved: resolved ?? observed ?? undefined,
       known,
+      selection: 'session',
     });
   }
 
@@ -358,6 +360,9 @@ async function prepareModel(
     resolved: resolvedResult.data,
     turnResolved: resolvedResult.data,
     known: null,
+    // Nothing asked: the provider's own default ran (ISS-052). Said outright so
+    // a caller never has to read it out of requested: null.
+    selection: requestedRaw === undefined ? 'provider_default' : 'requested',
   });
 }
 
@@ -376,6 +381,7 @@ export function deduplicateModelIdentities(models: readonly ModelIdentity[]): Mo
       model.resolved,
       model.observed,
       model.evidence,
+      model.selection,
     ]);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -414,6 +420,7 @@ async function enrichModelIdentity<R extends { session_id: string; models?: Mode
     resolved,
     observed,
     evidence,
+    selection: prepared.selection,
   };
 
   if (resolved && observed && normalizedModel(resolved) !== normalizedModel(observed)) {

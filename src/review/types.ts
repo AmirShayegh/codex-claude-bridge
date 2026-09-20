@@ -55,6 +55,10 @@ export const ModelIdentitySchema = z.object({
   resolved: ModelSelectorSchema.nullable(),
   observed: ModelSelectorSchema.nullable(),
   evidence: z.enum(['runtime_session_record', 'bridge_selection', 'unavailable']),
+  // How the model came to be chosen (ISS-052): the caller or config asked for it,
+  // the provider's own default filled the gap, or a resumed session's recorded
+  // identity was retained. Optional for older persisted identities.
+  selection: z.enum(['requested', 'provider_default', 'session']).optional(),
 });
 
 export const ReviewProvenanceSchema = z.object({

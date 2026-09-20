@@ -197,6 +197,7 @@ describe('MCP integration — review_plan', () => {
         resolved: 'gpt-6-astra',
         observed: null,
         evidence: 'bridge_selection',
+        selection: 'provider_default',
       },
     ]);
     expect(parsed.provenance).toEqual({ persistence: 'memory_only', warning: null });

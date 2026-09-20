@@ -24,7 +24,7 @@ export function toReviewProvider(value: string | null | undefined): ReviewProvid
 export const RECOMMENDED_MODELS = {
   codex: ['gpt-6-astra', 'gpt-5.6-sol'],
   // agy model strings (effort is part of the name); from `agy models`.
-  gemini: ['Gemini 3.8 Flash (Medium)', 'Gemini 3.8 Flash (High)', 'Gemini 3.1 Pro (High)'],
+  gemini: ['Gemini 3.8 Flash (High)', 'Gemini 3.8 Flash (Medium)', 'Gemini 3.1 Pro (High)'],
 } as const satisfies Record<ReviewProvider, readonly string[]>;
 export type RecommendedModel = (typeof RECOMMENDED_MODELS)[ReviewProvider][number];
 

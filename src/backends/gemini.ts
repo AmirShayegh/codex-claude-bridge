@@ -392,7 +392,7 @@ function stripCodeFences(text: string): string {
 // the backend (the config schema carries no default). Effort is part of the
 // model string for agy, so reasoning_effort is not applied here. Mirrors
 // RECOMMENDED_MODELS.gemini[0].
-const GEMINI_DEFAULT_MODEL = 'Gemini 3.8 Flash (Medium)';
+const GEMINI_DEFAULT_MODEL = 'Gemini 3.8 Flash (High)';
 
 // `agy models` is a quick metadata call; bound it well under a review timeout so
 // a hung query degrades to the fallback fast.
@@ -407,7 +407,9 @@ let modelCatalogInFlight: Promise<string | null> | undefined;
 // Flash"). Tier preference falls back down the list if the newest version omits
 // the preferred tier.
 const FLASH_LINE_RE = /^Gemini\s+(\d+(?:\.\d+)*)\s+Flash\s*\(([^)]+)\)$/i;
-const TIER_PREFERENCE = ['medium', 'high', 'low'];
+// High first (ISS-052): the unpinned default is the `balanced` tier, the
+// analogue of Codex's flagship at medium effort — not the cheapest line.
+const TIER_PREFERENCE = ['high', 'medium', 'low'];
 
 // Compare dotted version strings numerically component-by-component so 3.10 sorts
 // above 3.5 (a naive parseFloat would read 3.10 as 3.1). Returns >0 when a > b.
@@ -516,7 +518,7 @@ export function clearGeminiModelCatalogCache(): void {
   modelCatalogInFlight = undefined;
 }
 
-// Resolve gemini's `latest`: the newest Flash from `agy models`, degrading to the
+// Resolve gemini's `latest`: the newest Flash (High) from `agy models`, degrading to the
 // known-good fallback if the query fails or yields no parseable Flash line.
 export async function resolveLatestGeminiModel(timeoutMs?: number): Promise<string> {
   const output = await getAgyModelCatalog(timeoutMs);

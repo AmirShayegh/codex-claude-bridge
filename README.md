@@ -370,7 +370,7 @@ Each provider resolves its own default when neither is set.
 | `balanced` | Everyday code and plan review                                             | `gpt-5.6-sol`  | `Gemini 3.8 Flash (High)`   |
 | `fast`     | Small diffs, precommit sanity checks, style passes, quick iteration loops | `gpt-5.6-luna` | `Gemini 3.8 Flash (Medium)` |
 
-Rule of thumb for an agent: `fast` for a precommit check or a diff under a few hundred lines with no cross-file logic, `max` when the plan or diff touches concurrency, auth, data integrity, or a design you are unsure about, `balanced` otherwise. The tier name is reported back as `requested` in `models`, with the concrete id in `resolved`.
+Rule of thumb for an agent: `fast` for a precommit check or a diff under a few hundred lines with no cross-file logic, `max` when the plan or diff touches concurrency, auth, data integrity, or a design you are unsure about, `balanced` otherwise. The tier name is reported back as `requested` in `models`, with the concrete id in `resolved`. Each `models[]` entry also carries `selection`: `requested` (the call or config chose it), `provider_default` (nothing was asked, so the provider's own default ran — a signal worth gating on), or `session` (a resumed session kept its recorded model).
 
 #### Unknown arguments
 
@@ -390,13 +390,13 @@ Tool arguments are written by a model that never sees the server's stderr, so a 
 
 **Gemini** — default resolves to the latest Flash via `agy models`. Effort is part of the model name:
 
-| Model                       | Description                |
-| --------------------------- | -------------------------- |
-| `Gemini 3.8 Flash (Medium)` | Default — fast review line |
-| `Gemini 3.8 Flash (High)`   | Higher effort              |
-| `Gemini 3.1 Pro (High)`     | Heavier reasoning line     |
+| Model                       | Description                    |
+| --------------------------- | ------------------------------ |
+| `Gemini 3.8 Flash (High)`   | Default — balanced review line |
+| `Gemini 3.8 Flash (Medium)` | Fast review line               |
+| `Gemini 3.1 Pro (High)`     | Heavier reasoning line         |
 
-`"latest"` resolves to the newest Flash for Gemini, or the SDK-pinned flagship for Codex. These are the models we document and recommend; the `model` field, the `model` tool parameter, and the `--model` CLI flag accept any trimmed, control-free selector up to 200 characters, so you can run others. For Gemini, an unrecognized model triggers a non-blocking stderr warning (agy may silently run a different one) — run `agy models` to see the live list.
+`"latest"` resolves to the newest Flash (High) for Gemini, or the SDK-pinned flagship for Codex. These are the models we document and recommend; the `model` field, the `model` tool parameter, and the `--model` CLI flag accept any trimmed, control-free selector up to 200 characters, so you can run others. For Gemini, an unrecognized model triggers a non-blocking stderr warning (agy may silently run a different one) — run `agy models` to see the live list.
 
 ### Provider failover
 

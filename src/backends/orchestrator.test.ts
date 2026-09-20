@@ -333,6 +333,7 @@ describe('orchestrator — model resolution wiring', () => {
       resolved: 'gpt-5.5',
       observed: 'gpt-5.6-sol',
       evidence: 'runtime_session_record',
+      selection: 'session',
     });
     expect(d.observeSessionModel).toHaveBeenCalledOnce();
     expect(consoleSpy).toHaveBeenCalledTimes(1);
@@ -358,6 +359,7 @@ describe('orchestrator — model resolution wiring', () => {
         resolved: null,
         observed: null,
         evidence: 'unavailable',
+        selection: 'session',
       },
     ]);
   });
@@ -649,6 +651,7 @@ describe('orchestrator — runCrossReview (deliberate-deep)', () => {
         resolved: 'default-model',
         observed: null,
         evidence: 'bridge_selection',
+        selection: 'provider_default',
       },
     ]);
     expect(res.data).not.toHaveProperty('session_id'); // cross-review is stateless — no thread leaks out
@@ -694,6 +697,7 @@ describe('orchestrator — evidence-aware model identity', () => {
         resolved: 'default-model',
         observed: 'gpt-5.6-sol',
         evidence: 'runtime_session_record',
+        selection: 'provider_default',
       },
     ]);
   });
@@ -715,6 +719,7 @@ describe('orchestrator — evidence-aware model identity', () => {
         resolved: 'Gemini 3.5 Flash (High)',
         observed: null,
         evidence: 'bridge_selection',
+        selection: 'requested',
       },
     ]);
   });
@@ -954,5 +959,66 @@ describe('argument report is never model-facing (ISS-054)', () => {
       expect(keys).not.toContain('accepted_arguments');
       expect(keys).not.toContain('failover_occurred');
     }
+  });
+});
+
+// ISS-052: a caller that chose nothing gets the provider's default, which for
+// Gemini used to be the cheapest tier. The identity now says which it was, so
+// "the default ran" is stated rather than inferred from requested: null.
+describe('model selection provenance (ISS-052)', () => {
+  const deps = (resolveModel: ReviewFlowDeps['resolveModel']): ReviewFlowDeps => ({
+    config: { ...DEFAULT_CONFIG },
+    provider: 'codex',
+    allowsModelOverrideOnResume: false,
+    resolveModel,
+    resumesAcrossChunks: true,
+  });
+
+  it('marks a provider default when neither the call nor config chose a model', async () => {
+    const { turn } = makeFakeTurn(CANNED_PLAN);
+    const d = deps(vi.fn().mockResolvedValue('DEFAULT'));
+    const res = await runPlanReview({ execution: EXEC, plan: 'x' }, d, turn);
+    expect(res.ok && res.data.models?.[0]).toMatchObject({
+      requested: null,
+      resolved: 'DEFAULT',
+      selection: 'provider_default',
+    });
+  });
+
+  it('marks a requested selection for a per-call model and for a configured one', async () => {
+    const perCall = await runPlanReview(
+      { execution: EXEC, plan: 'x', model: 'gpt-6-astra' },
+      deps(vi.fn().mockResolvedValue('R')),
+      makeFakeTurn(CANNED_PLAN).turn,
+    );
+    expect(perCall.ok && perCall.data.models?.[0]).toMatchObject({ selection: 'requested' });
+
+    const d = deps(vi.fn().mockResolvedValue('R'));
+    d.config = { ...d.config, model: 'max' };
+    const configured = await runPlanReview(
+      { execution: EXEC, plan: 'x' },
+      d,
+      makeFakeTurn(CANNED_PLAN).turn,
+    );
+    expect(configured.ok && configured.data.models?.[0]).toMatchObject({
+      requested: 'max',
+      selection: 'requested',
+    });
+  });
+
+  it('marks a retained session identity on a retaining resume', async () => {
+    const { turn } = makeFakeTurn(CANNED_PLAN);
+    const d = deps(vi.fn());
+    d.retainSessionModelOnResume = true;
+    d.lookupSessionModel = () => ({
+      provider: 'codex',
+      role: 'review',
+      requested: null,
+      resolved: 'gpt-5.5',
+      observed: null,
+      evidence: 'bridge_selection',
+    });
+    const res = await runPlanReview({ execution: EXEC, plan: 'x', session_id: 's1' }, d, turn);
+    expect(res.ok && res.data.models?.[0]).toMatchObject({ selection: 'session' });
   });
 });

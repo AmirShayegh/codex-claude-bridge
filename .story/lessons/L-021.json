@@ -1,0 +1,20 @@
+{
+  "content": "When an external or peer session reports a bridge defect, treat the OBSERVABLE as evidence and the MECHANISM as a hypothesis. Verify the mechanism against the source before filing, and if the confirmed mechanism differs from the reported one, rewrite the issue's framing rather than appending a note — an issue filed under the wrong mechanism sends its implementer to a path that cannot reproduce. Reported symptoms that name a specific internal cause (\"it failed over\", \"it was rate limited\") are the ones most worth distrusting, because a plausible cause makes the report feel complete.",
+  "context": "2026-09-18: cpm-c6/cpm-6c (CPM peer sessions) reported reviews silently degrading from Gemini Pro to Flash, attributed to a Codex cap forcing failover plus a size- or quota-based downgrade rule. Every observable was accurate — six calls on Flash (Medium), two on Pro, requested: null throughout, review_mode \"failover\" on all of them. Every mechanism claim was wrong: no code path maps max->fast; Gemini was the CONFIGURED PRIMARY (~/.reviewbridge.json {\"provider\":\"gemini\"}), so Codex was never attempted and no failover ever occurred; review_mode is stamped from configuration, not events; and the caller's tier:\"max\" was not a parameter at all (no `tier` in any tool schema) and was silently stripped by the Zod shape. Real root cause: GEMINI_DEFAULT_MODEL = 'Gemini 3.8 Flash (Medium)' is our cheapest tier while CODEX_DEFAULT_MODEL is the strongest, so any unpinned Gemini review runs at `fast`. I filed ISS-052 under the reporters' failover framing and had to reframe it once the config was confirmed; left as filed, an implementer would have tested the failover path and failed to reproduce. Produced ISS-052/053/054/055. Consequence on the reporting side: a plan review went revise/revise on Pro then approve/approve on Flash — the weaker model overturning the stronger one.",
+  "createdDate": "2026-09-18",
+  "id": "L-021",
+  "lastValidated": "2026-09-18",
+  "reinforcements": 0,
+  "source": "review",
+  "status": "active",
+  "supersedes": null,
+  "tags": [
+    "peer-reports",
+    "triage",
+    "issue-filing",
+    "model-routing",
+    "config"
+  ],
+  "title": "A field report's observable can be real while its mechanism is wrong — verify in code before filing, and reframe the issue when they diverge",
+  "updatedDate": "2026-09-18"
+}

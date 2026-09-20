@@ -1,0 +1,25 @@
+{
+  "components": [
+    "tools",
+    "git",
+    "storage"
+  ],
+  "createdBy": "care2talk-ba (peer session report, relayed)",
+  "dedupeKey": "care2talk-2026-09-16:7",
+  "discoveredDate": "2026-09-15",
+  "displayId": "ISS-047",
+  "id": "ISS-047",
+  "impact": "Care2talk seats working in git worktrees got diffs from the launch directory until told to pass cwd on every call; a wrong diff reviewed as if correct is a silent failure. Options: require cwd when auto-capturing, or refuse auto-capture when the launch directory is not the caller's declared repo. Second ask from the same team: review_history is per server instance, so a pen cannot verify a seat's claimed session_id centrally; wants lookup by session_id across instances or a shared history DB path. That part depends on ISS-035 / ISS-018. (CPM reports cwd was honoured correctly every time when passed.)",
+  "location": [
+    "src/tools/review-code.ts",
+    "src/tools/review-precommit.ts",
+    "src/utils/resolve-diff.ts"
+  ],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": "Commit 254b06f. New config require_cwd (default true): an MCP review_code/review_precommit call that would auto-capture without cwd is refused with INVALID_INPUT before git runs, naming the launch directory it would have used and how to opt out. Explicit diffs, review_plan, and the CLI are unaffected. Tool descriptions and SERVER_INSTRUCTIONS now say to always pass cwd. Cross-instance history lookup remains deferred to ISS-035/ISS-018.",
+  "resolvedDate": "2026-09-15",
+  "severity": "medium",
+  "status": "resolved",
+  "title": "cwd is optional but silently wrong: omitting it captures from the server's launch directory; make it required or default to the caller's repo. Also: no cross-instance history lookup by session_id"
+}

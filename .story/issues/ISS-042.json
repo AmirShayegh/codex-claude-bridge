@@ -1,0 +1,24 @@
+{
+  "components": [
+    "storage",
+    "mcp"
+  ],
+  "createdBy": "care2talk-ba (peer session report, relayed)",
+  "dedupeKey": "care2talk-2026-09-16:1",
+  "discoveredDate": "2026-09-15",
+  "displayId": "ISS-042",
+  "id": "ISS-042",
+  "impact": "v1.7.1 diagnoses a missing better-sqlite3 binding and exits 1, so the client sees CONNECTION_CLOSED and every session started while it is down needs a manual /mcp reconnect after `npm rebuild better-sqlite3`. Seven seats hit this after a Node change (2026-09-14). Ask: keep the server up and surface the native-addon failure via MCP (initialize succeeds, tools return a structured STORAGE_UNAVAILABLE error or degrade with a warning), plus a README line about rebuilding after a Node upgrade.",
+  "location": [
+    "src/storage/db.ts",
+    "src/mcp.ts",
+    "README.md"
+  ],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": "Commit 3efd186. createServer catches the native-addon throw from openReviewDbWithMetadata, logs the diagnosis once, and starts with storage undefined: reviews run with in-process registry state, review_history/review_status answer STORAGE_UNAVAILABLE (new ErrorCode) carrying the diagnosis, and results carry it as the not_recorded provenance warning. README Troubleshooting adds the Node-upgrade rebuild note and a STORAGE_UNAVAILABLE row.",
+  "resolvedDate": "2026-09-15",
+  "severity": "medium",
+  "status": "resolved",
+  "title": "Native storage failure closes the MCP connection instead of reporting through it; README needs a Node-upgrade rebuild note"
+}

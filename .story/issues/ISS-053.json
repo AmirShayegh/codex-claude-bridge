@@ -1,0 +1,25 @@
+{
+  "components": [
+    "backends/failover.ts",
+    "backends/orchestrator.ts",
+    "config/types.ts",
+    "tools"
+  ],
+  "createdBy": "cpm-c6 (peer session field report, verified in code by codex-claude-bridge-dc)",
+  "dedupeKey": "cpm-c6-2026-09-18:minimum-acceptable-tier",
+  "discoveredDate": "2026-09-18",
+  "id": "ISS-053",
+  "impact": "`model` is a request, never a floor. A caller that asks for the `max` tier gets whatever the served provider resolves — the tier carries across failover when it maps (ISS-048), but if it is dropped, unset, or the session resumes into a provider whose default is weaker, the review still answers, at whatever tier, with a normal verdict. There is no way to say \"review at this tier or fail\". Gates built on the bridge therefore cannot fail closed: cpm-c6 reports rejecting two approves by hand after noticing the served model was Flash rather than Pro. Ask from that report: an explicit minimum-acceptable-tier parameter (e.g. `min_tier`) that refuses with a structured error rather than serving a weaker review, plus honouring the requested tier or erroring rather than silently answering below it. Design note: the tier ordering already exists as REVIEW_TIERS (max/balanced/fast) and `tierForModel` gives the reverse lookup, so a comparison is cheap; the decision point is the served result in withFailover/the orchestrator, after the model is resolved and before the turn. Related: ISS-050.",
+  "location": [
+    "src/config/types.ts:38",
+    "src/backends/failover.ts:74",
+    "src/backends/orchestrator.ts:322"
+  ],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": null,
+  "resolvedDate": null,
+  "severity": "medium",
+  "status": "open",
+  "title": "No minimum-acceptable-tier gate: a caller cannot make a review fail closed instead of answering on a weaker model"
+}

@@ -1,0 +1,19 @@
+{
+  "content": "Any Result err returned from a provider runner after the provider assigned a session/thread id must pass that id as err(message, sessionId). The lifecycle persists failures only under ids it is handed, and MCP tools return only the error text, so a bare error leaves no evidence a review ever ran. Probe with a real deadline (review_deadline_seconds: 3) and confirm review_status finds the session as failed from a separate process.",
+  "context": "Probe-loop round on the ISS-042..049 fixes (commits 3efd186..2bfd9a2, 2026-09-15). All 1256+ unit tests were green, yet a live 3-second deadline against Codex returned \"REVIEW_TIMEOUT: ...\" with no session id and left no sessions row: codex.ts returned err() without thread.id on every failure path even though thread.started had already fired. Cross-layer trust violation between the Codex runner and the lifecycle. Fixed in 2bfd9a2; locked in codex.test.ts, failover.test.ts, lifecycle.test.ts, and server.integration.test.ts.",
+  "createdDate": "2026-09-15",
+  "id": "L-020",
+  "lastValidated": "2026-09-15",
+  "reinforcements": 0,
+  "source": "postmortem",
+  "status": "active",
+  "supersedes": null,
+  "tags": [
+    "probe-loop",
+    "sessions",
+    "backends",
+    "lifecycle"
+  ],
+  "title": "Backend failures must carry the session id once the provider has started one",
+  "updatedDate": "2026-09-15"
+}

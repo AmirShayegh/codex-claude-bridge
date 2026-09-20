@@ -1,0 +1,25 @@
+{
+  "components": [
+    "storage",
+    "sessions",
+    "tools"
+  ],
+  "createdBy": "care2talk-ba (peer session report, relayed)",
+  "dedupeKey": "care2talk-2026-09-16:5",
+  "discoveredDate": "2026-09-15",
+  "displayId": "ISS-046",
+  "id": "ISS-046",
+  "impact": "review_code backgrounds after 120 s, then review_status reports elapsed of 4 s / 8 s over many minutes and never completes; observed three models in a row at 25 to 40 min each across seven care2talk seats. Evidence (app-v2 seat, partial): third stalled attempt background task kxrbm140o (gpt-6-astra) eventually resolved with `MODEL_ERROR: Model \"gpt-6-astra\" is not supported... (fallback to gemini also failed: RESPONSE_PARSE_ERROR: malformed or empty JSON in agy response)`; review_history shows a 37-minute gap 2026-09-15 06:15:31 to 06:52:21 spanning the three stalls, and none of the stalled calls left a history row. Reading: the stall is the ISS-045 cascade (resumed chunk rejected by Codex) where the Codex turn hangs until the configured timeout (timeout_seconds 1800 on these machines matches the 25 to 40 min) before failing over to Gemini, which then 503s or returns empty JSON (ISS-043). The elapsed counter is therefore a separate bug: whatever review_status reports is not wall time since the turn began. Asks: (1) a hard wall-clock ceiling independent of the provider that transitions the session to failed with the last provider state; (2) elapsed computed from the session's start timestamp, with its source named in the review_status output; (3) persist a history row for a call that times out or is stopped, so stalls leave evidence (persistFailure from PR #8 apparently does not cover this path, verify). Related: ISS-034, ISS-045, ISS-043.",
+  "location": [
+    "src/storage/sessions.ts",
+    "src/tools/review-status.ts",
+    "src/backends/orchestrator.ts"
+  ],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": "Commit a6f3644. New config review_deadline_seconds bounds one whole review call across chunks and retries (checked before each chunk; governs the per-turn abort in codex and gemini) and reports REVIEW_TIMEOUT with chunks completed. review_status names its clock (elapsed_source live_registry|history_db, elapsed_basis wall_clock, ISO started_at/completed_at); review_history session queries return the session's own state so failed/timed-out reviews leave evidence.",
+  "resolvedDate": "2026-09-15",
+  "severity": "high",
+  "status": "resolved",
+  "title": "Backgrounded review stalls forever: elapsed counter advances far slower than wall time and no hard timeout ever returns a failed verdict"
+}

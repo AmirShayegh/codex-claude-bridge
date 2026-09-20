@@ -1,0 +1,18 @@
+{
+  "components": [],
+  "createdBy": "peer-session:ledger-integrity-protocol",
+  "dedupeKey": "ledger-integrity-protocol:gemini-mutant-comment-false-positive-2026-09-15",
+  "discoveredDate": "2026-09-16",
+  "id": "ISS-051",
+  "impact": "Field report (ledger-integrity-protocol, 2026-09-15, provider gemini via failover): Gemini read a test comment naming the mutant it catches (e.g. \"M-PANE-WITHOUT-LEDGER opens unconditionally and this fails\") as documentation that the test is expected to fail, and returned a major finding recommending test.skip. This is a reviewer-prompt gap, not a caller bug (contrast with the cross-chunk false positive already tracked in ISS-020, which is on the caller/chunking side). Suggested fix: if the bridge prepends reviewer guidance/system instructions, add a line clarifying that a comment naming a mutant ID describes what the test is designed to catch, not an expected failure — this should remove a class of false majors on mutation-tested code.",
+  "location": [
+    "src/review/prompts.ts"
+  ],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": null,
+  "resolvedDate": null,
+  "severity": "low",
+  "status": "open",
+  "title": "Gemini reviewer flags mutant-naming test comments as a false-positive major asking for test.skip"
+}

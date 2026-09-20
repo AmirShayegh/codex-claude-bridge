@@ -1,0 +1,25 @@
+{
+  "components": [
+    "backends/composite.ts",
+    "review/types.ts",
+    "server.ts"
+  ],
+  "createdBy": "cpm-6c (peer worker session field report, verified in code by codex-claude-bridge-dc)",
+  "dedupeKey": "cpm-6c-2026-09-18:review-mode-config-not-event",
+  "discoveredDate": "2026-09-18",
+  "displayId": "ISS-055",
+  "id": "ISS-055",
+  "impact": "`stamp()` in backends/composite.ts:77-84 writes `review_mode` from the EFFECTIVE CONFIGURED MODE, unconditionally, on every successful result. It means \"the failover composition is configured\", not \"a failover occurred\". The only evidence of an actual failover event is the optional `failover` block, whose ABSENCE is what signals nothing happened — a caller has to reason from a missing field to conclude the negative.\n\nField cost, cpm-6c (CPM worker session, 2026-09-18): with Gemini configured as primary, `review_mode: \"failover\"` appeared on all eight responses while no failover ever occurred (Codex was never attempted). The caller read that field as evidence a failover HAD occurred, built a theory that the bridge was pinned to Flash by a Codex cap, and spent two extra review rounds plus a fresh session chasing an escape from a pin that did not exist. The real chain was Gemini-primary + no selector reaching the resolver -> Flash default (ISS-052, ISS-054). Their words: \"If that field is stamped from configuration rather than from events, the name is doing real damage on its own.\"\n\nNote this is a naming/contract defect independent of ISS-052: it would mislead a caller identically even with the model defaults fixed. Any mode name that reads as an event (\"failover\") has this problem; \"single\" and \"deliberate\" describe compositions and do not.\n\nReporter's suggested fixes, either of which they said would have stopped them in one glance: rename the field to something that plainly describes composition (`review_composition`), and/or emit an explicit boolean event field (`failover_occurred: false`) so the negative is stated rather than inferred from an absent block. Compatibility note: `review_mode` is an existing documented result field (described in server.ts:73), so a rename is a breaking change to the result contract — adding the explicit boolean is the cheaper path and can ship first. Related: ISS-052, ISS-054, ISS-050.",
+  "location": [
+    "src/backends/composite.ts:77",
+    "src/backends/failover.ts:85",
+    "src/server.ts:73"
+  ],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": "Fixed on branch fix/iss-054-tool-arguments (2026-09-19), unreleased, second commit after ISS-054. Additive fix as recorded: every review result now carries `failover_occurred: boolean`, stamped in the composite's stamp() (backends/composite.ts) as `result.data.failover !== undefined` — i.e. true exactly when the primary failed and the secondary served, false in single mode and on a resumed session routed to its owning leaf (ISS-050 path). Field added to HostReviewMetadataFields and omitted from all three model-facing response schemas (guarded by the required-coverage test + explicit omission assertion). `review_mode` NOT renamed: documented result field, and the boolean says everything a rename would. Server instructions (server.ts) and README failover section now state that `review_mode: \"failover\"` alone does not mean a failover happened. Tests: 5 composite cases (single false; failover-configured-but-primary-served false with no block; primary RATE_LIMITED -> secondary served true with block; resumed route false; plan + precommit stamped), schema acceptance, omission. Full suite 1357 green, tsc/eslint clean. Not covered: tool-level synthetic answers that never reach a backend (empty-capture responses) carry no failover_occurred — no review ran, so nothing could have failed over; acceptable since the field is optional.",
+  "resolvedDate": "2026-09-19",
+  "severity": "medium",
+  "status": "resolved",
+  "title": "`review_mode` is stamped from configuration, not events: \"failover\" on every response led a caller to diagnose a failover that never happened"
+}

@@ -1,0 +1,24 @@
+{
+  "components": [
+    "backends",
+    "gemini"
+  ],
+  "createdBy": "ledger-integrity-protocol (peer session report, relayed)",
+  "dedupeKey": "cpm-2026-09-15:3",
+  "discoveredDate": "2026-09-15",
+  "displayId": "ISS-048",
+  "id": "ISS-048",
+  "impact": "Evidence from CPM (agy 1.2.3): three Gemini-served responses for requested \"max\" carried `\"resolved\":\"Gemini 3.1 Pro (High)\",\"observed\":null,\"evidence\":\"bridge_selection\"` with provenance warning null, so the bridge reports its own selection and never learns what agy ran. `agy models` lists gemini-3.1-pro-high, so the Flash-for-Pro cases were not the unknown-id fallback. Root cause confirmed in src/backends/failover.ts ~L124-131: on failover a per-call model override is dropped unless it is a tier (`max`/`balanced`/`fast`), so a Codex model name (gpt-5.6-sol, gpt-6-astra) reaches Gemini as undefined and Gemini resolves its default, the newest Flash at Medium (gemini.ts ~L377-387). The result then reads as a normal verdict with only the `models` array revealing a two-step downgrade (provider and tier). Two Flash rounds produced confidently wrong \"critical\" findings. Asks: (a) map a dropped Codex model to its tier before handing off to the secondary (the tier table in src/review/ already knows gpt-6-astra = max etc.) rather than to undefined; (b) parse the model from agy's stream-json result event so `observed` is populated for Gemini and the existing resolved-vs-observed mismatch warning (orchestrator.ts ~L369) can fire; (c) surface any failover-induced tier change as a warning in the result summary. Related: ISS-044 (failover reason), ISS-030.",
+  "location": [
+    "src/backends/failover.ts:124",
+    "src/backends/gemini.ts:377",
+    "src/backends/orchestrator.ts:345"
+  ],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": "Commit d1f8a20 (with 064ce87). review_mode now names the configured composition; a failover block appears only when the primary failed and names from/error/requested_model/carried_model, so an empty approve from a failed-over Flash review is no longer indistinguishable from the requested reviewer's verdict.",
+  "resolvedDate": "2026-09-15",
+  "severity": "high",
+  "status": "resolved",
+  "title": "Failover drops a Codex model name so Gemini resolves its Flash default with no downgrade warning; Gemini never observes the runtime model (observed null, evidence bridge_selection)"
+}

@@ -1,0 +1,25 @@
+{
+  "components": [
+    "tools",
+    "git",
+    "cli"
+  ],
+  "createdBy": "ledger-integrity-protocol (peer session report, relayed)",
+  "dedupeKey": "cpm-2026-09-15:6",
+  "discoveredDate": "2026-09-15",
+  "displayId": "ISS-049",
+  "id": "ISS-049",
+  "impact": "Auto-capture is `git diff HEAD` only, so reviewing a branch or a landed commit requires pasting the diff or staging it into a scratch worktree; on a shared machine the CPM team's worktree workaround caused an unrelated incident. `src/utils/git.ts` already supports diff between refs; expose it as `base` / `head` (or `commit`) on review_code and the CLI. Also relevant to the care2talk \"bridge review pending\" outage workflow, which retroactively reviews landed commits.",
+  "location": [
+    "src/tools/review-code.ts",
+    "src/utils/git.ts",
+    "src/cli/commands.ts"
+  ],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": "Commit 5661197. review_code accepts base (and optional head, default HEAD) and runs git diff base head at the repository root of cwd; CLI review-code gains --base/--head and --diff is no longer required. Refs validated by GitRefSchema (same pattern as git.ts, leading '-' refused), range cannot combine with an explicit diff, empty range answers without a reviewer via NO_RANGE_CHANGES.",
+  "resolvedDate": "2026-09-15",
+  "severity": "medium",
+  "status": "resolved",
+  "title": "review_code cannot review a committed range: add base/head ref pair or commit argument instead of forcing a pasted diff or scratch worktree"
+}

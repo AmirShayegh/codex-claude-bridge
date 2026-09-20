@@ -1,0 +1,24 @@
+{
+  "components": [
+    "backends",
+    "orchestrator"
+  ],
+  "createdBy": "care2talk-ba + ledger-integrity-protocol (peer session reports, relayed)",
+  "dedupeKey": "care2talk-2026-09-16:3",
+  "discoveredDate": "2026-09-15",
+  "displayId": "ISS-045",
+  "id": "ISS-045",
+  "impact": "Confirmed from cpm-f2 raw responses (2026-09-15) plus code reading. Chain: (1) orchestrator.ts perTurnModel (~L446) returns undefined for any Codex turn carrying a sessionId, and codex.ts resumeThreadOpts (~L216) passes no model, on the documented assumption that \"the Codex SDK reasserts --model on resume\". (2) It does not: the resumed turn runs on ~/.codex/config.toml's `model = \"gpt-5.3-codex-spark\"`, which a ChatGPT-tier account rejects with 400 invalid_request_error. (3) The bridge labels that MODEL_ERROR with the REQUESTED model (\"gpt-6-astra is not supported... try gpt-5.6-sol\") while the embedded original error names gpt-5.3-codex-spark, producing the circular fallback advice. (4) failover.ts drops the non-tier model and Gemini resolves its Flash (Medium) default (ISS-048). (5) The result is verdict approve, findings [], `requested: null`, no warning. Evidence: sessions 3261ded2 (1629 lines, 4 chunks) and 857a8294 (824 lines, 2 chunks) both landed on Flash with requested null; 01a0a44f (202 lines, single chunk) resolved on gpt-6-astra with observed evidence runtime_session_record. Every diff above ~600 lines (chunked) failed over; every diff under ~330 stayed on Codex. Every explicit session_id resume fails the same way, and `INVALID_INPUT: Cannot change model on a resumed session` blocks the workaround. Fix: pass the session's known model (lookupSessionModel / prepared.turnResolved) on resume, for chunks and cross-phase resumes alike; name the actually-rejected model and its source in the error; consider allowing a model override on resume once resume carries the model. Related: ISS-033, ISS-044, ISS-048.",
+  "location": [
+    "src/backends/orchestrator.ts:446",
+    "src/backends/codex.ts:216",
+    "src/backends/failover.ts:124"
+  ],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": "Commit 064ce87. Root cause: Codex resume omitted --model, so chunk 2+ fell to the ~/.codex/config.toml default (rejected on ChatGPT tier), cascading into failover and empty Gemini approvals. The recorded session model is now re-sent on every resumed turn, model may be combined with session_id to change model mid-session, and a rejected-model error names the mismatch between the rejected model and the one the review asked for.",
+  "resolvedDate": "2026-09-15",
+  "severity": "critical",
+  "status": "resolved",
+  "title": "Codex resume omits --model and the SDK does not reassert it: chunk 2+ of any chunked review and every session resume run on ~/.codex/config.toml's default, cascading to a silent Gemini Flash approve"
+}

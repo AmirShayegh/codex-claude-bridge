@@ -393,8 +393,8 @@ describe('runAgyPrint', () => {
 });
 
 describe('pickLatestFlashModel', () => {
-  it('picks the newest Flash at the preferred (Medium) tier from real agy output', () => {
-    expect(pickLatestFlashModel(REAL_AGY_MODELS)).toBe('Gemini 3.5 Flash (Medium)');
+  it('picks the newest Flash at the preferred (High) tier from real agy output (ISS-052)', () => {
+    expect(pickLatestFlashModel(REAL_AGY_MODELS)).toBe('Gemini 3.5 Flash (High)');
   });
 
   it('prefers a newer version even when it only offers a non-preferred tier', () => {
@@ -407,9 +407,9 @@ describe('pickLatestFlashModel', () => {
     expect(pickLatestFlashModel(out)).toBe('Gemini 3.10 Flash (Low)');
   });
 
-  it('falls down the tier preference when the newest version omits Medium', () => {
-    const out = 'Gemini 3.5 Flash (Low)\nGemini 3.5 Flash (High)';
-    expect(pickLatestFlashModel(out)).toBe('Gemini 3.5 Flash (High)');
+  it('falls down the tier preference when the newest version omits High', () => {
+    const out = 'Gemini 3.5 Flash (Low)\nGemini 3.5 Flash (Medium)';
+    expect(pickLatestFlashModel(out)).toBe('Gemini 3.5 Flash (Medium)');
   });
 
   it('stays within the Flash line — a higher-version Pro never wins', () => {
@@ -489,7 +489,7 @@ describe('resolveLatestGeminiModel', () => {
     script({ stdout: REAL_AGY_MODELS, code: 0 });
     const [a, b] = await Promise.all([resolveLatestGeminiModel(), resolveLatestGeminiModel()]);
     const c = await resolveLatestGeminiModel();
-    expect(a).toBe('Gemini 3.5 Flash (Medium)');
+    expect(a).toBe('Gemini 3.5 Flash (High)');
     expect(b).toBe(a);
     expect(c).toBe(a);
     expect(spawnCount).toBe(1);
@@ -515,20 +515,20 @@ describe('resolveLatestGeminiModel', () => {
 
   it('falls back to the known-good model when the query fails', async () => {
     script({ stderr: 'boom', code: 1 });
-    expect(await resolveLatestGeminiModel()).toBe('Gemini 3.8 Flash (Medium)');
+    expect(await resolveLatestGeminiModel()).toBe('Gemini 3.8 Flash (High)');
   });
 
   it('caches an unavailable catalog for five minutes instead of repeatedly spawning agy', async () => {
     script({ stderr: 'boom', code: 1 });
 
-    expect(await resolveLatestGeminiModel()).toBe('Gemini 3.8 Flash (Medium)');
-    expect(await resolveLatestGeminiModel()).toBe('Gemini 3.8 Flash (Medium)');
+    expect(await resolveLatestGeminiModel()).toBe('Gemini 3.8 Flash (High)');
+    expect(await resolveLatestGeminiModel()).toBe('Gemini 3.8 Flash (High)');
     expect(spawnCount).toBe(1);
   });
 
   it('falls back to the known-good model when no Flash line is parseable', async () => {
     script({ stdout: 'Gemini 9.0 Pro (High)\nGPT-OSS 120B (Medium)', code: 0 });
-    expect(await resolveLatestGeminiModel()).toBe('Gemini 3.8 Flash (Medium)');
+    expect(await resolveLatestGeminiModel()).toBe('Gemini 3.8 Flash (High)');
   });
 });
 
@@ -746,7 +746,7 @@ describe('createGeminiBackend', () => {
     }
   });
 
-  it('reviewPlan: fresh run with no model resolves the latest Flash from agy, runs in sandbox, captures the id', async () => {
+  it("reviewPlan: model 'latest' resolves the latest Flash from agy, runs in sandbox, captures the id", async () => {
     fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-new' });
     // First spawn: `agy models`. Second spawn: the review itself.
     script({ stdout: REAL_AGY_MODELS, code: 0 }, agyOk(PLAN_OK));
@@ -754,6 +754,7 @@ describe('createGeminiBackend', () => {
     const res = await createGeminiBackend(DEFAULT_CONFIG).reviewPlan({
       execution: EXEC,
       plan: 'do a thing',
+      model: 'latest',
     });
 
     expect(res.ok).toBe(true);
@@ -764,7 +765,7 @@ describe('createGeminiBackend', () => {
     expect(spawnCount).toBe(2); // agy models + the review
     expect(lastArgs).toContain('--sandbox');
     // Resolved to the newest Flash agy reported.
-    expect(lastArgs[lastArgs.indexOf('--model') + 1]).toBe('Gemini 3.5 Flash (Medium)');
+    expect(lastArgs[lastArgs.indexOf('--model') + 1]).toBe('Gemini 3.5 Flash (High)');
     expect(lastArgs).not.toContain('--conversation');
     expect(lastCwd).toBe(CWD);
     expect(lastCwd).not.toBe(process.cwd());
@@ -990,9 +991,11 @@ describe('createGeminiBackend', () => {
     expect(lastArgs[lastArgs.indexOf('--model') + 1]).toBe(expectedModel);
   });
 
-  it('completes the review on the safe fallback model when the `agy models` query fails', async () => {
-    fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-fallback' });
-    script({ stderr: 'boom', code: 1 }, agyOk(PLAN_OK));
+  // The unpinned default is the `max` tier and resolves locally: no catalog
+  // query, and never the Flash line `latest` would pick (ISS-052).
+  it('resolves an unset model to the max tier without querying `agy models`', async () => {
+    fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-unset' });
+    script(agyOk(PLAN_OK));
 
     const res = await createGeminiBackend(DEFAULT_CONFIG).reviewPlan({
       execution: EXEC,
@@ -1000,8 +1003,23 @@ describe('createGeminiBackend', () => {
     });
 
     expect(res.ok).toBe(true);
+    expect(spawnCount).toBe(1);
+    expect(lastArgs[lastArgs.indexOf('--model') + 1]).toBe('Gemini 3.1 Pro (High)');
+  });
+
+  it('completes the review on the safe fallback model when the `agy models` query fails', async () => {
+    fakeFiles[CACHE] = JSON.stringify({ [CWD]: 'conv-fallback' });
+    script({ stderr: 'boom', code: 1 }, agyOk(PLAN_OK));
+
+    const res = await createGeminiBackend(DEFAULT_CONFIG).reviewPlan({
+      execution: EXEC,
+      plan: 'do a thing',
+      model: 'latest',
+    });
+
+    expect(res.ok).toBe(true);
     expect(spawnCount).toBe(2);
-    expect(lastArgs[lastArgs.indexOf('--model') + 1]).toBe('Gemini 3.8 Flash (Medium)');
+    expect(lastArgs[lastArgs.indexOf('--model') + 1]).toBe('Gemini 3.8 Flash (High)');
   });
 
   it('sends the orchestrator-built review prompt (including the diff) as the stream-json message', async () => {

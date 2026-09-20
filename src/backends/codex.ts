@@ -178,9 +178,10 @@ export function classifyError(
   return { code: ErrorCode.UNKNOWN_ERROR, message: raw };
 }
 
-// Codex's default model, used when neither a per-call override nor config.model
-// is set. The backend owns this default — the config schema no longer supplies one.
-const CODEX_DEFAULT_MODEL = RECOMMENDED_MODELS.codex[0];
+// What 'latest' resolves to for Codex: the newest model the SDK-pinned binary
+// supports. This is NOT the unpinned default — that is the `balanced` tier; see
+// resolveModel below. The backend owns both; the config schema supplies neither.
+const CODEX_LATEST_MODEL = RECOMMENDED_MODELS.codex[0];
 
 // Thread options shared by the start and resume paths. The model is handled by
 // the two wrappers below: a fresh start always sets it (the orchestrator
@@ -217,7 +218,7 @@ function baseThreadOpts(config: ReviewBridgeConfig, workingDirectory: string) {
 }
 
 // A fresh thread always starts on a resolved model (the orchestrator resolves
-// one — an explicit pin, config.model, or CODEX_DEFAULT_MODEL — before every
+// one — an explicit pin, config.model, or the backend default — before every
 // start), so it's a required argument here rather than a defaulted fallback.
 function startThreadOpts(config: ReviewBridgeConfig, model: string, workingDirectory: string) {
   return { model, ...baseThreadOpts(config, workingDirectory) };
@@ -467,13 +468,16 @@ export function createCodexBackend(
     provider: 'codex' as const,
     allowsModelOverrideOnResume: true,
     retainSessionModelOnResume: true,
-    // 'latest' (and unset) → the latest model the SDK-PINNED binary supports. We
-    // deliberately do NOT chase the newest announced model — that bundled-binary
-    // mismatch is the L-008 trap. CODEX_DEFAULT_MODEL moves only when the SDK pin
-    // moves. An explicit pin is forwarded unchanged (L-006).
+    // Unset → the `balanced` tier: an unpinned review is an everyday review and
+    // should not silently run (or bill) at the `max` tier (ISS-052).
+    // 'latest' is a different question — the latest model the SDK-PINNED binary
+    // supports. We deliberately do NOT chase the newest announced model; that
+    // bundled-binary mismatch is the L-008 trap, and CODEX_LATEST_MODEL moves
+    // only when the SDK pin moves. An explicit pin is forwarded unchanged (L-006).
     resolveModel: async (requested: string | undefined) => {
       if (isReviewTier(requested)) return TIER_MODELS.codex[requested];
-      return requested && requested !== 'latest' ? requested : CODEX_DEFAULT_MODEL;
+      if (!requested) return TIER_MODELS.codex.balanced;
+      return requested !== 'latest' ? requested : CODEX_LATEST_MODEL;
     },
     lookupSessionModel: runtime.lookupSessionModel,
     observeSessionModel:

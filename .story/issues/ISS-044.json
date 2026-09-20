@@ -1,0 +1,23 @@
+{
+  "components": [
+    "backends",
+    "failover"
+  ],
+  "createdBy": "care2talk-ba + ledger-integrity-protocol (peer session reports, relayed)",
+  "dedupeKey": "care2talk-2026-09-16:2",
+  "discoveredDate": "2026-09-15",
+  "displayId": "ISS-044",
+  "id": "ISS-044",
+  "impact": "Two teams (care2talk, CPM) on v1.7.1: when Codex rejects the model (see ISS-045 for the root cause: resumed chunks fall to the config.toml default), every review fails over to Gemini; the verdict comes back as a normal approve/request_changes and only the `models` array reveals which provider answered. Raw evidence from cpm-f2: after failover the models entry reads `\"requested\":null,\"resolved\":\"Gemini 3.8 Flash (Medium)\",\"observed\":null,\"evidence\":\"bridge_selection\"` although the call passed model \"gpt-6-astra\" explicitly, and `provenance.warning` is null. Also `review_mode` reads \"failover\" on every result from the failover composite, including calls that resolved on the primary with no failover, so it cannot be used to detect one. Asks: the tool result carries the primary provider's classified error and the failover reason (e.g. `degraded: { provider, code, message }`); `requested` retains the caller's original value through failover; `review_mode` (or a new field) distinguishes \"failover configured\" from \"failover occurred\"; the \"model not supported with a ChatGPT account\" message gets its own classification. Related: ISS-030 (same blind spot in the deliberation composite), ISS-048.",
+  "location": [
+    "src/backends/failover.ts",
+    "src/backends/codex.ts"
+  ],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": "Commit d1f8a20. Failover no longer drops the requested model: a tier is carried as-is and a tier-model is mapped back to its tier via tierForModel for the other provider (carriedModelForFailover). Results restore models[].requested and add a failover block {from, error, requested_model, carried_model}, present only when failover happened. SERVER_INSTRUCTIONS and README explain how to read it.",
+  "resolvedDate": "2026-09-15",
+  "severity": "high",
+  "status": "resolved",
+  "title": "Failover hides the primary provider's error: unsupported Codex model silently routes every review to Gemini with no failover reason in the result"
+}

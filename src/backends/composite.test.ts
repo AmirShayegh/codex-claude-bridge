@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { resolveMode, createCompositeBackend, withSingleMode } from './composite.js';
-import { ok } from '../utils/errors.js';
+import { ok, err } from '../utils/errors.js';
 import { ErrorCode } from '../utils/errors.js';
 import { DEFAULT_CONFIG } from '../config/types.js';
 import { canOverrideModelOnResume, type ReviewBackend } from './backend.js';
@@ -219,5 +219,67 @@ describe('createCompositeBackend — defensive single-mode handling', () => {
     ).reviewPlan({ execution: EXEC, plan: 'p', deliberate: true });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toContain(ErrorCode.INVALID_INPUT);
+  });
+});
+
+// ISS-055: review_mode names the CONFIGURED composition, so "failover" appears on
+// every result of a failover-configured server whether or not anything failed
+// over. The event is stated explicitly so a caller never infers it from an
+// absent block.
+describe('failover_occurred (ISS-055)', () => {
+  const input = { diff: DIFF, execution: EXEC };
+
+  it('is false in single mode', async () => {
+    const res = await withSingleMode(backend('codex')).reviewCode(input);
+    expect(res.ok && res.data.failover_occurred).toBe(false);
+  });
+
+  it('is false when the failover composition is configured but the primary served', async () => {
+    const res = await createCompositeBackend(
+      backend('gemini'),
+      backend('codex'),
+      cfg({ mode: 'failover' }),
+    ).reviewCode(input);
+    expect(res.ok && res.data.review_mode).toBe('failover');
+    expect(res.ok && res.data.failover_occurred).toBe(false);
+    expect(res.ok && res.data.failover).toBeUndefined();
+  });
+
+  it('is true only when the primary failed and the secondary served', async () => {
+    const p = backend('codex', {
+      reviewCode: vi.fn().mockResolvedValue(err(`${ErrorCode.RATE_LIMITED}: capped`)),
+    });
+    const res = await createCompositeBackend(
+      p,
+      backend('gemini'),
+      cfg({ mode: 'failover' }),
+    ).reviewCode(input);
+    expect(res.ok && res.data.failover_occurred).toBe(true);
+    expect(res.ok && res.data.failover?.from).toBe('codex');
+    expect(res.ok && res.data.provider).toBe('gemini');
+  });
+
+  it('is false on a resumed session routed to its owning leaf (no failover path runs)', async () => {
+    const lookup = vi.fn().mockReturnValue({ status: 'found', value: 'gemini' as const });
+    const res = await createCompositeBackend(
+      backend('codex'),
+      backend('gemini'),
+      cfg({ mode: 'failover' }),
+      lookup,
+    ).reviewCode({ ...input, session_id: 'owned-by-gemini' });
+    expect(res.ok && res.data.provider).toBe('gemini');
+    expect(res.ok && res.data.failover_occurred).toBe(false);
+  });
+
+  it('is stamped on plan and precommit results too', async () => {
+    const c = createCompositeBackend(
+      backend('codex'),
+      backend('gemini'),
+      cfg({ mode: 'failover' }),
+    );
+    const plan = await c.reviewPlan({ plan: 'p', execution: EXEC });
+    const pre = await c.reviewPrecommit(input);
+    expect(plan.ok && plan.data.failover_occurred).toBe(false);
+    expect(pre.ok && pre.data.failover_occurred).toBe(false);
   });
 });

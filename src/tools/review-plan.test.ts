@@ -5,6 +5,7 @@ import type { ReviewLifecycle } from '../review/lifecycle.js';
 import type { ModelIdentity, PlanReviewResult } from '../review/types.js';
 import { err, ok } from '../utils/errors.js';
 import { registerReviewPlanTool } from './review-plan.js';
+import { sessionModelConflictMessage } from '../backends/orchestrator.js';
 
 // Preparation is the tool's workspace seam (ISS-027). It is faked here so these
 // tests stay about tool wiring; request-prep.test.ts covers the real flow.
@@ -84,7 +85,7 @@ describe('registerReviewPlanTool', () => {
   it('registers the tool and bounded model/session validators', () => {
     setup();
     expect(server.registerTool.mock.calls[0][0]).toBe('review_plan');
-    const schema = server.registerTool.mock.calls[0][1].inputSchema as Record<
+    const schema = server.registerTool.mock.calls[0][1].inputSchema.shape as Record<
       string,
       { parse(value: unknown): unknown }
     >;
@@ -147,5 +148,74 @@ describe('registerReviewPlanTool', () => {
     const response = await setup()({ plan: 'My plan' }, {});
     expect(response.isError).toBe(true);
     expect(response.content[0].text).toContain('network failure');
+  });
+});
+
+describe('argument handling (ISS-054)', () => {
+  it('REGRESSION: tier: "max" reaches the reviewer as the max tier', async () => {
+    const response = await setup()({ plan: 'My plan', tier: 'max' }, {});
+    expect(response.isError).toBeUndefined();
+    expect(lifecycle.reviewPlan).toHaveBeenCalledWith(expect.objectContaining({ model: 'max' }));
+    expect(JSON.parse(response.content[0].text)).toEqual(RESULT);
+  });
+
+  it('folds a near-miss key and reports the correction in the result', async () => {
+    const response = await setup()({ plan: 'My plan', modle: 'gpt-5.6-sol' }, {});
+    expect(lifecycle.reviewPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'gpt-5.6-sol' }),
+    );
+    expect(JSON.parse(response.content[0].text)).toMatchObject({
+      argument_corrections: [{ from: 'modle', to: 'model' }],
+    });
+  });
+
+  it('echoes an unknown key in the result instead of dropping it', async () => {
+    const response = await setup()({ plan: 'My plan', priority: 'high' }, {});
+    expect(response.isError).toBeUndefined();
+    const parsed = JSON.parse(response.content[0].text);
+    expect(parsed.ignored_arguments).toEqual(['priority']);
+    expect(parsed.accepted_arguments).toContain('tier');
+    expect(lifecycle.reviewPlan).toHaveBeenCalledWith(
+      expect.not.objectContaining({ priority: 'high' }),
+    );
+  });
+
+  it('refuses selector intent under an unknown key before preparation or the provider', async () => {
+    vi.mocked(preparePlanReview).mockClear();
+    const response = await setup()({ plan: 'My plan', effort: 'max' }, {});
+    expect(response.isError).toBe(true);
+    expect(response.content[0].text).toMatch(/^INVALID_INPUT: .*"effort".*tier: "max"/);
+    expect(preparePlanReview).not.toHaveBeenCalled();
+    expect(lifecycle.reviewPlan).not.toHaveBeenCalled();
+  });
+
+  it('refuses model and tier together', async () => {
+    const response = await setup()({ plan: 'My plan', model: 'gpt-6-astra', tier: 'max' }, {});
+    expect(response.isError).toBe(true);
+    expect(response.content[0].text).toMatch(/^INVALID_INPUT: /);
+    expect(lifecycle.reviewPlan).not.toHaveBeenCalled();
+  });
+
+  it('applies the resume guard to tier on the compatibility path', async () => {
+    const response = await setup(false)(
+      { plan: 'My plan', session_id: 'session-1', tier: 'max' },
+      {},
+    );
+    expect(response.isError).toBe(true);
+    expect(response.content[0].text).toBe(sessionModelConflictMessage());
+    expect(client.reviewPlan).not.toHaveBeenCalled();
+  });
+
+  it('carries the report on the compatibility path too', async () => {
+    vi.mocked(client.reviewPlan).mockResolvedValue(ok(RESULT));
+    const response = await setup(false)({ plan: 'My plan', priority: 'high' }, {});
+    expect(JSON.parse(response.content[0].text).ignored_arguments).toEqual(['priority']);
+  });
+
+  it('rejects a non-tier value at the schema boundary', () => {
+    setup();
+    const schema = server.registerTool.mock.calls[0][1].inputSchema;
+    expect(schema.safeParse({ plan: 'p', tier: 'turbo' }).success).toBe(false);
+    expect(schema.safeParse({ plan: 'p', tier: 'max', stray: 1 }).success).toBe(true);
   });
 });

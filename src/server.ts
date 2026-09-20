@@ -74,7 +74,9 @@ TIPS:
   composition that was CONFIGURED for the call. A result also carries a 'failover' block ONLY when
   the primary provider failed and the other one served: it names the failed provider, its error,
   the model you asked for, and what the other provider was handed. No 'failover' block means the
-  primary served. Treat a failed-over result as a different reviewer's opinion, not the one you
+  primary served, and 'failover_occurred' (boolean) states the same event outright so it never
+  has to be inferred from an absent field — 'review_mode: "failover"' alone does NOT mean one
+  happened. Treat a failed-over result as a different reviewer's opinion, not the one you
   requested, and consider whether its 'carried_model' (null = the secondary's default) is
   adequate for the change.
 - Every successful review also carries 'models' (successful reviewer/adjudicator contributions with

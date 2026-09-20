@@ -456,10 +456,12 @@ describe('working directory threading (codex)', () => {
 });
 
 describe('model resolution (codex)', () => {
-  it('resolves an unset model to the SDK-pinned default and passes it to startThread', async () => {
+  // The unpinned default is the `balanced` tier, not the flagship: an everyday
+  // review should not silently cost a `max` one (ISS-052).
+  it('resolves an unset model to the balanced tier and passes it to startThread', async () => {
     mockRun.mockResolvedValue({ finalResponse: JSON.stringify(validPlanResponse) });
     await createCodexBackend(config).reviewPlan({ execution: EXEC, plan: 'My plan' });
-    expect(mockStartThread.mock.calls[0][0]).toMatchObject({ model: 'gpt-6-astra' });
+    expect(mockStartThread.mock.calls[0][0]).toMatchObject({ model: 'gpt-5.6-sol' });
   });
 
   it("resolves model 'latest' to the SDK-pinned default (never passes the literal 'latest')", async () => {
@@ -1035,7 +1037,9 @@ describe('error classification', () => {
       ),
     );
 
-    const client = createCodexBackend(config);
+    // Pinned so the rejected model IS the one this review sent: the same-model
+    // generic path, not the mismatch branch (the unpinned default is sol).
+    const client = createCodexBackend({ ...config, model: 'gpt-6-astra' });
     const result = await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
     expect(result.ok).toBe(false);
@@ -1164,7 +1168,10 @@ describe('error classification', () => {
     // so this must take the same-model generic path, not the internal-call message.
     mockRun.mockRejectedValue(new Error('The model "GPT-6-ASTRA" is not supported'));
 
-    const result = await createCodexBackend(config).reviewPlan({ execution: EXEC, plan: 'plan' });
+    const result = await createCodexBackend({ ...config, model: 'gpt-6-astra' }).reviewPlan({
+      execution: EXEC,
+      plan: 'plan',
+    });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -1337,8 +1344,9 @@ describe('per-call model override (T-011)', () => {
     const client = createCodexBackend({ ...config, model: undefined });
     await client.reviewPlan({ execution: EXEC, plan: 'plan' });
 
-    // codex resolves its own default — the schema no longer supplies one.
-    expect(mockStartThread).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-6-astra' }));
+    // codex resolves its own default — the schema no longer supplies one — and
+    // that default is the `balanced` tier (ISS-052).
+    expect(mockStartThread).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-5.6-sol' }));
   });
 
   it('multi-chunk: override applies on chunk 1 via startThread and is re-sent on every resumed chunk (ISS-045)', async () => {

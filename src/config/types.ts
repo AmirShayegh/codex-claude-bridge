@@ -24,7 +24,7 @@ export function toReviewProvider(value: string | null | undefined): ReviewProvid
 export const RECOMMENDED_MODELS = {
   codex: ['gpt-6-astra', 'gpt-5.6-sol'],
   // agy model strings (effort is part of the name); from `agy models`.
-  gemini: ['Gemini 3.8 Flash (Medium)', 'Gemini 3.8 Flash (High)', 'Gemini 3.1 Pro (High)'],
+  gemini: ['Gemini 3.1 Pro (High)', 'Gemini 3.8 Flash (High)', 'Gemini 3.8 Flash (Medium)'],
 } as const satisfies Record<ReviewProvider, readonly string[]>;
 export type RecommendedModel = (typeof RECOMMENDED_MODELS)[ReviewProvider][number];
 
@@ -37,6 +37,7 @@ export type RecommendedModel = (typeof RECOMMENDED_MODELS)[ReviewProvider][numbe
 //   fast     — cheap and quick: small diffs, precommit sanity, style, iteration loops.
 export const REVIEW_TIERS = ['max', 'balanced', 'fast'] as const;
 export type ReviewTier = (typeof REVIEW_TIERS)[number];
+export const ReviewTierSchema = z.enum(REVIEW_TIERS);
 
 export function isReviewTier(value: string | undefined): value is ReviewTier {
   return (REVIEW_TIERS as readonly string[]).includes(value ?? '');
@@ -64,10 +65,25 @@ export function tierForModel(provider: ReviewProvider, model: string): ReviewTie
 
 // Shared one-liner for tool/CLI help so every surface explains tiers the same way.
 export const TIER_HELP =
-  'Or pick a tier instead of a model id: "max" (hardest problems — architecture, concurrency, ' +
-  'security, subtle bugs), "balanced" (everyday review), or "fast" (small diffs, precommit ' +
-  'sanity, quick iteration). Tiers map per provider (Codex: gpt-6-astra / gpt-5.6-sol / ' +
-  'gpt-5.6-luna; Gemini: 3.1 Pro (High) / 3.8 Flash (High) / 3.8 Flash (Medium)) and survive failover.';
+  '"max" (hardest problems — architecture, concurrency, security, subtle bugs), "balanced" ' +
+  '(everyday review), or "fast" (small diffs, precommit sanity, quick iteration). Tiers map per ' +
+  'provider (Codex: gpt-6-astra / gpt-5.6-sol / gpt-5.6-luna; Gemini: 3.1 Pro (High) / ' +
+  '3.8 Flash (High) / 3.8 Flash (Medium)) and survive failover.';
+
+// The `tier` and `model` parameter descriptions name each other so a caller
+// reading either lands on the right parameter. The old text said "pick a tier"
+// inside the `model` field, and callers passed `tier:` — which no tool accepted
+// and the schema silently stripped (ISS-054).
+export const TIER_PARAM_HELP =
+  'Pick the reviewing model by capability tier instead of by id: ' +
+  TIER_HELP +
+  ' Pass either tier or model, not both.';
+export const MODEL_PARAM_HELP =
+  'Override the configured default model for this call with a concrete id (e.g. "gpt-5.6-sol") ' +
+  'or "latest". To choose by capability use the tier parameter instead (a tier word is still ' +
+  'accepted here). May be combined with session_id to change model mid-session; without it a ' +
+  'resumed session keeps the model it was recorded with. Compare returned resolved and observed ' +
+  'labels for runtime changes.';
 
 export const PlanReviewStandardsSchema = z.object({
   focus: z.array(z.string()).default(['architecture', 'feasibility']),

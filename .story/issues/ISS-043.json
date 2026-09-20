@@ -1,0 +1,22 @@
+{
+  "components": [
+    "backends",
+    "gemini"
+  ],
+  "createdBy": "care2talk-ba (peer session report, relayed)",
+  "dedupeKey": "care2talk-2026-09-16:4",
+  "discoveredDate": "2026-09-15",
+  "displayId": "ISS-043",
+  "id": "ISS-043",
+  "impact": "During the 2026-09-15/16 dual-provider outage, Gemini capacity failures were reported as parse errors, which reads as a bridge bug rather than a provider outage and defeats usage-based failover logic. Classify HTTP 503 / empty result events as PROVIDER_UNAVAILABLE with the upstream message retained.",
+  "location": [
+    "src/backends/gemini.ts"
+  ],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": "Commit d1f8a20. Gemini 503/unavailable/no-capacity/overloaded/try-again-later errors classify as PROVIDER_UNAVAILABLE (failover-eligible); agy's init.model event is observed and recorded per session so the observed label reflects the runtime.",
+  "resolvedDate": "2026-09-15",
+  "severity": "low",
+  "status": "resolved",
+  "title": "Gemini 503 / no-capacity responses surface as RESPONSE_PARSE_ERROR (empty or malformed JSON) instead of a provider-unavailable classification"
+}

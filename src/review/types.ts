@@ -55,6 +55,10 @@ export const ModelIdentitySchema = z.object({
   resolved: ModelSelectorSchema.nullable(),
   observed: ModelSelectorSchema.nullable(),
   evidence: z.enum(['runtime_session_record', 'bridge_selection', 'unavailable']),
+  // How the model came to be chosen (ISS-052): the caller or config asked for it,
+  // the provider's own default filled the gap, or a resumed session's recorded
+  // identity was retained. Optional for older persisted identities.
+  selection: z.enum(['requested', 'provider_default', 'session']).optional(),
 });
 
 export const ReviewProvenanceSchema = z.object({
@@ -80,6 +84,15 @@ const HostReviewMetadataFields = {
   models: z.array(ModelIdentitySchema).optional(),
   provenance: ReviewProvenanceSchema.optional(),
   failover: ReviewFailoverSchema.optional(),
+  // The failover EVENT, stated outright (ISS-055): true exactly when `failover`
+  // is present. review_mode only names the configured composition.
+  failover_occurred: z.boolean().optional(),
+  // Stamped at the tool boundary when the call carried keys the schema does not
+  // know (ISS-054): what was folded into a real parameter, what was ignored, and
+  // the accepted names. Host-only; model-facing schemas omit all three.
+  argument_corrections: z.array(z.object({ from: z.string(), to: z.string() })).optional(),
+  ignored_arguments: z.array(z.string()).optional(),
+  accepted_arguments: z.array(z.string()).optional(),
 };
 
 // Deliberation metadata: when both providers review the same input, the bridge

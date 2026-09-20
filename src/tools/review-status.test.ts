@@ -164,3 +164,14 @@ describe('registerReviewStatusTool', () => {
     if (admission.ok) admission.data.release();
   });
 });
+
+describe('argument handling (ISS-054)', () => {
+  it('echoes an unknown key and never refuses a lookup, even for a tier-word value', async () => {
+    const result = await handler({ session_id: 'nonexistent', effort: 'max' }, {});
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.status).toBe('not_found');
+    expect(parsed.ignored_arguments).toEqual(['effort']);
+    expect(parsed.accepted_arguments).toEqual(['session_id']);
+  });
+});

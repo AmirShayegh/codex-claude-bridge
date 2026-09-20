@@ -4,6 +4,18 @@ import type { SessionInfo } from '../storage/sessions.js';
 import type { SessionRegistry } from '../storage/session-registry.js';
 import { SessionIdSchema } from '../utils/input-validation.js';
 import { storageUnavailable } from '../utils/errors.js';
+import {
+  classifyToolArguments,
+  invalidInputResponse,
+  toolInputSchema,
+  withArgumentReport,
+} from './tool-input.js';
+
+// The accepted parameters, kept as a plain shape so the handler can classify
+// whatever else the call carried (ISS-054).
+const STATUS_INPUT = {
+  session_id: SessionIdSchema.describe('Session ID to check status of'),
+};
 
 export function registerReviewStatusTool(
   server: McpServer,
@@ -17,11 +29,16 @@ export function registerReviewStatusTool(
       description:
         'Check whether a review session is still running, completed, or failed. ' +
         'Use this if a review call timed out or you need to verify session state.',
-      inputSchema: {
-        session_id: SessionIdSchema.describe('Session ID to check status of'),
-      },
+      inputSchema: toolInputSchema(STATUS_INPUT),
     },
-    async (args) => {
+    async (rawArgs) => {
+      // Fold or echo unknown keys (ISS-054). A lookup never refuses: nothing
+      // here can be the wrong review, so a stray selector word is only echoed.
+      const classified = classifyToolArguments(STATUS_INPUT, rawArgs, {
+        refuseSelectorIntent: false,
+      });
+      if (!classified.ok) return invalidInputResponse(classified.error);
+      const { args, report } = classified.data;
       try {
         const live = registry?.getStatus(args.session_id);
         if (live) {
@@ -30,18 +47,23 @@ export function registerReviewStatusTool(
             content: [
               {
                 type: 'text' as const,
-                text: JSON.stringify({
-                  status: live.status,
-                  session_id: live.sessionId,
-                  elapsed_seconds: Math.max(0, Math.round((end - live.startedAt) / 1000)),
-                  // Where the clock comes from (ISS-046): wall time since this
-                  // process admitted the review, not provider progress.
-                  elapsed_source: 'live_registry',
-                  elapsed_basis: 'wall_clock',
-                  started_at: new Date(live.startedAt).toISOString(),
-                  completed_at:
-                    live.completedAt === null ? null : new Date(live.completedAt).toISOString(),
-                }),
+                text: JSON.stringify(
+                  withArgumentReport(
+                    {
+                      status: live.status,
+                      session_id: live.sessionId,
+                      elapsed_seconds: Math.max(0, Math.round((end - live.startedAt) / 1000)),
+                      // Where the clock comes from (ISS-046): wall time since this
+                      // process admitted the review, not provider progress.
+                      elapsed_source: 'live_registry',
+                      elapsed_basis: 'wall_clock',
+                      started_at: new Date(live.startedAt).toISOString(),
+                      completed_at:
+                        live.completedAt === null ? null : new Date(live.completedAt).toISOString(),
+                    },
+                    report,
+                  ),
+                ),
               },
             ],
           };
@@ -66,7 +88,9 @@ export function registerReviewStatusTool(
             content: [
               {
                 type: 'text' as const,
-                text: JSON.stringify({ status: 'not_found', session_id: args.session_id }),
+                text: JSON.stringify(
+                  withArgumentReport({ status: 'not_found', session_id: args.session_id }, report),
+                ),
               },
             ],
           };
@@ -81,16 +105,21 @@ export function registerReviewStatusTool(
           content: [
             {
               type: 'text' as const,
-              text: JSON.stringify({
-                status: row.status,
-                session_id: row.session_id,
-                elapsed_seconds: elapsedSeconds,
-                // Wall time since the stored session row was created (ISS-046).
-                elapsed_source: 'history_db',
-                elapsed_basis: 'wall_clock',
-                started_at: createdAt.toISOString(),
-                completed_at: completedAt === null ? null : completedAt.toISOString(),
-              }),
+              text: JSON.stringify(
+                withArgumentReport(
+                  {
+                    status: row.status,
+                    session_id: row.session_id,
+                    elapsed_seconds: elapsedSeconds,
+                    // Wall time since the stored session row was created (ISS-046).
+                    elapsed_source: 'history_db',
+                    elapsed_basis: 'wall_clock',
+                    started_at: createdAt.toISOString(),
+                    completed_at: completedAt === null ? null : completedAt.toISOString(),
+                  },
+                  report,
+                ),
+              ),
             },
           ],
         };

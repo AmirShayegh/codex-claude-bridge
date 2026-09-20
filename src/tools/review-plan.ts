@@ -1,4 +1,4 @@
-import { TIER_HELP } from '../config/types.js';
+import { MODEL_PARAM_HELP, ReviewTierSchema, TIER_PARAM_HELP } from '../config/types.js';
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
@@ -13,7 +13,38 @@ import {
   WorkingDirectorySchema,
 } from '../utils/input-validation.js';
 import { preparePlanReview } from '../review/request-prep.js';
+import {
+  classifyToolArguments,
+  invalidInputResponse,
+  selectModel,
+  toolInputSchema,
+  withArgumentReport,
+} from './tool-input.js';
 import type { RequestPreparationDeps } from '../review/request-prep.js';
+
+// The accepted parameters, kept as a plain shape so the handler can classify
+// whatever else the call carried (ISS-054).
+const PLAN_INPUT = {
+  plan: z.string().describe('The implementation plan to review'),
+  cwd: WorkingDirectorySchema.optional().describe(CWD_DESCRIPTION),
+  context: z.string().optional().describe('Project context and constraints'),
+  focus: z.array(z.string()).optional().describe('Review focus areas'),
+  depth: z.enum(['quick', 'thorough']).optional().describe('Review depth'),
+  session_id: SessionIdSchema.optional().describe('Continue from a previous review session'),
+  model: ModelSelectorSchema.optional().describe(MODEL_PARAM_HELP),
+  tier: ReviewTierSchema.optional().describe(TIER_PARAM_HELP),
+  deliberate: z
+    .boolean()
+    .optional()
+    .describe(
+      'Per-call override of the configured review mode: true = both providers review (deliberation); ' +
+        'false = single provider with failover. Omit to use the configured mode. Requires a two-provider ' +
+        'setup; requesting deliberation under a single-provider config returns an error. Under ' +
+        "deliberate-deep, the returned verdict reflects both providers' independent reviews and is NOT " +
+        'recomputed from cross-review adjudications — treat deliberation.divergent[].adjudication as ' +
+        'advisory input for your own synthesis.',
+    ),
+};
 
 export function registerReviewPlanTool(
   server: McpServer,
@@ -30,38 +61,20 @@ export function registerReviewPlanTool(
         'Call this after drafting a plan and before implementing it. ' +
         'Returns a verdict (approve/revise/reject), findings, session_id, responding models, and persistence provenance. ' +
         'Pass the returned session_id to review_code later so the reviewer has full context.',
-      inputSchema: {
-        plan: z.string().describe('The implementation plan to review'),
-        cwd: WorkingDirectorySchema.optional().describe(CWD_DESCRIPTION),
-        context: z.string().optional().describe('Project context and constraints'),
-        focus: z.array(z.string()).optional().describe('Review focus areas'),
-        depth: z.enum(['quick', 'thorough']).optional().describe('Review depth'),
-        session_id: SessionIdSchema.optional().describe('Continue from a previous review session'),
-        model: ModelSelectorSchema.optional().describe(
-          'Override the configured default model for this call (e.g., "gpt-5.6-sol"), or "latest". ' +
-            TIER_HELP +
-            ' ' +
-            'May be combined with session_id to change model mid-session; without it a resumed ' +
-            'session keeps the model it was recorded with. Compare returned resolved and observed ' +
-            'labels for runtime changes.',
-        ),
-        deliberate: z
-          .boolean()
-          .optional()
-          .describe(
-            'Per-call override of the configured review mode: true = both providers review (deliberation); ' +
-              'false = single provider with failover. Omit to use the configured mode. Requires a two-provider ' +
-              'setup; requesting deliberation under a single-provider config returns an error. Under ' +
-              "deliberate-deep, the returned verdict reflects both providers' independent reviews and is NOT " +
-              'recomputed from cross-review adjudications — treat deliberation.divergent[].adjudication as ' +
-              'advisory input for your own synthesis.',
-          ),
-      },
+      inputSchema: toolInputSchema(PLAN_INPUT),
     },
-    async (args) => {
+    async (rawArgs) => {
+      // Unknown keys are folded, echoed, or refused here (ISS-054), never
+      // silently stripped; model/tier collapse to the one selector backends take.
+      const classified = classifyToolArguments(PLAN_INPUT, rawArgs, { refuseSelectorIntent: true });
+      if (!classified.ok) return invalidInputResponse(classified.error);
+      const { args, report } = classified.data;
+      const selector = selectModel(args);
+      if (!selector.ok) return invalidInputResponse(selector.error);
+      const model = selector.data;
       // The shared lifecycle validates against the owning leaf before admission.
       // Keep the scalar gate only for the legacy no-lifecycle compatibility path.
-      if (!lifecycle && !client.allowsModelOverrideOnResume && args.session_id && args.model) {
+      if (!lifecycle && !client.allowsModelOverrideOnResume && args.session_id && model) {
         return {
           content: [{ type: 'text' as const, text: sessionModelConflictMessage() }],
           isError: true,
@@ -84,7 +97,7 @@ export function registerReviewPlanTool(
         focus: args.focus,
         depth: args.depth,
         session_id: args.session_id,
-        model: args.model,
+        model,
         deliberate: args.deliberate,
       };
       if (lifecycle) {
@@ -93,7 +106,14 @@ export function registerReviewPlanTool(
           if (!result.ok) {
             return { content: [{ type: 'text' as const, text: result.error }], isError: true };
           }
-          return { content: [{ type: 'text' as const, text: JSON.stringify(result.data) }] };
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify(withArgumentReport(result.data, report)),
+              },
+            ],
+          };
         } catch (e) {
           return {
             content: [
@@ -131,7 +151,14 @@ export function registerReviewPlanTool(
           result.data.provider,
         );
 
-        return { content: [{ type: 'text' as const, text: JSON.stringify(result.data) }] };
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify(withArgumentReport(result.data, report)),
+            },
+          ],
+        };
       } catch (e) {
         tracker.recordFailureBestEffort();
         return {

@@ -1,0 +1,32 @@
+{
+  "citesRulings": [
+    "r-7rn5jmkyyxw3pas9"
+  ],
+  "components": [
+    "backends/gemini.ts",
+    "backends/failover.ts",
+    "backends/orchestrator.ts",
+    "config/types.ts"
+  ],
+  "createdBy": "cpm-c6 (peer session field report, verified in code by codex-claude-bridge-dc)",
+  "dedupeKey": "cpm-c6-2026-09-18:gemini-unpinned-default-tier",
+  "discoveredDate": "2026-09-18",
+  "displayId": "ISS-052",
+  "id": "ISS-052",
+  "impact": "`CODEX_DEFAULT_MODEL = RECOMMENDED_MODELS.codex[0]` (strongest recommended) but `resolveLatestGeminiModel()` returns \"the newest Flash\", falling back to `GEMINI_DEFAULT_MODEL = 'Gemini 3.8 Flash (Medium)'` — our `fast` tier. So any review where no model selector reaches the resolver runs on Codex's best model but on Gemini's cheapest. The only evidence a caller gets is `models[].requested: null`, which reads as \"unknown\" rather than \"nothing was asked, so the cheapest model ran\".\n\nNote the version/capability inversion that makes a \"latest\" heuristic unable to find the right answer: in `agy models` the newest version line is Gemini 3.8 Flash while the most capable model is Gemini 3.1 Pro (High) — a LOWER version number. `pickLatestFlashModel` only scans Flash lines, so \"latest\" can never resolve to Pro.\n\nTWO MANIFESTATIONS — the second is the one confirmed in the field:\n\n(a) LATENT, by code reading: on failover with no per-call pin, `carriedModelForFailover` returns undefined and the secondary resolves its own default, so a review that would have run on gpt-6-astra answers on Flash (Medium). `failover.carried_model: null` is honest but does not say the result was downgraded. Also relevant: `createBackend` (backends/index.ts:55) clears `model` when building the secondary leaf, so a config-level pin never reaches it either. NOT yet observed in the field — do not use failover as the repro.\n\n(b) CONFIRMED 2026-09-18, cpm-c6 / cpm-6c (CPM sessions): Gemini configured as PRIMARY, no failover involved. `~/.reviewbridge.json` was `{\"provider\":\"gemini\",\"fallback\":true,\"timeout_seconds\":1800}` with no `model` key and no project-level config anywhere, so both bridge servers booted with Gemini primary; `provider` was `\"gemini\"` on every result. Six calls with no selector reaching the resolver served Flash (Medium); two calls passing `model: \"max\"` served Gemini 3.1 Pro (High). The caller believed they had selected a tier throughout because they were passing `tier: \"max\"`, which is not a parameter and was silently stripped (ISS-054). Consequence: a plan review went revise/revise on Pro then approve/approve on Flash — the weaker model overturning the stronger one, with nothing in the response saying so except a model label. The approves were not banked only because the caller was inspecting `models[].observed` every round.\n\nAn earlier version of this issue framed the evidence as a failover downgrade; cpm-c6 has since withdrawn that reading and the framing above replaces it.\n\nFix directions: make Gemini's unset/latest default tier-comparable to Codex's (at least `balanced`, i.e. Flash (High)) rather than the cheapest; and/or stamp an explicit signal on the result when the served model is the provider's fallback default rather than anything the caller chose. Related: ISS-054 (how the selector went missing), ISS-053 (no floor once a tier IS expressed), ISS-022/ISS-036 (config read once at spawn from the server's launch directory).",
+  "location": [
+    "src/backends/gemini.ts:395",
+    "src/backends/gemini.ts:521",
+    "src/backends/failover.ts:74",
+    "src/backends/codex.ts:183",
+    "src/config/types.ts:45"
+  ],
+  "phase": null,
+  "relatedTickets": [],
+  "repro_probe": "Which config file won is not directly observable, but the `provider` field on any result is a probe for it. config/loader.ts is first-hit-wins (RB_CONFIG_PATH -> walk up from process.cwd() to the first .reviewbridge.json, stopping at a .git boundary -> $HOME/.reviewbridge.json -> built-in defaults), so exactly ONE file is ever the config; they never merge. In the 2026-09-18 CPM run, `provider: \"gemini\"` could only have come from $HOME (the only file naming a provider), which proves the walk found nothing and therefore that the server's cwd was CPM, with CPM's .git boundary stopping it. Had the server been launched in the bridge repo, that repo's own .reviewbridge.json would have been the entire config: no `provider` key, so ProviderSchema.default('codex') would have made the primary codex with timeout_seconds 600, and home would never have been read. Anyone reproducing this must therefore control the server's launch directory, not just the set of files on disk — and can read `provider` back to confirm which one won. (Framing credit: cpm-6c.)",
+  "resolution": "Fixed on branch fix/iss-054-tool-arguments (2026-09-20), third commit after ISS-054/055, unreleased. Owner ruling r-7rn5jmkyyxw3pas9: Codex reasoning effort stays medium — Codex side untouched. Gemini side: TIER_PREFERENCE now ['high','medium','low'] and GEMINI_DEFAULT_MODEL = 'Gemini 3.8 Flash (High)' (gemini.ts), RECOMMENDED_MODELS.gemini reordered to lead with Flash (High); so unpinned/\"latest\" resolves to the `balanced` tier, the analogue of Codex's flagship-at-medium, instead of the `fast` tier. TIER_MODELS unchanged (fast still Flash Medium). Explicit signal: ModelIdentity.selection ('requested' | 'provider_default' | 'session') set in orchestrator prepareModel/enrichModelIdentity on every identity — 'provider_default' exactly when neither per-call model nor config.model was set on a fresh path; 'session' on a retaining resume; 'requested' otherwise. Included in the dedup key; optional in the schema for older persisted identities. README model table + selection docs updated. Tests: pickLatestFlashModel/resolveLatestGeminiModel/backend fallback expectations flipped to High; 3 provenance tests; identity toEqual sites updated (5 orchestrator + 1 integration). Suite 1360 green, tsc/eslint clean. Not done: the latent failover manifestation (a) is addressed implicitly — the secondary's default is now Flash (High), and selection: 'provider_default' on the served identity says a default ran; no separate \"downgraded vs primary\" comparison was added (that is ISS-053's floor territory). Release: 1.9.0 with ISS-054/055.",
+  "resolvedDate": "2026-09-20",
+  "severity": "high",
+  "status": "resolved",
+  "title": "Gemini's unpinned default is the cheapest tier (Flash Medium) while Codex's is the strongest: any unpinned Gemini review silently runs at `fast`"
+}

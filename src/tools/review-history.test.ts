@@ -46,7 +46,7 @@ describe('registerReviewHistoryTool', () => {
   });
 
   it('bounds last_n to 1..100 and validates decimal cursors', () => {
-    const schema = mockServer.registerTool.mock.calls[0][1].inputSchema as Record<
+    const schema = mockServer.registerTool.mock.calls[0][1].inputSchema.shape as Record<
       string,
       { parse(value: unknown): unknown }
     >;
@@ -210,5 +210,15 @@ describe('registerReviewHistoryTool', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('STORAGE_ERROR');
+  });
+});
+
+describe('argument handling (ISS-054)', () => {
+  it('echoes an unknown key on a history answer and never refuses a lookup', async () => {
+    const result = await handler({ last_n: 5, effort: 'max' }, {});
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.reviews).toEqual([]);
+    expect(parsed.ignored_arguments).toEqual(['effort']);
   });
 });

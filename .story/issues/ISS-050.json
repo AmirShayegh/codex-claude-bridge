@@ -1,0 +1,20 @@
+{
+  "components": [],
+  "createdBy": "peer-session:ledger-integrity-protocol",
+  "dedupeKey": "ledger-integrity-protocol:resumed-session-no-failover-2026-09-15",
+  "discoveredDate": "2026-09-16",
+  "id": "ISS-050",
+  "impact": "Field report (ledger-integrity-protocol, 2026-09-15 15:30-17:05, config {\"provider\":\"gemini\",\"fallback\":true}, Codex on ChatGPT-tier auth and RATE_LIMITED): a review_code call passing session_id for a session recorded on Codex (model \"max\") returned RATE_LIMITED on every one of a dozen retries over ~1.5h, even though .reviewbridge.json asked for gemini with fallback:true. The identical call WITHOUT session_id failed over cleanly (provider: gemini, resolved/observed \"Gemini 3.1 Pro (High)\", failover: {from: codex, error: RATE_LIMITED, carried_model: max}, review_mode: failover). Separately, a MODEL_ERROR for a Gemini model id hit on the Codex path tells the caller to switch \"provider\" in .reviewbridge.json, but editing the config file does not change a resumed session's already-pinned provider — so the suggested fix is a no-op. Either: (a) a resumed session should fail over the same way a fresh one does, ideally carrying prior findings as context to the new provider, or (b) both error paths should explicitly say the session is pinned to its original provider and a new session is required to fail over/switch models, rather than implying retry-and-wait or a config edit will help.",
+  "location": [
+    "src/backends/failover.ts",
+    "src/backends/orchestrator.ts",
+    "src/backends/codex.ts"
+  ],
+  "phase": null,
+  "relatedTickets": [],
+  "resolution": null,
+  "resolvedDate": null,
+  "severity": "high",
+  "status": "open",
+  "title": "Resumed review session stays pinned to its original provider on RATE_LIMITED/MODEL_ERROR — no failover, and the error doesn't say it's pinned"
+}

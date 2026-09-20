@@ -194,7 +194,7 @@ describe('MCP integration — review_plan', () => {
         provider: 'codex',
         role: 'review',
         requested: null,
-        resolved: 'gpt-6-astra',
+        resolved: 'gpt-5.6-sol',
         observed: null,
         evidence: 'bridge_selection',
         selection: 'provider_default',

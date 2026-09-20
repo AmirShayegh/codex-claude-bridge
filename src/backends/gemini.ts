@@ -387,12 +387,12 @@ function stripCodeFences(text: string): string {
   return fenced ? fenced[1].trim() : trimmed;
 }
 
-// agy's default model, and the SAFE FALLBACK whenever `latest` resolution can't
-// produce a concrete id (agy missing, `agy models` unparseable, etc.). Owned by
-// the backend (the config schema carries no default). Effort is part of the
-// model string for agy, so reasoning_effort is not applied here. Mirrors
-// RECOMMENDED_MODELS.gemini[0].
-const GEMINI_DEFAULT_MODEL = 'Gemini 3.8 Flash (High)';
+// The SAFE FALLBACK whenever `latest` resolution can't produce a concrete id
+// (agy missing, `agy models` unparseable, etc.). NOT the unpinned default —
+// that is the `max` tier, resolved locally without a catalog query (ISS-052).
+// Owned by the backend; the config schema carries no default. Effort is part of
+// the model string for agy, so reasoning_effort is not applied here.
+const GEMINI_LATEST_FALLBACK_MODEL = 'Gemini 3.8 Flash (High)';
 
 // `agy models` is a quick metadata call; bound it well under a review timeout so
 // a hung query degrades to the fallback fast.
@@ -401,14 +401,14 @@ const MODEL_CATALOG_TTL_MS = 5 * 60 * 1000;
 let modelCatalogCache: { output: string | null; expiresAt: number } | undefined;
 let modelCatalogInFlight: Promise<string | null> | undefined;
 
-// `latest` for gemini means the newest Flash, at the same effort tier we default
-// to where available. Flash is the fast review line; Pro is a heavier, separate
-// line, so `latest` stays within Flash (acceptance: "resolves to a current
-// Flash"). Tier preference falls back down the list if the newest version omits
-// the preferred tier.
+// `latest` for gemini means the newest Flash at the strongest effort available.
+// Flash is the fast review line; Pro is a heavier, separate line, so `latest`
+// stays within Flash (acceptance: "resolves to a current Flash") — which is why
+// it is not the unpinned default. Tier preference falls back down the list if
+// the newest version omits the preferred tier.
 const FLASH_LINE_RE = /^Gemini\s+(\d+(?:\.\d+)*)\s+Flash\s*\(([^)]+)\)$/i;
-// High first (ISS-052): the unpinned default is the `balanced` tier, the
-// analogue of Codex's flagship at medium effort — not the cheapest line.
+// High first: within the Flash line, 'latest' means the strongest effort the
+// newest version offers, not the cheapest.
 const TIER_PREFERENCE = ['high', 'medium', 'low'];
 
 // Compare dotted version strings numerically component-by-component so 3.10 sorts
@@ -522,8 +522,8 @@ export function clearGeminiModelCatalogCache(): void {
 // known-good fallback if the query fails or yields no parseable Flash line.
 export async function resolveLatestGeminiModel(timeoutMs?: number): Promise<string> {
   const output = await getAgyModelCatalog(timeoutMs);
-  if (!output) return GEMINI_DEFAULT_MODEL;
-  return pickLatestFlashModel(output) ?? GEMINI_DEFAULT_MODEL;
+  if (!output) return GEMINI_LATEST_FALLBACK_MODEL;
+  return pickLatestFlashModel(output) ?? GEMINI_LATEST_FALLBACK_MODEL;
 }
 
 // agy lists one concrete model per line (e.g. "Gemini 3.8 Flash (Medium)").
@@ -745,7 +745,10 @@ export function createGeminiBackend(config: ReviewBridgeConfig): ReviewBackend {
     // unknown model (ISS-006). Recommended pins are known-good → skip the query.
     resolveModel: async (requested: string | undefined) => {
       if (isReviewTier(requested)) return TIER_MODELS.gemini[requested];
-      if (!requested || requested === 'latest') return resolveLatestGeminiModel();
+      // Unset → the `max` tier, resolved locally. 'latest' keeps its own
+      // meaning: the newest Flash the installed agy actually lists (ISS-052).
+      if (!requested) return TIER_MODELS.gemini.max;
+      if (requested === 'latest') return resolveLatestGeminiModel();
       if (!isRecommendedGeminiModel(requested)) await warnIfUnknownModel(requested);
       return requested;
     },

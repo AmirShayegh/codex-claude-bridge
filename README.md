@@ -72,8 +72,8 @@ Each `models[]` entry reports:
   "provider": "codex",
   "role": "review",
   "requested": null,
-  "resolved": "gpt-6-astra",
-  "observed": "gpt-6-astra",
+  "resolved": "gpt-5.6-sol",
+  "observed": "gpt-5.6-sol",
   "evidence": "runtime_session_record"
 }
 ```
@@ -360,7 +360,7 @@ Two selectors pick the reviewing model; a call passes one of them, not both:
 - `tier` — pick by capability: `"max"`, `"balanced"`, or `"fast"` (CLI: `--tier`).
 - `model` — pick by id (e.g. `"gpt-5.6-sol"`) or `"latest"` (CLI: `--model`). A tier word is still accepted here for compatibility.
 
-Each provider resolves its own default when neither is set.
+When neither is set, each provider resolves its own default: Codex runs the `balanced` tier and Gemini the `max` tier. Gemini's Flash line is quick but shallower than Codex at the same tier, so the two defaults are meant to land at a comparable depth of review rather than on a matching tier name. Either way `selection` reports `provider_default`, so a caller that needs a specific tier can tell it was never asked for one.
 
 **Tiers** let a caller pick by difficulty or urgency instead of tracking model ids. Each provider maps a tier to its own model, and the tier carries across provider failover:
 
@@ -380,23 +380,23 @@ Tool arguments are written by a model that never sees the server's stderr, so a 
 - **Echoed** — anything else is ignored, listed in `ignored_arguments` next to `accepted_arguments`, and the review proceeds.
 - **Refused** — an unknown key whose value is a model selector (a tier word, a known model id, or `"latest"`) while neither `model` nor `tier` was given returns `INVALID_INPUT` with the fold hint (`did you mean tier: "max"?`) before any provider call: proceeding would review at the default tier, and that is the one case where a resend is cheaper than the review. `review_status` and `review_history` only fold or echo.
 
-**Codex** — default `gpt-6-astra`. If Astra has not reached your account yet, pin `gpt-5.6-sol`:
+**Codex** — default `gpt-5.6-sol` (the `balanced` tier). Pass `tier: "max"` for `gpt-6-astra`:
 
-| Model          | Description                                                              |
-| -------------- | ------------------------------------------------------------------------ |
-| `gpt-6-astra`  | Latest flagship agentic coding model (default)                           |
-| `gpt-5.6-sol`  | Previous flagship. Use while Astra is still rolling out to your account. |
-| `gpt-5.6-luna` | Cheap and fast line (the `fast` tier).                                   |
+| Model          | Description                                                           |
+| -------------- | --------------------------------------------------------------------- |
+| `gpt-6-astra`  | Latest flagship agentic coding model (the `max` tier).                |
+| `gpt-5.6-sol`  | Previous flagship (the `balanced` tier). Default when nothing is set. |
+| `gpt-5.6-luna` | Cheap and fast line (the `fast` tier).                                |
 
-**Gemini** — default resolves to the latest Flash via `agy models`. Effort is part of the model name:
+**Gemini** — default `Gemini 3.1 Pro (High)` (the `max` tier). Effort is part of the model name:
 
-| Model                       | Description                    |
-| --------------------------- | ------------------------------ |
-| `Gemini 3.8 Flash (High)`   | Default — balanced review line |
-| `Gemini 3.8 Flash (Medium)` | Fast review line               |
-| `Gemini 3.1 Pro (High)`     | Heavier reasoning line         |
+| Model                       | Description                                          |
+| --------------------------- | ---------------------------------------------------- |
+| `Gemini 3.1 Pro (High)`     | Heavier reasoning line. Default when nothing is set. |
+| `Gemini 3.8 Flash (High)`   | Balanced review line                                 |
+| `Gemini 3.8 Flash (Medium)` | Fast review line                                     |
 
-`"latest"` resolves to the newest Flash (High) for Gemini, or the SDK-pinned flagship for Codex. These are the models we document and recommend; the `model` field, the `model` tool parameter, and the `--model` CLI flag accept any trimmed, control-free selector up to 200 characters, so you can run others. For Gemini, an unrecognized model triggers a non-blocking stderr warning (agy may silently run a different one) — run `agy models` to see the live list.
+`"latest"` is a separate selector from the default: it resolves to the newest Flash the installed `agy` lists (falling back to `Gemini 3.8 Flash (High)` if that query fails) for Gemini, or the SDK-pinned flagship for Codex. These are the models we document and recommend; the `model` field, the `model` tool parameter, and the `--model` CLI flag accept any trimmed, control-free selector up to 200 characters, so you can run others. For Gemini, an unrecognized model triggers a non-blocking stderr warning (agy may silently run a different one) — run `agy models` to see the live list.
 
 ### Provider failover
 
@@ -417,7 +417,7 @@ The result is tagged with the provider that actually served it (`"provider": "ge
 }
 ```
 
-Every result also carries `failover_occurred` (boolean), true exactly when that block is present, so the event is stated outright rather than inferred from an absent field — `review_mode: "failover"` alone only means the failover composition is configured. `requested_model` is what the call asked for; `carried_model` is what the other provider was handed. A tier (`max` / `balanced` / `fast`) carries as-is, and a provider-specific id that is one of that provider's tier models is carried as its tier (`gpt-6-astra` → `max`, so Gemini answers with its Pro model rather than its Flash default). Any other id cannot be mapped: `carried_model` is `null` and the secondary resolves its own default. The `models[]` entry keeps the original `requested` selector either way. `review_mode` says which composition is _configured_; the presence of `failover` says one actually _happened_. Notes:
+Every result also carries `failover_occurred` (boolean), true exactly when that block is present, so the event is stated outright rather than inferred from an absent field — `review_mode: "failover"` alone only means the failover composition is configured. `requested_model` is what the call asked for; `carried_model` is what the other provider was handed. A tier (`max` / `balanced` / `fast`) carries as-is, and a provider-specific id that is one of that provider's tier models is carried as its tier (`gpt-6-astra` → `max`, so Gemini answers with its Pro model rather than dropping to its own default). Any other id cannot be mapped: `carried_model` is `null` and the secondary resolves its own default. The `models[]` entry keeps the original `requested` selector either way. `review_mode` says which composition is _configured_; the presence of `failover` says one actually _happened_. Notes:
 
 - **Fresh reviews only.** A resumed session lives in one provider's conversation store, so a `session_id` review is not failed over — start a fresh review on the other provider to continue.
 - **Data egress.** Failover can send your diff to the other vendor (e.g. OpenAI → Google) when the primary is down. Set `"fallback": false` to disable this (also good for CI determinism).
